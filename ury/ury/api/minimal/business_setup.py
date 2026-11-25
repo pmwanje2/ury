@@ -343,7 +343,7 @@ def _run_configure_data(data, results, user):
                 "doctype": "URY Room",
                 "name": r_name,
                 "branch": branch_name,
-                "room_type": r.get("type", "AC")
+                "room_type": r.get("type") or None
             })
             room_doc.insert()
             results["rooms"].append(room_doc.name)
@@ -357,7 +357,6 @@ def _run_configure_data(data, results, user):
                 "doctype": "URY Room",
                 "name": first_room_name,
                 "branch": branch_name,
-                "room_type": "AC"
             })
             room_doc.insert()
             results["rooms"].append(room_doc.name)

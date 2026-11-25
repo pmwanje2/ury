@@ -1,3 +1,4 @@
+import { coversLimit } from '@ury/core/covers';
 import { useState } from 'react';
 import { Trash2, Edit, FrownIcon, Loader2, MessageSquare } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
@@ -170,14 +171,14 @@ const OrderPanel = () => {
   };
 
   const MIN_PAX = 1;
-  const MAX_PAX = 50;
+  const maxCovers = coversLimit(posProfile, selectedOrderType);
 
   const handlePaxDecrement = () => {
     setNoOfPax(Math.max(MIN_PAX, noOfPax - 1));
   };
 
   const handlePaxIncrement = () => {
-    setNoOfPax(Math.min(MAX_PAX, noOfPax + 1));
+    setNoOfPax(noOfPax + 1);
   };
 
   // The panel has two distinct empty cases: a dine-in order with no table
@@ -234,7 +235,7 @@ const OrderPanel = () => {
               variant="outline"
               size="icon"
               className="w-8 h-8 rounded-full"
-              disabled={isInteractionDisabled || noOfPax >= MAX_PAX}
+              disabled={isInteractionDisabled || noOfPax >= maxCovers}
             >
               +
             </Button>

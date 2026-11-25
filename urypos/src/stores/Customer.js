@@ -227,17 +227,8 @@ export const useCustomerStore = defineStore("customers", {
       this.fectchCustomerFavouriteItem();
     },
     validateInput(event) {
-      let value = event.target.value;
-      if (value < 1) {
-        this.numberOfPax = "";
-        return;
-      }
-
-      if (value.toString().length > 3) {
-        this.numberOfPax = value.toString().slice(0, 3);
-      } else {
-        this.numberOfPax = value;
-      }
+      const value = event.target.valueAsNumber;
+      this.numberOfPax = Number.isInteger(value) && value >= 1 ? value : "";
     },
     async fectchCustomerFavouriteItem() {
       if (this.table.previousOrderdCustomer) {

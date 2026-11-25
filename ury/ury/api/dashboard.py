@@ -4,6 +4,7 @@ from ury.ury.api.ury_dashboard import get_dashboard_stats
 
 # Masters the Desk-free dashboard (frontend/src) reads through get_module_records.
 MODULE_RECORD_DOCTYPES = frozenset((
+	"Dining Area Type",
 	"Branch", "Company", "Cost Center", "Customer", "Item", "Item Group",
 	"Network Printer Settings", "POS Profile", "URY Item Production Configuration", "URY Menu",
 	"URY Menu Course", "URY Production Department", "URY Production Unit", "URY Restaurant",

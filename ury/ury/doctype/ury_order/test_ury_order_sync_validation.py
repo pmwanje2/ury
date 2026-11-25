@@ -191,9 +191,12 @@ class TestCommentsAndPaxB3B4(unittest.TestCase):
         self.assertEqual(_validate_dine_in_pax(3, "Dine In"), 3)
         self.assertEqual(_validate_dine_in_pax("4", "Dine In"), 4)
 
-    def test_non_dine_in_skips_pax_gate(self):
-        self.assertEqual(_validate_dine_in_pax(0, "Take Away"), 0)
-        self.assertIsNone(_validate_dine_in_pax(None, "Aggregators"))
+    def test_non_dine_in_requires_a_positive_integer(self):
+        with self.assertRaises(frappe.ValidationError):
+            _validate_dine_in_pax(0, "Take Away")
+        with self.assertRaises(frappe.ValidationError):
+            _validate_dine_in_pax(None, "Aggregators")
+        self.assertEqual(_validate_dine_in_pax("3", "Take Away"), 3)
 
 
 class TestSyncOrderCommentClearB3(FrappeTestCase):

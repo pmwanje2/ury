@@ -581,7 +581,7 @@ import { FrappeApp } from "frappe-js-sdk";
 import Masonry from "masonry-layout";
 import io from "socket.io-client";
 import { t, isRTL } from "../i18n";
-import { canRecallKot, isKotLate, kitchenErrorMessage, recentServedQuery, rememberKot } from "./kitchen-actions.js";
+import { canRecallKot, isKotLate, kitchenErrorMessage, rememberKot } from "./kitchen-actions.js";
 import { createStationPrinter } from "./station-print.js";
 import AvailabilityDrawer from "./AvailabilityDrawer.vue";
 
@@ -1115,14 +1115,13 @@ export default {
       this.actionError = "";
       try {
         const now = new Date(Date.now() + this.serverTimeOffset);
-        const query = recentServedQuery(
-          this.branch,
-          this.isExpo ? null : this.production,
-          now,
-          this.recallWindowMinutes,
-        );
-        const result = await this.call.get("frappe.client.get_list", query);
-        this.recentServed = result.message.filter(kot => canRecallKot(kot, now, this.recallWindowMinutes));
+        const { message } = await this.call.get("ury.ury.api.ury_kot_display.recent_served_kots", {
+          ...(this.branch ? { branch: this.branch } : {}),
+          ...(this.production ? { production: this.production } : {}),
+        });
+        this.recallWindowMinutes = message.recall_window_minutes ?? this.recallWindowMinutes;
+        const serverNow = message.server_time ? new Date(message.server_time.replace(" ", "T")) : now;
+        this.recentServed = message.kots.filter(kot => canRecallKot(kot, serverNow, this.recallWindowMinutes));
       } catch (error) {
         this.actionError = kitchenErrorMessage(error, t("Could not load recently served tickets. Please try again."));
       } finally {

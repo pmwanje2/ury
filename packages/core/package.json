@@ -14,6 +14,10 @@
       "types": "./src/utils/defaultCustomer.ts",
       "import": "./src/utils/defaultCustomer.ts"
     },
+    "./covers": {
+      "types": "./src/covers.ts",
+      "import": "./src/covers.ts"
+    },
     "./availability": {
       "types": "./src/availability.ts",
       "import": "./src/availability.ts"

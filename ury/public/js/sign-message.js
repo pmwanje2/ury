@@ -6,7 +6,7 @@
  * endpoint to sign it server-side and returns the base64 signature.
  *
  * Access to the endpoint is restricted to authenticated users holding a
- * POS role (see QZ_SIGNING_ROLES in ury/ury/api/ury_print.py).
+ * role configured in POS Print Settings.
  *
  * Depends:
  *     - qz-tray.js

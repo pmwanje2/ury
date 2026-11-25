@@ -503,7 +503,11 @@ def add_open_item(
         doc.order_type = resolved_order_type
         if table:
             doc.restaurant_table = table
-        doc.no_of_pax = max(1, cint(no_of_pax or 1))
+        from ury.ury_pos.covers import normalize_covers
+
+        doc.no_of_pax = normalize_covers(
+            1 if no_of_pax is None else no_of_pax, resolved_order_type, profile, _frappe=frappe
+        )
         doc.waiter = frappe.session.user
         doc.cashier = frappe.session.user
         doc.currency = profile.get("currency")

@@ -52,6 +52,7 @@
       type="number"
       id="cart-pax"
       min="1"
+      :max="this.invoiceData.maxCovers"
       class="mt-2 block w-full rounded-md border bg-gray-50 p-2.5 text-sm text-gray-900 md:w-3/5 lg:w-2/5"
       placeholder="Pax"
       v-model="this.customers.numberOfPax"

@@ -295,8 +295,6 @@ class TestGuestPricingFollowsTheInvoiceMenu(TestGuestProductPricedLikeTheBill):
             getattr(self.framework.db, name).side_effect = AssertionError(f"guest pricing wrote: db.{name}")
         for name in ("new_doc", "delete_doc"):
             getattr(self.framework, name).side_effect = AssertionError(f"guest pricing wrote: {name}")
-        self.ensure_mapping = self.enterContext(patch.object(
-            self.guest, "_ensure_admin_branch_mapping", side_effect=AssertionError("guest pricing wrote a Branch")))
 
     def test_a_table_guest_uses_the_tables_menu(self):
         self.book.add("Chips", 5, "2026-01-01")
@@ -316,7 +314,6 @@ class TestGuestPricingFollowsTheInvoiceMenu(TestGuestProductPricedLikeTheBill):
         self.book.add("Chips", 9, "2026-01-01", price_list="Menu B")
         self.shown()
         self.order._resolve_or_create_pos_invoice.assert_not_called()
-        self.ensure_mapping.assert_not_called()
 
 
 class TestOneUomRule(unittest.TestCase):

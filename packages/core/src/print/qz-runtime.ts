@@ -1,6 +1,10 @@
-type QzCallback = (resolve: (value: string) => void, reject: (reason?: string) => void) => void;
+type QzCallback = (resolve: (value: string) => void, reject: (reason?: unknown) => void) => void;
 
-interface QzBridge {
+type PromiseExecutor<T> = (resolve: (value: T | PromiseLike<T>) => void, reject: (reason?: unknown) => void) => void;
+
+export interface QzBridge {
+  version?: string;
+  api?: { setPromiseType(createPromise: <T>(executor: PromiseExecutor<T>) => Promise<T>): void };
   security: {
     setCertificatePromise(callback: QzCallback): void;
     setSignatureAlgorithm(algorithm: 'SHA512'): void;

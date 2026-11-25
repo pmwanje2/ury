@@ -1,0 +1,31 @@
+{
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "order_type",
+  "max_covers"
+ ],
+ "fields": [
+  {
+   "fieldname": "order_type",
+   "fieldtype": "Select",
+   "label": "Order Type",
+   "reqd": 1,
+   "in_list_view": 1,
+   "options": "Dine In\nTake Away\nAggregators\nDelivery\nPhone In\nRoom Service"
+  },
+  {
+   "fieldname": "max_covers",
+   "fieldtype": "Int",
+   "label": "Maximum Covers",
+   "non_negative": 1,
+   "in_list_view": 1,
+   "default": "0",
+   "description": "Use 0 for no limit."
+  }
+ ],
+ "module": "URY",
+ "name": "POS Order Type Cover Limit",
+ "permissions": [],
+ "istable": 1
+}

@@ -1,3 +1,4 @@
+import { coversLimit } from '@ury/core/covers';
 import { useEffect, useMemo, useState } from 'react';
 import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
@@ -570,14 +571,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   };
 
   const MIN_PAX = 1;
-  const MAX_PAX = 50;
+  const maxCovers = coversLimit(posProfile, selectedOrderType);
 
   const handlePaxDecrement = () => {
     setNoOfPax(Math.max(MIN_PAX, noOfPax - 1));
   };
 
   const handlePaxIncrement = () => {
-    setNoOfPax(Math.min(MAX_PAX, noOfPax + 1));
+    setNoOfPax(noOfPax + 1);
   };
 
   const EmptyCartUI = () => (
@@ -642,7 +643,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
               variant="outline"
               size="icon"
               className="w-8 h-8 rounded-full"
-              disabled={isInteractionDisabled || noOfPax >= MAX_PAX}
+              disabled={isInteractionDisabled || noOfPax >= maxCovers}
             >
               +
             </Button>

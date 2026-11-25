@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -91,6 +92,7 @@ def compute_shift_tip_rows(
     profile,
     *,
     period_end_date=None,
+    charged_receipts=None,
 ) -> list[dict[str, Any]]:
     """Aggregate shift servers' charged tips collected and cash tip payouts in till currency."""
     currency = profile.get("currency") or frappe.db.get_value("Company", opening["company"], "default_currency") or ""
@@ -149,6 +151,8 @@ def compute_shift_tip_rows(
             attributed = tip_server or server
             if attributed and attributed not in ("Administrator", "Guest"):
                 servers.add(attributed)
+                if charged_receipts is not None:
+                    charged_receipts.append((attributed, ts, charged_tip))
                 charged_by_user[attributed] = flt(charged_by_user.get(attributed, 0.0) + charged_tip, precision)
 
     payouts = frappe.get_all(
@@ -222,13 +226,83 @@ def compute_shift_tip_rows(
     return rows
 
 
+def summarize_labor_and_charged_tips(punches, receipts, start, end, precision, *, device_id=None):
+    """Group paid-check tips by the employee's job at posting time and labor by time in job."""
+    intervals = defaultdict(list)
+    active = {}
+    totals = defaultdict(lambda: {"labor_minutes": 0, "charged_tips": 0})
+
+    def close(employee, punch, at):
+        begin, finish = max(start, get_datetime(punch["time"])), min(end, at)
+        if begin >= finish or (device_id and punch.get("device_id") != device_id):
+            return
+        code = punch.get("custom_pos_job_code") or None
+        intervals[employee].append((begin, finish, code))
+        totals[code]["labor_minutes"] += (finish - begin).total_seconds() / 60
+
+    for punch in sorted(punches, key=lambda row: get_datetime(row["time"])):
+        employee = punch["employee"]
+        at = get_datetime(punch["time"])
+        previous = active.pop(employee, None)
+        if previous:
+            close(employee, previous, at)
+        if punch.get("log_type") == "IN":
+            active[employee] = punch
+
+    for employee, punch in active.items():
+        close(employee, punch, end)
+
+    for employee, at, amount in receipts:
+        code = next((job for begin, finish, job in intervals[employee] if at and begin <= at < finish), None)
+        totals[code]["charged_tips"] += amount
+
+    return [
+        {"job_code": code, "labor_minutes": round(values["labor_minutes"], 2),
+         "charged_tips": flt(values["charged_tips"], precision)}
+        for code, values in sorted(totals.items(), key=lambda item: (item[0] is None, item[0] or ""))
+    ]
+
+
+def _shift_job_summary(opening, tip_rows, receipts, precision, *, end):
+    start = get_datetime(opening["period_start_date"])
+    if start >= end:
+        return []
+    profile_device = f"POS:{opening['pos_profile']}"
+    fields = ["employee", "time", "log_type", "device_id", "custom_pos_job_code"]
+    # Include carry-in punches and clock-outs from another register for the same employee.
+    employees = set(frappe.get_all("Employee Checkin", filters={
+        "device_id": profile_device, "log_type": "IN", "time": ["<=", end],
+    }, pluck="employee", distinct=True))
+    punches = []
+    if employees:
+        punches = frappe.get_all("Employee Checkin", filters={
+            "employee": ["in", list(employees)], "time": ["between", [start, end]],
+            "log_type": ["in", ["IN", "OUT"]],
+        }, fields=fields, order_by="time asc, creation asc, name asc")
+        for employee in employees:
+            prior = frappe.db.get_value(
+                "Employee Checkin", {"employee": employee, "time": ["<", start],
+                                     "log_type": ["in", ["IN", "OUT"]]},
+                fields, as_dict=True, order_by="time desc, creation desc, name desc",
+            )
+            if prior:
+                punches.append(prior)
+
+    employee_by_user = {row["user"]: row["employee"] for row in tip_rows}
+    return summarize_labor_and_charged_tips(
+        punches, [(employee_by_user.get(user), at, amount) for user, at, amount in receipts],
+        start, end, precision, device_id=profile_device,
+    )
+
+
 @frappe.whitelist(methods=["GET"])
 def get_shift_tip_declaration_rows(pos_opening_entry: str) -> dict[str, Any]:
     """Return server tip reconciliation rows for the shift closing dialog."""
     opening = frappe.db.get_value(
         "POS Opening Entry",
         pos_opening_entry,
-        ["name", "pos_profile", "company", "branch", "user", "period_start_date", "status", "docstatus"],
+        ["name", "pos_profile", "company", "branch", "user", "period_start_date",
+         "status", "docstatus", "custom_pos_job_code"],
         as_dict=True,
     )
     if not opening:
@@ -241,8 +315,22 @@ def get_shift_tip_declaration_rows(pos_opening_entry: str) -> dict[str, Any]:
     profile = frappe.get_doc("POS Profile", opening["pos_profile"])
     currency = profile.get("currency") or frappe.db.get_value("Company", opening["company"], "default_currency") or ""
     precision = currency_decimal_places(currency)
-    rows = compute_shift_tip_rows(opening, profile)
+    include_job_summary = False
+    if opening.get("period_start_date") and (profile.get("custom_pos_job_codes") or opening.get("custom_pos_job_code")):
+        from ury.ury_pos.timeclock import is_hrms_timeclock_available
 
+        include_job_summary = is_hrms_timeclock_available()
+    receipts = [] if include_job_summary else None
+    end = None
+    if include_job_summary and opening.get("status") == "Closed":
+        end = frappe.db.get_value(
+            "POS Closing Entry", {"pos_opening_entry": opening["name"], "docstatus": 1}, "period_end_date"
+        )
+    rows = (compute_shift_tip_rows(opening, profile, period_end_date=end, charged_receipts=receipts)
+            if include_job_summary else compute_shift_tip_rows(opening, profile))
+    job_summary = (_shift_job_summary(opening, rows, receipts, precision,
+                                     end=get_datetime(end))
+                   if include_job_summary else [])
     return {
         "pos_opening_entry": opening["name"],
         "pos_profile": profile.name,
@@ -251,6 +339,7 @@ def get_shift_tip_declaration_rows(pos_opening_entry: str) -> dict[str, Any]:
         "currency_precision": precision,
         "require_tip_declaration": bool(cint(profile.get("custom_require_tip_declaration")) == 1),
         "rows": rows,
+        "job_summary": job_summary,
     }
 
 

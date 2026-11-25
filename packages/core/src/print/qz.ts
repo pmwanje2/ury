@@ -1,6 +1,7 @@
 import { loadQz } from './qz-runtime';
 import axios from 'axios';
-import { KEYUTIL, KJUR, stob64, hextorstr } from 'jsrsasign';
+import { call } from '../frappe/client';
+import { runSignedQz } from './qz-signing';
 
 export const ESC_POS_DRAWER_KICK_PIN_2 = '1b700019fa';
 export const ESC_POS_DRAWER_KICK_PIN_5 = '1b700119fa';
@@ -12,37 +13,6 @@ export interface KickDrawerQzResult {
   status: 'Sent';
   hex: string;
   printer: QzPrinterTarget;
-}
-
-let injectedSignKey: string | null = null;
-
-export function initPrinting(opts: { signKey: string }) {
-  injectedSignKey = opts.signKey;
-}
-
-function ensureSignKey(): string {
-  if (!injectedSignKey) {
-    throw new Error(
-      'QZ printing has not been initialized. Call initPrinting({ signKey: ... }) before using printWithQz.'
-    );
-  }
-  return injectedSignKey;
-}
-
-function configureQzSignature(qz: any, signKey: string): void {
-  qz.security.setSignatureAlgorithm('SHA512');
-  qz.security.setSignaturePromise((toSign: string) => (resolve: (sig: string) => void, reject: (err?: string) => void) => {
-    try {
-      const pk = KEYUTIL.getKey(signKey);
-      const sig = new KJUR.crypto.Signature({ alg: 'SHA512withRSA' });
-      sig.init(pk);
-      sig.updateString(toSign);
-      const hex = sig.sign();
-      resolve(stob64(hextorstr(hex)));
-    } catch (err) {
-      reject(String(err));
-    }
-  });
 }
 
 export function resolveDrawerKickHex(opts?: {
@@ -70,7 +40,7 @@ export function resolveDrawerKickHex(opts?: {
 
 export async function loadQzPrinter(host: string): Promise<void> {
   const qz = await loadQz();
-  qz.security.setCertificatePromise((resolve: (data: string) => void, reject: (err?: string) => void) => {
+  qz.security.setCertificatePromise((resolve, reject) => {
     axios.get('/assets/ury/files/cert.pem')
       .then(({ data }) => resolve(data))
       .catch((err) => reject('Error fetching certificate: ' + String(err)));
@@ -86,24 +56,14 @@ export function disconnectQzPrinter(): void {
 }
 
 export async function printWithQz(host: string, htmlToPrint: string): Promise<void> {
-  const signKey = ensureSignKey();
   const qz = await loadQz();
 
-  configureQzSignature(qz, signKey);
-
-  const printing = async () => {
+  return runSignedQz(qz, call.post, async () => {
+    if (!qz.websocket.isActive()) await loadQzPrinter(host);
     const printer = await qz.printers.getDefault();
     const data = [{ type: 'html', format: 'plain', data: htmlToPrint }];
-    const config = qz.configs.create(printer);
-    await qz.print(config, data);
-  };
-
-  if (qz.websocket.isActive()) {
-    await printing();
-  } else {
-    await loadQzPrinter(host);
-    await printing();
-  }
+    await qz.print(qz.configs.create(printer), data);
+  });
 }
 
 export async function kickDrawerQz(
@@ -115,20 +75,11 @@ export async function kickDrawerQz(
   const hex = resolveDrawerKickHex({ hex: hexCommand, pin });
   const qz = await loadQz();
 
-  if (injectedSignKey) {
-    configureQzSignature(qz, injectedSignKey);
-  }
-
-  const sendPulse = async (): Promise<KickDrawerQzResult> => {
-    const target: QzPrinterTarget = printerName || (await qz.printers.getDefault());
+  return runSignedQz(qz, call.post, async (): Promise<KickDrawerQzResult> => {
+    if (!qz.websocket.isActive()) await loadQzPrinter(host);
+    const target = printerName || (await qz.printers.getDefault());
     const config = qz.configs.create(target);
     await qz.print(config, [{ type: 'raw', format: 'command', flavor: 'hex', data: hex }]);
     return { status: 'Sent', hex, printer: target };
-  };
-
-  if (qz.websocket.isActive()) {
-    return sendPulse();
-  }
-  await loadQzPrinter(host);
-  return sendPulse();
+  });
 }

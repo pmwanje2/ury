@@ -1,0 +1,33 @@
+{
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "qz_signing_roles",
+  "qz_signing_roles_initialized"
+ ],
+ "fields": [
+  {
+   "fieldname": "qz_signing_roles",
+   "fieldtype": "Small Text",
+   "label": "QZ Tray Signing Roles",
+   "description": "Enter one role per line. Leave empty to disable signing."
+  },
+  {
+   "fieldname": "qz_signing_roles_initialized",
+   "fieldtype": "Check",
+   "label": "Signing Roles Initialized",
+   "hidden": 1,
+   "read_only": 1
+  }
+ ],
+ "module": "URY",
+ "name": "POS Print Settings",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1
+  }
+ ],
+ "issingle": 1
+}

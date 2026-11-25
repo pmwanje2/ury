@@ -67,6 +67,13 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
     recentOrders: usetoggleRecentOrder(),
     notificationModal: useNotificationModal(),
   }),
+  getters: {
+    maxCovers(state) {
+      const type = state.menu.selectedOrderType || state.recentOrders.pastOrderType;
+      const limit = state.invoiceDetails.order_type_cover_limits?.[type] ?? state.invoiceDetails.max_covers;
+      return limit > 0 ? limit : undefined;
+    },
+  },
   actions: {
     async fetchInvoiceDetails() {
       try {
@@ -599,12 +606,12 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
           this.notification.createNotification("Print triggered");
           this.isPrinting = false;
         }
-      } catch (e) {
-        if (e?.custom) {
-          this.isPrinting = false;
-
-          return this.alert.createAlert("Error", e?.title, "OK");
+      } catch (error) {
+        if (!error?.alert) {
+          this.alert.createAlert("Error", error?.title || error?.message || "Print failed", "OK");
         }
+      } finally {
+        this.isPrinting = false;
       }
     },
     async updatePrintTable(invoiceNo, maxRetries = 3) {

@@ -1,5 +1,11 @@
 import { call } from '@ury/core';
 
+export interface ShiftJobSummaryRow {
+  job_code: string | null;
+  labor_minutes: number;
+  charged_tips: number;
+}
+
 export interface ShiftTipDeclarationRow {
   user: string;
   employee: string | null;
@@ -20,6 +26,7 @@ export interface ShiftTipDeclarationResponse {
   currency_precision: number;
   require_tip_declaration: boolean;
   rows: ShiftTipDeclarationRow[];
+  job_summary?: ShiftJobSummaryRow[];
 }
 
 export async function getShiftTipDeclarationRows(
