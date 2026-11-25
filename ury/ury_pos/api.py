@@ -4217,7 +4217,10 @@ def _apply_preview_selling_pricing_rules(doc):
             or cint(item.get("custom_price_overridden")) == 1
             or cint(item.get("custom_is_open_item")) == 1
             or cint(item.get("custom_is_complimentary")) == 1
-            or (item.get("custom_line_role") or "") == "Combo Upcharge"
+            or (
+                item.get("custom_line_role") == "Combo Upcharge"
+                and (item.get("custom_parent_line_key") or "").strip()
+            )
         ):
             continue
         ctx = dict_cls(

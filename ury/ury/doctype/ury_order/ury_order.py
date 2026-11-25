@@ -6702,6 +6702,9 @@ def change_order_type(
         for row in inv.get("items") or []:
             if cint(row.get("is_disposable")) == 1:
                 continue
+            if row.get("custom_line_role") == "Combo Upcharge" and (row.get("custom_parent_line_key") or "").strip():
+                # The linked modifier is priced by the modifier validator.
+                continue
             if (
                 cint(row.get("custom_price_overridden")) == 1
                 or cint(row.get("custom_is_open_item")) == 1

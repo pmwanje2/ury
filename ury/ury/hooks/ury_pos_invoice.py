@@ -1262,7 +1262,10 @@ def _reprice_items_from_authoritative_price_list(
     for item in _doc_get(doc, "items") or []:
         if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
             continue
-        if (_doc_get(item, "custom_line_role") or "") == "Combo Upcharge":
+        if (
+            _doc_get(item, "custom_line_role") == "Combo Upcharge"
+            and (_doc_get(item, "custom_parent_line_key") or "").strip()
+        ):
             # Combo Upcharge lines are authoritatively priced by validate_pos_invoice_modifiers
             # from URY Modifier Option (not standalone Item Price).
             continue

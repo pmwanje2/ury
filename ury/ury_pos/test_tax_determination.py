@@ -3451,8 +3451,20 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
         _rest_frappe, rest_modules = self._load_direct_rest_env()
         rest_doc = Row(
             items=[
-                Row(item_code="BURGER-COMBO", custom_line_role="Combo Header", rate=1.0, price_list_rate=1.0),
-                Row(item_code="SWEET-POTATO", custom_line_role="Combo Upcharge", rate=2000.0, price_list_rate=2000.0),
+                Row(
+                    item_code="BURGER-COMBO",
+                    reservation_line_key="rk-combo",
+                    custom_line_role="Combo Header",
+                    rate=1.0,
+                    price_list_rate=1.0,
+                ),
+                Row(
+                    item_code="SWEET-POTATO",
+                    custom_parent_line_key="rk-combo",
+                    custom_line_role="Combo Upcharge",
+                    rate=2000.0,
+                    price_list_rate=2000.0,
+                ),
             ]
         )
         with patch.dict(sys.modules, rest_modules):
