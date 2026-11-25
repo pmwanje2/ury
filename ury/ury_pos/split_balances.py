@@ -660,7 +660,9 @@ def _consolidation_keys(checks, snapshots):
                 if i in fee_amounts and quantity else (doc.name, i)
                 for i in fixed_rows
             )
-            pricing[row.name] = (tuple(row.get(field) for field in fields), fees)
+            # A sent line's key links later cancellations to its original KOT.
+            issued_key = None if cint(row.get("ury_held")) else (row.get("reservation_line_key") or None)
+            pricing[row.name] = (tuple(row.get(field) for field in fields), fees, issued_key)
         children = {}
         parent_pricing = {}
         for row in doc.items:
