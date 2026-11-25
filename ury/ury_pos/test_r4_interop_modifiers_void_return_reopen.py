@@ -1428,6 +1428,70 @@ class TestR4InteropModifiersVoidReturnReopen(unittest.TestCase):
                 [("CLASSIC-BURGER", -1.0), ("ONION-RINGS", -1.0), ("MANGO-JUICE", -1.0)],
             )
 
+    def test_update_stock_preserved_for_bundle_packed_items_on_return_reopen_adjust(self):
+        """Live MariaDB/ERPNext catch: ERPNext POSInvoice.update_packing_list() clears packed_items
+        whenever update_stock != 1. create_pos_return, _build_full_reversal_return, reopen_closed_check,
+        and adjust_closed_check MUST copy update_stock from orig so bundle packed_items stay reconciled.
+        """
+        with patch.dict(sys.modules, self.base_modules):
+            _load_fresh("ury.brand", "ury/brand.py")
+            _load_fresh("ury.ury.api.ury_bundle_resolver", "ury/ury/api/ury_bundle_resolver.py")
+            vr = _load_fresh("ury.ury_pos.void_return_reopen", "ury/ury_pos/void_return_reopen.py")
+            self.h.frappe.session.user = "manager2@example.test"
+
+            # 1) Return check copies update_stock=1 from orig
+            orig_ret = self._add_modified_and_combo_check(
+                "KB-USTK-RET", docstatus=1, ribeye_qty=1.0, combo_qty=1.0, cheese_rate=4000.0, cheese_overridden=0
+            )
+            orig_ret.update_stock = 1
+            ret_res = vr.create_pos_return(
+                orig_ret.name,
+                [{"item_row_name": f"{orig_ret.name}-ROW-CMB", "qty": 1}],
+                reason="RET-QUALITY",
+            )
+            ret_doc = self.h.invoices[ret_res["return_invoice"]]
+            self.assertEqual(
+                int(getattr(ret_doc, "update_stock", 0) or 0),
+                1,
+                "create_pos_return must copy update_stock=1 from orig so ERPNext keeps return packed_items",
+            )
+
+            # 2) Reopen check copies update_stock=1 onto BOTH reversal_return AND reopened_invoice
+            orig_reopen = self._add_modified_and_combo_check(
+                "KB-USTK-REOPEN", docstatus=1, ribeye_qty=1.0, combo_qty=1.0, cheese_rate=4000.0, cheese_overridden=0
+            )
+            orig_reopen.update_stock = 1
+            reopen_res = vr.reopen_closed_check(orig_reopen.name, reason="REOPEN-TENDER")
+            rev_doc = self.h.invoices[reopen_res["reversal_return"]]
+            reopened_doc = self.h.invoices[reopen_res["reopened_invoice"]]
+            self.assertEqual(
+                int(getattr(rev_doc, "update_stock", 0) or 0),
+                1,
+                "_build_full_reversal_return must copy update_stock=1 from orig",
+            )
+            self.assertEqual(
+                int(getattr(reopened_doc, "update_stock", 0) or 0),
+                1,
+                "reopen_closed_check must copy update_stock=1 from orig",
+            )
+
+            # 3) Adjust closed check copies update_stock=1 onto replacement_invoice
+            orig_adj = self._add_modified_and_combo_check(
+                "KB-USTK-ADJ", docstatus=1, ribeye_qty=1.0, combo_qty=1.0, cheese_rate=4000.0, cheese_overridden=0
+            )
+            orig_adj.update_stock = 1
+            adj_res = vr.adjust_closed_check(
+                orig_adj.name,
+                payments=[{"mode_of_payment": "Card", "amount": float(orig_adj.grand_total)}],
+                reason="REOPEN-TENDER",
+            )
+            rep_doc = self.h.invoices[adj_res["replacement_invoice"]]
+            self.assertEqual(
+                int(getattr(rep_doc, "update_stock", 0) or 0),
+                1,
+                "adjust_closed_check must copy update_stock=1 from orig",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
