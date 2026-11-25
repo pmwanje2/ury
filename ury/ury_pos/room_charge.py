@@ -40,16 +40,60 @@ def _field(obj, key: str, default=None):
     return default if val is None else val
 
 
-def _resolve_verifier(method_path: str, _frappe=None):
+def _resolve_verifier(method_path: str, _frappe=None, *, room_number: str = ""):
     if not method_path or not isinstance(method_path, str):
         raise ImportError("Room lookup method is not configured.")
     f = _frappe or frappe
     if f is None:
         raise ImportError("Framework context is unavailable.")
-    fn = f.get_attr(method_path)
-    if not callable(fn):
-        raise ImportError(f"Room lookup method {method_path} is not callable.")
-    return fn
+    message_log = getattr(f.local, "message_log", None)
+    message_count = len(message_log) if message_log is not None else 0
+    try:
+        fn = f.get_attr(method_path)
+    except Exception:
+        # get_attr can queue an "App is not installed" message before raising.
+        if message_log is not None:
+            del message_log[message_count:]
+        script_name = f.db.get_value(
+            "Server Script",
+            {"script_type": "API", "api_method": method_path, "disabled": 0},
+            "name",
+        )
+        if not script_name:
+            raise
+    else:
+        if not callable(fn):
+            raise ImportError(f"Room lookup method {method_path} is not callable.")
+        return fn
+
+    script = f.get_doc("Server Script", script_name)
+
+    def verify(**kwargs):
+        room = room_number or kwargs.get("room", "")
+        outer_form, outer_response = f.local.form_dict, f.local.response
+        try:
+            f.local.form_dict = f._dict(kwargs, room=room, room_number=room)
+            # Frappe exposes frappe.response to safe_exec only when it is truthy.
+            f.local.response = f._dict(docs=[])
+            returned = script.execute_method()
+            result = f.local.response.get("message", returned)
+        finally:
+            f.local.form_dict = outer_form
+            f.local.response = outer_response
+
+        if isinstance(result, dict) and result.get("ok") and "posting_allowed" not in result:
+            if result.get("no_post"):
+                return dict(
+                    result,
+                    posting_allowed=False,
+                    override_required=True,
+                    reason_code="KMR-RC-011",
+                    reason=_("Guest stay is marked No Post."),
+                )
+            return dict(result, posting_allowed=True)
+        return result
+
+    return verify
 
 
 def profile_room_charge_modes(profile, company: str | None = None, *, _frappe=None) -> list[str]:
@@ -135,7 +179,7 @@ def enforce_room_charge_settlement(
         )
 
     try:
-        verifier = _resolve_verifier(method_path) if frappe is not None else _resolve_verifier(method_path, _frappe=f)
+        verifier = _resolve_verifier(method_path, _frappe=f, room_number=room_in)
     except Exception:
         f.throw(
             _("Room charge verification is unavailable. Check the property connection before posting. [POS-RC-UNAVAILABLE]"),

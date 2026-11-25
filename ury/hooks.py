@@ -9,6 +9,17 @@ app_license = "MIT"
 app_logo_url = "/assets/ury/Images/maximus-mark.svg"
 app_icon_title = "Maximus"
 required_apps = ["erpnext"]
+
+pos_outlet_roles = [
+    "URY Cashier",
+    "URY Manager",
+    "URY Captain",
+    "URY Waiter",
+]
+pos_bypass_roles = [
+    "URY Manager",
+]
+
 # Includes in <head>
 # ------------------
 add_to_apps_screen = [
