@@ -43,3 +43,6 @@ You do not have permission to modify this KOT.,Vous n’êtes pas autorisé à m
 You do not have permission to modify KOTs from other branches.,Vous n’êtes pas autorisé à modifier les bons de cuisine d’autres établissements.,
 Hold and fire requires an online connection.,Une connexion est nécessaire pour mettre en attente ou envoyer en cuisine.,
 Held kitchen lines have an ambiguous reservation key.,Plusieurs lignes en attente en cuisine partagent une clé de réservation ambiguë.,
+Cannot identify the original kitchen ticket for this line.,Impossible d’identifier le bon de cuisine d’origine pour cette ligne.,
+Cannot determine which issued kitchen units to cancel.,Impossible de déterminer quelles unités envoyées en cuisine annuler.,
+Cancellation exceeds the outstanding issued kitchen quantity.,La quantité à annuler dépasse la quantité envoyée en cuisine restant à annuler.,

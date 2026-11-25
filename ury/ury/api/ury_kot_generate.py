@@ -1,10 +1,12 @@
 import json
+from decimal import Decimal
 from collections import defaultdict
 
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_datetime
 
+from ury.ury.api.kitchen_ticket_history import matches_release, outstanding_releases, submitted_tickets, take_releases
 from ury.brand import coded_message
 
 from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
@@ -322,7 +324,7 @@ def _resolve_units_for_item_code(item_code, pos_profile, pos_invoice, pos_profil
 
 
 def _route_items_with_modifiers_and_combos(
-    kot_items, pos_profile, pos_invoice, *, is_cancel=False, pos_profile_id=None, room=None
+    kot_items, pos_profile, pos_invoice, *, history_only=False, pos_profile_id=None, room=None
 ):
     """Route items to production units applying:
     - Simphony Opt 22: modifiers with `custom_inherit_parent_routing=1` inherit their parent's
@@ -355,6 +357,11 @@ def _route_items_with_modifiers_and_combos(
             if k:
                 saved_parent_item_by_key[k] = inv_row.get("item_code")
 
+    def units_for_item(code):
+        if history_only:
+            return [None]
+        return _resolve_units_for_item_code(code, pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room)
+
     child_items = []
     for item in kot_items:
         if cint(item.get("custom_is_modifier")) == 1:
@@ -362,9 +369,7 @@ def _route_items_with_modifiers_and_combos(
             continue
 
         item_code = item["item_code"]
-        resolved_units = _resolve_units_for_item_code(
-            item_code, pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
-        )
+        resolved_units = units_for_item(item_code)
         raw_key = _extract_raw_line_key(item)
         if raw_key:
             parent_units_by_key[raw_key] = list(resolved_units)
@@ -408,9 +413,7 @@ def _route_items_with_modifiers_and_combos(
                 if cint(ov.get("inherit_parent_routing", 1)) == 1 and resolved_units:
                     comp_units = list(resolved_units)
                 else:
-                    comp_units = _resolve_units_for_item_code(
-                        chosen_code, pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
-                    ) or list(resolved_units)
+                    comp_units = units_for_item(chosen_code) or list(resolved_units)
                 for unit in comp_units:
                     _add_to_station(unit, comp_row, attach_under_parent_key=raw_key)
 
@@ -428,19 +431,11 @@ def _route_items_with_modifiers_and_combos(
             if parent_key in parent_units_by_key:
                 target_units = parent_units_by_key[parent_key]
             elif parent_key in saved_parent_item_by_key:
-                target_units = _resolve_units_for_item_code(
-                    saved_parent_item_by_key[parent_key],
-                    pos_profile,
-                    pos_invoice,
-                    pos_profile_id=pos_profile_id,
-                    room=room,
-                )
+                target_units = units_for_item(saved_parent_item_by_key[parent_key])
                 parent_units_by_key[parent_key] = list(target_units)
 
         if target_units is None:
-            target_units = _resolve_units_for_item_code(
-                child["item_code"], pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
-            )
+            target_units = units_for_item(child["item_code"])
 
         for unit in target_units:
             _add_to_station(unit, child, attach_under_parent_key=parent_key or None)
@@ -487,7 +482,6 @@ def process_items_for_kot(
         kot_items,
         pos_profile,
         pos_invoice,
-        is_cancel=False,
         pos_profile_id=pos_profile_id,
         room=room,
     )
@@ -580,19 +574,17 @@ def process_items_for_cancel_kot(
         if effective_table
         else None
     )
-    # Build a map of production unit -> items respecting Opt 22 parent inheritance
-    # and forwarding pos_profile, order_type, and room for G27 routing overrides & failover.
+    # Expand modifiers and combo components, then debit the actual issuing stations.
+    tickets = submitted_tickets(frappe, invoice_id)
     production_items_map = _route_items_with_modifiers_and_combos(
-        kot_items,
-        pos_profile,
-        pos_invoice,
-        is_cancel=True,
-        pos_profile_id=pos_profile_id,
-        room=room,
+        kot_items, pos_profile, pos_invoice, history_only=bool(tickets), pos_profile_id=pos_profile_id, room=room,
     )
-
-    # Create one cancel KOT per production unit
-    for production_unit, production_items in production_items_map.items():
+    if tickets:
+        batches = _issued_cancel_batches(tickets, production_items_map.get(None, []), invoiceItems)
+    else:
+        # Imported checks may predate recorded KOT history.
+        batches = {(station, pos_profile_id, None): rows for station, rows in production_items_map.items()}
+    for (production_unit, issuing_profile, original), production_items in batches.items():
         kot_name = create_cancel_kot_doc(
             invoice_id,
             restaurant_table,
@@ -600,40 +592,69 @@ def process_items_for_cancel_kot(
             kot_type,
             customer,
             comments,
-            pos_profile_id,
+            issuing_profile or pos_profile_id,
             cancel_kot_naming_series,
             invoiceItems,
             production_unit,
             void_reason_code=void_reason_code,
             ignore_permissions=ignore_permissions,
+            original_kot=original,
         )
         created_kot_names.append(kot_name)
 
     return created_kot_names
 
 
+def _issued_cancel_batches(tickets, items, invoice_items):
+    """Route each debit to its original station, profile and ticket."""
+    releases = outstanding_releases(tickets)
+    by_name = {ticket.name: ticket for ticket in tickets}
+    quantities = {row.get("reservation_line_key"): Decimal(str(row["qty"])) for row in invoice_items}
+    batches = defaultdict(list)
+    for row in items:
+        key = row.get("reservation_line_key")
+        args = (row["item_code"], key, row.get("comments"))
+        placement = dict(course=row.get("custom_course"), seat=cint(row.get("custom_seat_no")))
+        qty = abs(Decimal(str(row["qty"])))
+        line_qty = quantities.get(key, qty)
+        if row.get("custom_line_role") == "Combo Component":
+            parent = row.get("custom_parent_line_key")
+            line_qty = next((Decimal(str(item["qty"])) * Decimal(str(row.get("combo_unit_qty") or 1))
+                             for item in invoice_items if _extract_raw_line_key(item) == parent), qty)
+        stations = defaultdict(list)
+        for release in releases:
+            if matches_release(release[1], *args, **placement) and release[2] > 0:
+                stations[by_name[release[0]].production].append(release)
+        if not stations:
+            if any(matches_release(release[1], *args, **placement) for release in releases):
+                frappe.throw(_("Cancellation exceeds the outstanding issued kitchen quantity."))
+            continue  # Billing-only and unrouted items have no kitchen release to cancel.
+        totals = [sum(r[2] for r in station) for station in stations.values()]
+        if len(stations) == 1 or all(total == line_qty for total in totals):
+            # Multiple stations can each have received a copy of the same release.
+            groups = [(station, qty) for station in stations.values()]
+        elif sum(totals) == line_qty:
+            groups = [(releases, qty)]  # Distinct rounds routed to different stations.
+        elif qty == line_qty and max(totals) <= line_qty:
+            groups = [(station, total) for station, total in zip(stations.values(), totals, strict=True)]
+        else:
+            frappe.throw(_("Cannot determine which issued kitchen units to cancel."))
+        for group, demand in groups:
+            taken = take_releases(group, *args, demand, **placement)
+            if sum(amount for _, amount in taken) != demand:
+                frappe.throw(_("Cancellation exceeds the outstanding issued kitchen quantity."))
+            for name, amount in taken:
+                ticket = by_name[name]
+                batches[ticket.production, ticket.pos_profile, name].append(dict(row, qty=-float(amount)))
+    return batches
+
+
 def consume_kot_releases(releases, item, key, note, qty, originals=None, *, course=None, seat=0):
     """Apply a cancellation to the newest matching release rows first."""
-    matched = []
-    for release in reversed(releases):
-        name, row, remaining = release
-        if originals is not None and name not in originals:
-            continue
-        if row.get("item") != item or (row.get("comments") or "") != (note or ""):
-            continue
-        if key and row.get("reservation_line_key"):
-            if key != row.get("reservation_line_key"):
-                continue
-        elif (course and row.get("course") and course != row.get("course")) or seat != cint(row.get("seat_no")):
-            continue
-        take = min(qty, remaining)
-        if take > 0:
-            matched.append(name)
-            release[2] -= take
-            qty -= take
-        if qty <= 0:
-            break
-    return matched
+    return [name for name, _ in take_releases(
+        releases, item, key, note, qty, originals, course=course, seat=seat,
+    )]
+
 
 
 # Create a cancel KOT document
@@ -650,43 +671,32 @@ def create_cancel_kot_doc(
     production,
     void_reason_code=None,
     ignore_permissions=False,
+    original_kot=None,
 ):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     order_number = pos_invoice.custom_ury_order_number  
     is_aggregator = 0
     if pos_invoice.order_type == "Aggregators":
         is_aggregator = 1
-    history = frappe.db.get_list(
-        "URY KOT", filters={"invoice": invoice_id, "production": production, "docstatus": 1,
-                            "type": ("in", ("New Order", "Order Modified", "Duplicate", "Cancelled", "Partially cancelled"))},
-        fields=["name"], order_by="creation asc, name asc", limit_page_length=0,
-    )
-    releases = []
-
-    for entry in history:
-        ticket = frappe.get_doc("URY KOT", entry.name)
-        if ticket.get("type") in ("Cancelled", "Partially cancelled"):
-            originals = {name.strip() for name in (ticket.get("original_kot") or "").split(",")}
-            for row in ticket.kot_items:
-                consume_kot_releases(
-                    releases, row.item, row.get("reservation_line_key"), row.get("comments"),
-                    flt(row.cancelled_qty), originals, course=row.get("course"), seat=cint(row.get("seat_no")),
-                )
-        else:
-            releases.extend([ticket.name, row, flt(row.get("quantity"))] for row in ticket.kot_items)
-
-    original_kots = []
-    for row in cancel_items:
-        original_kots.extend(consume_kot_releases(
-            releases, row["item_code"], row.get("reservation_line_key"), row.get("comments"), abs(flt(row["qty"])),
-            course=row.get("custom_course"), seat=cint(row.get("custom_seat_no")),
-        ))
-    set_kots = ",".join(dict.fromkeys(original_kots))
+    if original_kot is None:
+        history = frappe.db.get_list(
+            "URY KOT", filters={"invoice": invoice_id, "production": production, "docstatus": 1,
+                                "type": ("in", ("New Order", "Order Modified", "Duplicate", "Cancelled", "Partially cancelled"))},
+            fields=["name"], order_by="creation asc, name asc", limit_page_length=0,
+        )
+        releases = outstanding_releases(frappe.get_doc("URY KOT", entry.name) for entry in history)
+        original_kots = []
+        for row in cancel_items:
+            original_kots.extend(consume_kot_releases(
+                releases, row["item_code"], row.get("reservation_line_key"), row.get("comments"),
+                abs(Decimal(str(row["qty"]))), course=row.get("custom_course"), seat=cint(row.get("custom_seat_no")),
+            ))
+        original_kot = ",".join(dict.fromkeys(original_kots))
     kot_cancel_doc = frappe.get_doc(
         {
             "doctype": "URY KOT",
             "naming_series": cancel_kot_naming_series,
-            "original_kot": set_kots,
+            "original_kot": original_kot,
             "restaurant_table": restaurant_table,
             "customer_name": customer,
             "custom_guest_label": pos_invoice.get("custom_guest_label") or None,

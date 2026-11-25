@@ -117,3 +117,6 @@ You do not have permission to modify this KOT.,You do not have permission to mod
 You do not have permission to modify KOTs from other branches.,You do not have permission to modify KOTs from other branches.,
 Hold and fire requires an online connection.,Hold and fire requires an online connection.,
 Held kitchen lines have an ambiguous reservation key.,Held kitchen lines have an ambiguous reservation key.,
+Cannot identify the original kitchen ticket for this line.,Cannot identify the original kitchen ticket for this line.,
+Cannot determine which issued kitchen units to cancel.,Cannot determine which issued kitchen units to cancel.,
+Cancellation exceeds the outstanding issued kitchen quantity.,Cancellation exceeds the outstanding issued kitchen quantity.,

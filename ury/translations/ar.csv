@@ -3131,3 +3131,6 @@ You do not have permission to modify this KOT.,ليس لديك صلاحية تع
 You do not have permission to modify KOTs from other branches.,ليس لديك صلاحية تعديل تذاكر المطبخ من الفروع الأخرى.,
 Hold and fire requires an online connection.,يلزم الاتصال لتأجيل الأصناف أو إرسالها إلى المطبخ.,
 Held kitchen lines have an ambiguous reservation key.,تشترك أصناف معلّقة في المطبخ في مفتاح حجز لا يميّز بينها.,
+Cannot identify the original kitchen ticket for this line.,تعذّر تحديد تذكرة المطبخ الأصلية لهذا الصنف.,
+Cannot determine which issued kitchen units to cancel.,تعذّر تحديد الوحدات المرسلة إلى المطبخ المطلوب إلغاؤها.,
+Cancellation exceeds the outstanding issued kitchen quantity.,تتجاوز الكمية المطلوب إلغاؤها الكمية المتبقية المرسلة إلى المطبخ.,

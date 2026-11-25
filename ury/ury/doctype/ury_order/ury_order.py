@@ -811,19 +811,20 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
 
     candidates = {}
     retained = set()
-    for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
-        rows = frappe.get_all(
-            "URY KOT Items", filters={"parent": ticket, "parenttype": "URY KOT"},
-            fields=["reservation_line_key", "item", "quantity"],
-        )
+    from ury.ury.api.kitchen_ticket_history import legacy_line_matches, split_ticket_families
+
+    for family, rows, ambiguous in split_ticket_families(frappe, source.name):
         line_qty = defaultdict(Decimal)
         possible_lines, issued_lines = set(), set()
-        whole = bool(rows)
-        for row in rows:
+        whole = bool(rows) and not ambiguous
+        for row, outstanding in rows:
             matches = [
                 item for item in by_key.get(row.get("reservation_line_key"), {}).values()
                 if not row.get("item") or item.item_code == row.get("item")
             ]
+            if not matches and (row.get("reservation_line_key") or "").startswith(("ctx:", "pos:")):
+                matches = [item for item in by_item[row.get("item")] if not item.get("reservation_line_key")
+                           and not cint(item.get("ury_held")) and legacy_line_matches(row, item)]
             if len(matches) != 1:
                 possible = matches or by_item.get(row.get("item"), ())
                 if reservations_enabled and (row.get("item") in moving_dishes
@@ -836,7 +837,7 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
                 whole = False
                 continue
             line = matches[0]
-            line_qty[line.name] += abs(Decimal(str(row.get("quantity") or 0)))
+            line_qty[line.name] += abs(outstanding)
             if row.get("item") or row.get("quantity"):
                 issued_lines.add(line.name)
             quantity = Decimal(str(line.qty))
@@ -845,7 +846,7 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
                 whole = False
         lines = set(line_qty)
         if whole:
-            candidates[ticket] = lines
+            candidates[family] = lines
         else:
             # A blank historical placeholder cannot establish issued stock.
             # An unkeyed row with a dish can still identify possible owners.
@@ -858,7 +859,7 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
             retained.update(candidates.pop(ticket))
     if anchored is not None:
         anchored.update(retained)
-    return list(candidates)
+    return [ticket for family in candidates for ticket in family]
 
 
 def _has_manual_line_discount(rows):
@@ -2095,6 +2096,119 @@ def _discard_added_check(source, destination, company, split_consolidation, rese
     source.db_set("cancel_reason", _("Added to check {0}").format(destination.name))
 
 
+def _ambiguous_issued_lines():
+    frappe.throw(coded_message("KOT-OWNERSHIP", _("Cannot identify the original kitchen ticket for this line.")))
+
+
+def _issued_merge_claims(check, tickets, interested):
+    from ury.ury.api.kitchen_ticket_history import legacy_line_matches
+
+    claims = defaultdict(list)
+    sent = [row for row in check.items if not cint(row.get("ury_held"))]
+    for ticket in tickets:
+        for line in ticket.kot_items:
+            key = line.get("reservation_line_key")
+            matches = [row for row in sent if row.item_code == line.item and
+                       key in (row.get("reservation_line_key") or row.name, _line_key(row.item_code, row, 1))]
+            if not matches:
+                matches = [row for row in sent if legacy_line_matches(line, row)]
+            if len(matches) > 1 and any(row.name in interested for row in matches):
+                _ambiguous_issued_lines()
+            if len(matches) == 1:
+                claims[matches[0].name].append((ticket, line))
+    return claims
+
+
+def _bind_issued_merge_keys(checks, reservations_enabled):
+    """Resolve invoice-local identities while each ticket still belongs to its issuing check."""
+    from ury.ury.api.kitchen_ticket_history import CANCELLATIONS, submitted_tickets
+
+    groups = defaultdict(list)
+    for check in checks:
+        for row in check.items:
+            if not cint(row.get("ury_held")):
+                groups[row.item_code, row.get("reservation_line_key") or None].append((check, row))
+
+    interested = {row.name for (_, raw), entries in groups.items() if not raw or len(entries) > 1
+                  for _, row in entries}
+    histories, claims = {}, {}
+    for check in checks:
+        if any(row.name in interested for row in check.items):
+            histories[check.name] = submitted_tickets(frappe, check.name)
+            claims.update(_issued_merge_claims(check, histories[check.name], interested))
+
+    updates = defaultdict(dict)
+    ticket_changes = defaultdict(dict)
+    check_names = {check.name for check in checks}
+    for (code, raw), entries in groups.items():
+        if not any(row.name in interested and row.name in claims for _, row in entries):
+            continue
+        # Shares of a single release keep one identity, even for an originally
+        # unkeyed line. Two origin checks with their own releases never share one.
+        issuers = defaultdict(list)
+        for check, row in entries:
+            if any(ticket.type not in CANCELLATIONS for ticket, _ in claims.get(row.name, ())):
+                issuers[row.get("custom_origin_invoice_item") or row.name].append(check.name)
+        keys = {}
+        for check, row in entries:
+            origin = row.get("custom_origin_invoice_item") or row.name
+            owners = issuers[origin]
+            if not raw and not owners:
+                continue
+            if check.name in owners:
+                owner = check.name
+            elif len(owners) == 1:
+                owner = owners[0]
+            else:
+                owner = row.get("custom_kitchen_anchor") or check.name
+                if owners and owner not in owners:
+                    _ambiguous_issued_lines()
+            component = (origin, owner)
+            if component not in keys:
+                keys[component] = raw if raw and not keys else frappe.generate_hash(length=20)
+            new = keys[component]
+            issued_key = f"ref:{code}:{new}"
+            for _, line in claims.get(row.name, ()):
+                if line.get("reservation_line_key") != issued_key:
+                    ticket_changes[line.name]["reservation_line_key"] = issued_key
+            if new == raw:
+                continue
+            if row.get("custom_kitchen_anchor") and row.custom_kitchen_anchor not in check_names:
+                _ambiguous_issued_lines()
+            old = raw or row.name
+            updates[check.name].setdefault(row.name, {})["reservation_line_key"] = new
+            for child in check.items:
+                if child.get("custom_parent_line_key") == old:
+                    if sum((r.get("reservation_line_key") or r.name) == old for r in check.items) != 1:
+                        _ambiguous_issued_lines()
+                    updates[check.name].setdefault(child.name, {})["custom_parent_line_key"] = new
+            for ticket in histories[check.name]:
+                for child in ticket.kot_items:
+                    if child.get("parent_line_key") == old:
+                        ticket_changes[child.name]["parent_line_key"] = new
+                        key = child.get("reservation_line_key") or ""
+                        if key.startswith(old + "::combo::"):
+                            ticket_changes[child.name]["reservation_line_key"] = new + key[len(old):]
+
+    if updates:
+        external = {line.custom_origin_invoice_item for line in _shared_kitchen_dependants(sorted(check_names))}
+        if None in external or any((row.get("custom_origin_invoice_item") or row.name) in external
+                                   for check in checks for row in check.items if row.name in updates.get(check.name, {})):
+            _ambiguous_issued_lines()
+    for check in checks:
+        changes = updates.get(check.name)
+        if changes:
+            if reservations_enabled:
+                from ury.ury.api.ury_order_reservation_service import rebind_merged_reservations
+
+                rebind_merged_reservations(check, changes)
+            for row in check.items:
+                if row.name in changes:
+                    row.update(changes[row.name])
+    for line, changes in ticket_changes.items():
+        frappe.db.set_value("URY KOT Items", line, changes, update_modified=False)
+
+
 def _merged_kitchen_keys(checks, line_keys):
     """Keep issued identities and separate held groups that arrive from another check."""
     claimed = {row.get("reservation_line_key") or row.name for check in checks for row in check.items
@@ -2194,6 +2308,7 @@ def consolidate_checks(destination, sources):
     reservations_enabled = get_branch_stock_policy(
         branch=destination.branch, company=company
     ).reservation_control_enabled
+    _bind_issued_merge_keys(checks, reservations_enabled)
     split_balance, dependants, line_keys = _prepare_split_consolidation(destination, sources, company)
     split_consolidation = dependants is not None
     merged_comp = _consolidated_check_is_complimentary(checks)
