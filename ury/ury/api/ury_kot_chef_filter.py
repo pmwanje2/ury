@@ -312,10 +312,18 @@ def _fetch_kots_for_units(branch, production_units):
         order_by="creation desc",
     )
 
+    from ury.ury.api.kitchen_ticket_history import current_ticket_owner
+    from ury.ury.api.ury_kot_display import _get_cancel_confirmed_original_kots
+
+    ledgers = {}
+    closed = _get_cancel_confirmed_original_kots(branch)
     production_filters = {}
     kots = []
     for kot in kot_names:
+        if kot.name in closed:
+            continue
         kot_doc = frappe.get_doc(KOT_DOCTYPE, kot.name)
+        effective_invoice = current_ticket_owner(frappe, kot.name, kot_doc.invoice, ledgers=ledgers).name
 
         if kot_doc.production:
             if kot_doc.production not in production_filters:
@@ -330,12 +338,12 @@ def _fetch_kots_for_units(branch, production_units):
             allowed_order_types = production_filters[kot_doc.production]
             if allowed_order_types is not None:
                 invoice_order_type = frappe.db.get_value(
-                    "POS Invoice", kot_doc.invoice, "order_type"
+                    "POS Invoice", effective_invoice, "order_type"
                 )
                 if invoice_order_type not in allowed_order_types:
                     continue
 
-        kots.append(json.loads(frappe.as_json(kot_doc)))
+        kots.append(dict(json.loads(frappe.as_json(kot_doc)), invoice=effective_invoice))
 
     return kots
 

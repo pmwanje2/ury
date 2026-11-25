@@ -11,7 +11,7 @@ TICKET_TYPES = ("New Order", "Order Modified", "Duplicate", *CANCELLATIONS)
 
 def _ledger(invoice):
     """Read legacy round digests or the extended ledger with immutable ticket bindings."""
-    raw = getattr(invoice, "ury_applied_rounds", None)
+    raw = invoice.get("ury_applied_rounds") if isinstance(invoice, dict) else getattr(invoice, "ury_applied_rounds", None)
     if not isinstance(raw, str) or not raw:
         return {}
     try:
@@ -59,12 +59,19 @@ def invoice_ticket_ledger(frappe, name):
     return SimpleNamespace(name=name, ury_applied_rounds=rows[0].get("ury_applied_rounds") if rows else None)
 
 
-def current_ticket_owner(frappe, ticket, issuer, *, for_update=False):
+def current_ticket_owner(frappe, ticket, issuer, *, for_update=False, ledgers=None):
     """Follow the audited transfers starting at the permanent issuing invoice."""
+    if not issuer:
+        return SimpleNamespace(name=issuer)
+
     def load(name):
         if for_update:
             return frappe.get_doc("POS Invoice", name, for_update=True)
-        return invoice_ticket_ledger(frappe, name)
+        if ledgers is None:
+            return invoice_ticket_ledger(frappe, name)
+        if name not in ledgers:
+            ledgers[name] = invoice_ticket_ledger(frappe, name)
+        return ledgers[name]
 
     invoice = load(issuer)
     visited = {issuer}
@@ -82,13 +89,51 @@ def current_ticket_owner(frappe, ticket, issuer, *, for_update=False):
 def owned_ticket_filters(invoice):
     """Disjoint indexed queries for locally issued tickets and tickets received by transfer."""
     ownership = ticket_ownership(invoice)
-    local = {"invoice": invoice.name}
+    local = {"invoice": invoice["name"] if isinstance(invoice, dict) else invoice.name}
     if ownership:
         local["name"] = ("not in", list(ownership))
     yield local
     received = [ticket for ticket, owner in ownership.items() if owner is True]
     if received:
         yield {"name": ("in", received)}
+
+
+def owned_kots(frappe, invoice, *, fields=("name",), filters=None, names=None, active=False):
+    """Read an owner's tickets in issue order, including receipts from previous checks.
+
+    A submitted whole-check cancellation closes its originals immediately. Kitchen
+    acknowledgement is a separate workflow and does not reopen those releases.
+    """
+    if isinstance(invoice, str):
+        invoice = invoice_ticket_ledger(frappe, invoice)
+    scopes = list(owned_ticket_filters(invoice))
+    selected = set(names) if names is not None else None
+    rows = []
+    read_fields = list(dict.fromkeys([*fields, "name", "creation"]))
+    closed = set()
+    for scope in scopes:
+        if active:
+            cancels = frappe.get_all("URY KOT", filters=dict(scope, docstatus=1, type="Cancelled"),
+                                     fields=["original_kot"])
+            for cancel in cancels:
+                closed.update(original_tickets(cancel.get("original_kot")))
+        query = dict(filters or {}, **scope)
+        if active:
+            query.update(docstatus=1, type=("not in", CANCELLATIONS))
+        if selected is not None:
+            candidates = selected
+            if "name" in scope:
+                op, keys = scope["name"]
+                candidates = selected.intersection(keys) if op == "in" else selected.difference(keys)
+            if not candidates:
+                continue
+            query["name"] = ("in", sorted(candidates))
+        rows.extend(frappe.get_all("URY KOT", filters=query,
+                                   fields=read_fields,
+                                   order_by="creation asc, name asc"))
+    if len(scopes) > 1:
+        rows.sort(key=lambda row: (row.creation, row.name))
+    return [row for row in rows if row.name not in closed]
 
 
 _SERVER_BINDINGS = object()
@@ -120,6 +165,13 @@ def bound_item(row, ticket_bindings):
 
 def original_tickets(value):
     return {name.strip() for name in (value or "").split(",") if name.strip()}
+
+
+def is_wholly_cancelled(frappe, ticket):
+    """Check exact links, including historical comma-separated whole-check cancellations."""
+    links = frappe.db.get_values("URY KOT", {"type": "Cancelled", "docstatus": 1,
+                                 "original_kot": ("like", f"%{ticket}%")}, ["original_kot"], as_dict=True)
+    return any(ticket in original_tickets(row.get("original_kot")) for row in links)
 
 
 def matches_release(row, item, key, note, course=None, seat=0):

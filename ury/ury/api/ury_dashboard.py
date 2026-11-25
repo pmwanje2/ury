@@ -604,8 +604,8 @@ def get_shift_metrics(branch=None):
 			END AS secs
 			FROM (
 				SELECT TIME_TO_SEC(k.`start_time_serv`) - TIME_TO_SEC(k.`start_time_prep`) AS diff
-				FROM `tabURY KOT` k
-				WHERE {kot_conditions}
+				FROM `tabURY KOT` k JOIN ury_kitchen_ticket_owner owner ON owner.ticket = k.name
+				WHERE owner.wholly_cancelled = 0 AND {kot_conditions}
 			) d
 		) t
 		WHERE t.secs IS NOT NULL

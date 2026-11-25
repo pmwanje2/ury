@@ -22,12 +22,12 @@ def execute(filters=None):
 			kot.name AS name,
 			kot.restaurant_table AS restaurant_table,
 			GREATEST(TIMESTAMPDIFF(MINUTE, TIMESTAMP(kot.date, kot.time), %(now)s), 0) AS minutes,
-			kot.invoice AS invoice
+			owner.invoice AS invoice
 		FROM
-			`tabURY KOT` AS kot
+			`tabURY KOT` AS kot JOIN ury_kitchen_ticket_owner owner ON owner.ticket = kot.name
 		WHERE
-			kot.order_status <> 'Served'
-			AND kot.docstatus != 2
+			owner.wholly_cancelled = 0 AND kot.order_status <> 'Served'
+			AND kot.docstatus = 1 AND kot.type NOT IN ('Cancelled', 'Partially cancelled')
 			AND GREATEST(TIMESTAMPDIFF(MINUTE, TIMESTAMP(kot.date, kot.time), %(now)s), 0) > %(alert_time)s
 			AND kot.branch = %(branch)s
 		ORDER BY

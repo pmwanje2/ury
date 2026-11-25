@@ -439,6 +439,10 @@ def _transition(kot_item, target_state, idempotency_key, actor_field, timestamp_
 	# locked row's branch/company/production_unit are stamped once at seed
 	# time and are exactly what `_kot_scope(locked["kot"])` would resolve to.
 	_require_execution_actor(actor, locked["branch"], locked["company"])
+	from ury.ury.api.kitchen_ticket_history import is_wholly_cancelled
+
+	if is_wholly_cancelled(frappe, locked["kot"]):
+		raise ItemExecutionError(INVALID_EXECUTION_TRANSITION, _("KOT has been cancelled and cannot be served"))
 	if locked["state"] == target_state:
 		return _result_dict(locked, idempotent=True)
 	

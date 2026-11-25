@@ -43,18 +43,22 @@ def _read_postings(company, branch, invoices):
 	fulfilment = frappe.qb.DocType("URY Fulfilment Record")
 	kot = frappe.qb.DocType("URY KOT")
 	entry = frappe.qb.DocType("Stock Entry")
+	invoice = frappe.qb.DocType("POS Invoice")
+	owner = frappe.qb.Table("ury_kitchen_ticket_owner")
 	return (
 		frappe.qb.from_(fulfilment)
 		.join(kot).on(kot.name == fulfilment.kot)
+		.join(owner).on(owner.ticket == kot.name)
+		.join(invoice).on(invoice.name == owner.invoice)
 		.join(entry).on(entry.name == fulfilment.posting_reference)
 		.select(
-			kot.invoice, fulfilment.item_code, fulfilment.qty, fulfilment.posting_reference,
+			owner.invoice, fulfilment.item_code, fulfilment.qty, fulfilment.posting_reference,
 			entry.total_outgoing_value.as_("posted_cost"),
 		)
 		.where(
-			(fulfilment.company == company) & (fulfilment.branch == branch)
+			(fulfilment.company == company) & (fulfilment.branch == kot.branch)
 			& (fulfilment.posted_to_erpnext == 1)
-			& (kot.branch == branch) & (kot.docstatus == 1) & kot.invoice.isin(list(invoices))
+			& (invoice.company == company) & (invoice.branch == branch) & (kot.docstatus == 1) & owner.invoice.isin(list(invoices))
 			& (entry.company == company) & (entry.docstatus == 1)
 			& entry.purpose.isin(["Manufacture", "Material Issue"])
 		)

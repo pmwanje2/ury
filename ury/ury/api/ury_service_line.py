@@ -2,6 +2,7 @@ import frappe
 
 from frappe.utils import get_datetime
 from ury.ury.api.ury_dashboard import _business_day_bounds
+from ury.ury.api.kitchen_ticket_history import owned_kots
 from ury.ury.report_api.utils import require_dashboard_user
 
 
@@ -45,17 +46,9 @@ def get_service_line(branch=None):
 		stage = "seated"
 		if invoice:
 			minutes = max(0, int((now - get_datetime(invoice[0].creation)).total_seconds() // 60))
-			kot = frappe.db.sql(
-				"""
-				SELECT order_status FROM `tabURY KOT`
-				WHERE invoice = %(invoice)s
-				ORDER BY creation DESC LIMIT 1
-				""",
-				{"invoice": invoice[0].name},
-				as_dict=True,
-			)
+			kot = owned_kots(frappe, invoice[0].name, active=True, fields=["order_status"])
 			if kot:
-				stage = "served" if kot[0].order_status == "Served" else "fired"
+				stage = "served" if kot[-1].order_status == "Served" else "fired"
 
 		if minutes is not None and minutes > 75:
 			stage = "over"

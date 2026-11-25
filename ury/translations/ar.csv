@@ -3134,3 +3134,7 @@ Held kitchen lines have an ambiguous reservation key.,تشترك أصناف مع
 Cannot identify the original kitchen ticket for this line.,تعذّر تحديد تذكرة المطبخ الأصلية لهذا الصنف.,
 Cannot determine which issued kitchen units to cancel.,تعذّر تحديد الوحدات المرسلة إلى المطبخ المطلوب إلغاؤها.,
 Cancellation exceeds the outstanding issued kitchen quantity.,تتجاوز الكمية المطلوب إلغاؤها الكمية المتبقية المرسلة إلى المطبخ.,
+Cannot represent the proportional modifier quantity.,لا يمكن تمثيل الكمية التناسبية للإضافة.,
+A cancelled kitchen ticket cannot be recalled.,لا يمكن استرجاع تذكرة مطبخ ملغاة.,
+Cannot reprint a cancelled check.,لا يمكن إعادة طباعة فاتورة ملغاة.,
+This check has no printable kitchen tickets.,لا توجد تذاكر مطبخ قابلة للطباعة لهذه الفاتورة.,

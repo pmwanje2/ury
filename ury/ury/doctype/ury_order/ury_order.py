@@ -7794,36 +7794,18 @@ def cancel_kot(invoice_id, reason=None, void_reason_code=None):
         **cancel_kwargs,
     )
 
-    # Set the KOTs associated with the invoice as canceled
-    from ury.ury.api.kitchen_ticket_history import owned_ticket_filters
-
-    kot_list = [row for scope in owned_ticket_filters(pos_invoice)
-                for row in frappe.db.get_list("URY KOT", filters=dict(
-                    scope, type=("in", ("New Order", "Order Modified")), docstatus=1,
-                ), fields=["name"], limit_page_length=0)]
-    for item in kot_list:
-        kot_doc = frappe.get_doc("URY KOT", item.name)
-        kot_doc.docstatus = 2
-        kot_doc.save()
-
     return created_cancel_kots
 
 
 def change_table_in_kot(invoice, new_table, branch):
-    # Get a list of KOTs associated with the POS Invoice
-    kot_list = frappe.get_all(
-        "URY KOT",
-        filters={
-            "invoice": invoice,
-            "docstatus": 1,
-            "order_status": "Ready For Prepare",
-            "verified": 0,
-        },
-    )
+    from ury.ury.api.kitchen_ticket_history import owned_kots
+
+    kot_list = owned_kots(frappe, invoice, active=True, filters={
+        "order_status": ["!=", "Served"],
+    }, fields=["name", "production", "branch"])
 
     # Update each KOT's restaurant_table and send a real-time update
     for kot in kot_list:
         frappe.db.set_value("URY KOT", kot.name, "restaurant_table", new_table)
-        production = frappe.db.get_value("URY KOT", kot.name, "production")
-        kot_channel = "{}_{}_{}".format("kot_update", branch, production)
+        kot_channel = "{}_{}_{}".format("kot_update", kot.branch or branch, kot.production)
         frappe.publish_realtime(kot_channel)

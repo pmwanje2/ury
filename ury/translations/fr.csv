@@ -46,3 +46,7 @@ Held kitchen lines have an ambiguous reservation key.,Plusieurs lignes en attent
 Cannot identify the original kitchen ticket for this line.,Impossible d’identifier le bon de cuisine d’origine pour cette ligne.,
 Cannot determine which issued kitchen units to cancel.,Impossible de déterminer quelles unités envoyées en cuisine annuler.,
 Cancellation exceeds the outstanding issued kitchen quantity.,La quantité à annuler dépasse la quantité envoyée en cuisine restant à annuler.,
+Cannot represent the proportional modifier quantity.,Impossible de représenter la quantité proportionnelle du supplément.,
+A cancelled kitchen ticket cannot be recalled.,Un bon de cuisine annulé ne peut pas être rappelé.,
+Cannot reprint a cancelled check.,Impossible de réimprimer une addition annulée.,
+This check has no printable kitchen tickets.,Cette addition ne comporte aucun bon de cuisine à imprimer.,

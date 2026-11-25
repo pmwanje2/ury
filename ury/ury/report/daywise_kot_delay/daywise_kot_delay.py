@@ -17,7 +17,7 @@ def execute(filters=None):
       kot.name AS name,
       kot.restaurant_table AS restaurant_table,
       ROUND(kot.production_time,3) AS minutes,
-      kot.invoice AS invoice,
+      owner.invoice AS invoice,
       kot.date AS date,
       kot.name AS name
     FROM
@@ -48,6 +48,7 @@ def execute(filters=None):
         AND kot.order_status = 'Served'
         AND kot.branch = %(branch)s
     )
+    LEFT JOIN ury_kitchen_ticket_owner owner ON owner.ticket = kot.name
     LEFT JOIN `tabURY Report Settings` rs ON (
         rs.`branch` = %(branch)s
     )

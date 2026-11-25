@@ -42,3 +42,7 @@ Held kitchen lines have an ambiguous reservation key.,Varias líneas de cocina e
 Cannot identify the original kitchen ticket for this line.,No se puede identificar la comanda de cocina original de esta línea.,
 Cannot determine which issued kitchen units to cancel.,No se puede determinar qué unidades enviadas a cocina se deben cancelar.,
 Cancellation exceeds the outstanding issued kitchen quantity.,La cantidad que se desea cancelar supera la cantidad enviada a cocina pendiente de cancelación.,
+Cannot represent the proportional modifier quantity.,No se puede representar la cantidad proporcional del modificador.,
+A cancelled kitchen ticket cannot be recalled.,No se puede recuperar una comanda de cocina cancelada.,
+Cannot reprint a cancelled check.,No se puede reimprimir una cuenta cancelada.,
+This check has no printable kitchen tickets.,Esta cuenta no tiene comandas de cocina que se puedan imprimir.,

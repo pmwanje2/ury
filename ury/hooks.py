@@ -203,6 +203,8 @@ jinja = {
 # site (every CI run) gets URY's Custom Field fixtures but none of its
 # DocPerms. See ury.install.ensure_role_permissions for the full write-up.
 after_install = "ury.install.after_install"
+# The ownership projection needs the invoice ledger installed by sync_fixtures.
+after_sync = ["ury.patches.v3_46.create_kitchen_ticket_owner_view.execute"]
 after_app_install = "ury.install.after_app_install"
 boot_session = "ury.ury.boot_insights.boot_session"
 

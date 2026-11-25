@@ -904,6 +904,10 @@ def restore_split_balance(doc, snapshot):
             value = float(_decimal(value) + base_tip_delta)
         doc.set(field, value)
     doc.custom_split_balance = json.dumps(snapshot, separators=(",", ":"))
+    # set_missing_values can append a tender mode before any amount is entered.
+    for payment in doc.get("payments") or ():
+        if payment.amount is None:
+            payment.amount = 0.0
     doc.set_paid_amount()
     doc.set_outstanding_amount()
 

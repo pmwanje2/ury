@@ -8,7 +8,7 @@ from frappe import _
 from frappe.utils import cint, flt, get_datetime
 
 from ury.ury.api.kitchen_ticket_history import (
-    bound_item, matches_release, outstanding_releases, round_ledger, submitted_tickets, take_releases, ticket_ownership,
+    bound_item, matches_release, outstanding_releases, owned_ticket_filters, round_ledger, submitted_tickets, take_releases, ticket_ownership,
 )
 from ury.brand import coded_message
 
@@ -529,9 +529,14 @@ def process_items_for_kot(
         # rejected by the unique index.
         validation_dedup_key = None
         current_kot_type = kot_type
+        already_issued_here = invoice_exist
+        if ticket_ownership(pos_invoice):
+            invoice_exist = any(frappe.db.get_value(
+                "URY KOT", dict(scope, docstatus=1, production=production_unit), "name", for_update=require_routing,
+            ) for scope in owned_ticket_filters(pos_invoice))
         if invoice_exist:
             current_kot_type = "Order Modified"
-        else:
+        elif not already_issued_here:
             validation_dedup_key = "{0}::{1}".format(invoice_id, production_unit)
 
         kot_name = create_kot_doc(

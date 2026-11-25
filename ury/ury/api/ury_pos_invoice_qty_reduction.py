@@ -44,6 +44,7 @@ this module.
 """
 
 import inspect
+from decimal import Decimal
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
@@ -217,6 +218,7 @@ def reduce_order_item_qty(
 		)
 
 	from ury.ury.api.modifier_tree import modifier_edges
+	from ury.ury.doctype.ury_order.ury_order import _validate_split_share_quantities
 
 	edges = list(modifier_edges(pos_invoice.items, [item_row]))
 	linked_child_names = {child.name for _, child in edges}
@@ -240,11 +242,13 @@ def reduce_order_item_qty(
 	remaining_qty = {item_row.name: new_qty}
 	for parent, child in edges:
 		parent_new_qty = remaining_qty[parent.name]
-		if parent_new_qty == 0:
-			child_new_qty = 0.0
-		else:
-			scaled = flt(child.qty) * parent_new_qty / flt(parent.qty)
-			child_new_qty = float(round(scaled)) if abs(scaled - round(scaled)) < 1e-6 else flt(child.qty)
+		scaled = (Decimal(str(child.qty)) * Decimal(str(parent_new_qty)) / Decimal(str(parent.qty))
+		          if parent_new_qty else Decimal(0))
+		if scaled != scaled.quantize(Decimal("0.0001")):
+			raise QtyReductionError(INVALID_QTY, _("Cannot represent the proportional modifier quantity."))
+		child_new_qty = float(scaled)
+		if scaled:
+			_validate_split_share_quantities([child], [{child.name: Decimal(str(child.qty)) - scaled}])
 		remaining_qty[child.name] = child_new_qty
 		if child_new_qty < flt(child.qty):
 			child_updates.append((child, flt(child.qty), child_new_qty))

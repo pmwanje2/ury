@@ -115,8 +115,8 @@ def _rule_long_open_tickets(branch):
 	rows = frappe.db.sql(
 		f"""
 		SELECT k.`name`
-		FROM `tabURY KOT` k
-		WHERE {conditions}
+		FROM `tabURY KOT` k JOIN ury_kitchen_ticket_owner owner ON owner.ticket = k.name
+		WHERE owner.wholly_cancelled = 0 AND {conditions}
 		""",
 		params,
 		as_dict=True,
