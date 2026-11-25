@@ -4,9 +4,37 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
-import { authoriseOverride, setMyPin } from './override-api';
+import { initI18n, t } from '../i18n';
+import { authoriseOverride, extractAuthErrorCode, overrideErrorMessage, setMyPin } from './override-api';
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  ['en', 'Refresh the till and try again.'],
+  ['fr', 'Actualisez la caisse et réessayez.'],
+  ['es', 'Actualiza la caja e inténtalo de nuevo.'],
+  ['ar', 'حدّث صفحة نقطة البيع وحاول مرة أخرى.'],
+])('maps HTTP 417 POS-AUTH-REFRESH in %s', async (locale, expected) => {
+  await initI18n(locale);
+  const error = {
+    httpStatus: 417,
+    _server_messages: JSON.stringify([JSON.stringify({
+      message: 'Refresh the till and try again. [POS-AUTH-REFRESH]',
+    })]),
+  };
+
+  expect(extractAuthErrorCode(error)).toBe('POS-AUTH-REFRESH');
+  expect(overrideErrorMessage(error)).toBe(expected);
+  expect(overrideErrorMessage(error, 'approval_pin.save_failed')).toBe(expected);
+});
+
+it('uses the caller fallback for unrecognized provider codes', async () => {
+  await initI18n('fr');
+  const error = { httpStatus: 417, message: 'Provider traceback [POS-AUTH-PROVIDER-UNKNOWN]' };
+  expect(extractAuthErrorCode(error)).toBeNull();
+  expect(overrideErrorMessage(error)).toBe(t('manager_approval.error_generic'));
+  expect(overrideErrorMessage(error, 'approval_pin.save_failed')).toBe(t('approval_pin.save_failed'));
+});
 
 // Set URY_FRAPPE_TEST_PYTHON to the Python interpreter in a Frappe bench.
 const frappePython = process.env.URY_FRAPPE_TEST_PYTHON;

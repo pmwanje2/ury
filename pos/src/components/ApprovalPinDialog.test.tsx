@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
-import { initI18n } from '../i18n';
+import { initI18n, t } from '../i18n';
 import ApprovalPinDialog from './ApprovalPinDialog';
 
 describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
@@ -52,6 +52,27 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     // Inputs must clear after save
     expect((pwInput as HTMLInputElement).value).toBe('');
     expect((pinInput as HTMLInputElement).value).toBe('');
+  });
+
+  it.each([
+    ['POS-AUTH-REFRESH', 'Actualiza la caja e inténtalo de nuevo.'],
+    ['POS-AUTH-PROVIDER-UNKNOWN', undefined],
+  ])('displays the localized enrolment failure for HTTP 417 %s', async (code, expected) => {
+    await initI18n('es');
+    vi.spyOn(call, 'get').mockResolvedValue({ message: { has_pin: false, external_verifier: false } });
+    vi.spyOn(call, 'post').mockRejectedValue({
+      httpStatus: 417,
+      _server_messages: JSON.stringify([JSON.stringify({ message: `Server response [${code}]` })]),
+    });
+
+    const user = userEvent.setup();
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} />);
+    await user.type(await screen.findByLabelText(t('approval_pin.current_password')), 'fixture-password');
+    await user.type(screen.getByLabelText(t('approval_pin.new_pin')), '4826');
+    await user.type(screen.getByLabelText(t('approval_pin.confirm_pin')), '4826');
+    await user.click(screen.getByRole('button', { name: t('approval_pin.save_button') }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe(expected ?? t('approval_pin.save_failed'));
   });
 
   it('lets a manager clear another user approval PIN, never read or set it', async () => {

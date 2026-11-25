@@ -68,6 +68,45 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     expect(overrideErrorMessage(error, 'approval_pin.save_failed')).toBe(t('approval_pin.save_failed'));
   });
 
+  it.each([
+    ['POS-AUTH-REFRESH', 'Actualisez la caisse et réessayez.'],
+    ['POS-AUTH-PROVIDER-UNKNOWN', undefined],
+  ])('displays the localized approval failure for HTTP 417 %s', async (code, expected) => {
+    await initI18n('fr');
+    mockServer({
+      approvers: [APPROVERS[0]],
+      authoriseImpl: async () => {
+        throw {
+          httpStatus: 417,
+          _server_messages: JSON.stringify([JSON.stringify({ message: `Server response [${code}]` })]),
+        };
+      },
+    });
+    const user = userEvent.setup();
+    const onApproved = vi.fn();
+    render(
+      <ManagerApproval
+        open
+        posProfile="Main Till"
+        privilege="void_sent_item"
+        reference="POS-INV-001"
+        summaryLines={[]}
+        claim={{}}
+        onApproved={onApproved}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole('combobox', { name: t('manager_approval.manager') });
+    for (const digit of '4826') {
+      await user.click(screen.getByRole('button', { name: digit }));
+    }
+    await user.click(screen.getByRole('button', { name: t('manager_approval.approve') }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe(expected ?? t('manager_approval.error_generic'));
+    expect(onApproved).not.toHaveBeenCalled();
+  });
+
   it('gives the dismiss button a 44px touch target', async () => {
     mockServer();
     render(
