@@ -15,3 +15,4 @@ Select a table in the requested room.,Sélectionnez une table dans la salle dema
 This table does not fit the party.,Cette table ne peut pas accueillir le groupe.,
 This table is held for a reservation.,Cette table est gardée pour une réservation.,
 Mark this table clean before seating.,Indiquez que la table est propre avant d’y installer le groupe.,
+Table {0} already has a reservation during the selected time. Please select a different reservation time.,La table {0} est déjà réservée pour le créneau sélectionné. Choisissez un autre créneau.,

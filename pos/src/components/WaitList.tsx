@@ -21,12 +21,13 @@ const WAITLIST_ERROR_KEYS: Record<string, string> = {
   'WAITLIST-TABLE-ROOM': 'floor.waitlist_table_room',
   'WAITLIST-TABLE-SIZE': 'floor.waitlist_table_size',
   'WAITLIST-TABLE-RESERVED': 'floor.waitlist_table_reserved',
+  'RESERVATION-TABLE-OVERLAP': 'floor.waitlist_table_overlap',
   'TABLE-DIRTY-NEEDS-BUSSING': 'floor.waitlist_table_dirty',
 };
 
 function waitlistError(error: unknown): string {
   const message = parseFrappeError(error, t('floor.waitlist_error'));
-  const code = message.match(/\[(?:[A-Z][A-Z0-9]{1,9}-)?(WAITLIST-[A-Z-]+|TABLE-DIRTY-NEEDS-BUSSING)\]/)?.[1];
+  const code = message.match(/\[(?:[A-Z][A-Z0-9]{1,9}-)?(WAITLIST-[A-Z-]+|TABLE-DIRTY-NEEDS-BUSSING|RESERVATION-TABLE-OVERLAP)\]/)?.[1];
   const key = code && WAITLIST_ERROR_KEYS[code];
   return key ? t(key) : message;
 }

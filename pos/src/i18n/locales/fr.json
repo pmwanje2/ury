@@ -1326,6 +1326,7 @@
     "waitlist_table_room": "Sélectionnez une table dans la salle demandée.",
     "waitlist_table_size": "Cette table ne peut pas accueillir le groupe.",
     "waitlist_table_reserved": "Cette table est gardée pour une réservation.",
+    "waitlist_table_overlap": "Une réservation chevauche la durée prévue de cette visite. Sélectionnez une autre table.",
     "waitlist_table_dirty": "Indiquez que la table est propre avant d’y installer le groupe.",
     "clean_failed": "Impossible de marquer la table comme propre."
   }

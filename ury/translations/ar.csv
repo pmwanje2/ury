@@ -3105,3 +3105,4 @@ Select a table in the requested room.,اختر طاولة في الصالة ال
 This table does not fit the party.,هذه الطاولة لا تتسع للمجموعة.,
 This table is held for a reservation.,هذه الطاولة مخصصة لحجز.,
 Mark this table clean before seating.,ضع علامة على أن الطاولة نظيفة قبل إجلاس الضيوف.,
+Table {0} already has a reservation during the selected time. Please select a different reservation time.,الطاولة {0} محجوزة بالفعل خلال الوقت المحدد. اختر وقتًا آخر للحجز.,

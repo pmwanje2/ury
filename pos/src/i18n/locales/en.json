@@ -1519,6 +1519,7 @@
     "waitlist_table_room": "Select a table in the requested room.",
     "waitlist_table_size": "This table does not fit the party.",
     "waitlist_table_reserved": "This table is held for a reservation.",
+    "waitlist_table_overlap": "This table has a reservation during the party’s expected stay. Select another table.",
     "waitlist_table_dirty": "Mark this table clean before seating.",
     "clean_failed": "Could not mark the table clean."
   }

@@ -313,7 +313,10 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
         # Conflict occurs if the two holds, buffer included, overlap
         if ex_hold_start < new_end and new_hold_start < ex_end:
             frappe.throw(
-                _("Table {0} already has a reservation during the selected time. Please select a different reservation time.").format(table)
+                coded_message(
+                    "RESERVATION-TABLE-OVERLAP",
+                    _("Table {0} already has a reservation during the selected time. Please select a different reservation time.").format(table),
+                )
             )
 
 

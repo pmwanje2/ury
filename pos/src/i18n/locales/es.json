@@ -1278,6 +1278,7 @@
     "waitlist_table_room": "Selecciona una mesa en la sala solicitada.",
     "waitlist_table_size": "Esta mesa no tiene capacidad para el grupo.",
     "waitlist_table_reserved": "Esta mesa está apartada para una reserva.",
+    "waitlist_table_overlap": "Una reserva coincide con parte de la estancia prevista del grupo. Selecciona otra mesa.",
     "waitlist_table_dirty": "Marca esta mesa como limpia antes de sentar al grupo.",
     "clean_failed": "No se pudo marcar la mesa como limpia."
   }

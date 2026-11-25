@@ -22,6 +22,9 @@ TAX_AMOUNTS = (
 _SERVER_BALANCE = object()
 _DISCOUNT_REPRICE = object()
 _PREVIOUS_TAX = {"On Previous Row Amount": "amount", "On Previous Row Total": "total"}
+_TAX_PRICING_FIELDS = (
+    "charge_type", "rate", "row_id", "included_in_print_rate", "included_in_paid_amount", "dont_recompute_tax",
+)
 DETAIL_AMOUNTS = ("amount", "taxable_amount", "base_amount", "base_taxable_amount")
 TAX_DETAIL_FIELDS = {
     "tax_amount": "amount", "tax_amount_after_discount_amount": "amount", "net_amount": "taxable_amount",
@@ -77,6 +80,15 @@ def _ratio(part, whole):
     return min(Decimal(1), max(Decimal(0), part / whole)) if whole else Decimal(0)
 
 
+def _fixed_tax_weights(item_names, source_rows, amount):
+    """Use ERPNext's Actual charge basis for the applicable items."""
+    nets = [_net(source_rows[name]) for name in item_names]
+    net_total = sum(nets)
+    if net_total:
+        return [_decimal(amount) * net / net_total for net in nets]
+    return [Decimal(0)] * (len(nets) - 1) + [_decimal(amount)] if nets else []
+
+
 def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_places, base_places, previous):
     """Recover transaction detail from native company-currency detail and the tax row."""
     sign = -1 if tax.get("add_deduct_tax") == "Deduct" else 1
@@ -88,10 +100,17 @@ def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_p
     item_names = [detail.get("item_row") for detail in details]
     bases = None
     txn_weights = []
-    if previous is not None:
-        bases = [previous.get(name, Decimal(0)) for name in item_names]
+    if charge_type in _PREVIOUS_TAX:
+        bases = [
+            previous.get(name, Decimal(0)) if previous is not None else _net(source_rows[name])
+            for name in item_names
+        ]
         txn_weights = [base * _decimal(detail.get("rate")) / 100
                        for base, detail in zip(bases, details, strict=True)]
+        if not sum(txn_weights):
+            txn_weights = _fixed_tax_weights(item_names, source_rows, txn_tax)
+    elif charge_type == "Actual":
+        txn_weights = _fixed_tax_weights(item_names, source_rows, txn_tax)
     elif charge_type == "On Item Quantity":
         txn_weights = [_decimal(source_rows[name].get("qty")) * _decimal(detail.get("rate"))
                        for name, detail in zip(item_names, details, strict=True)]
@@ -106,7 +125,7 @@ def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_p
     total_units = _units(txn_tax, currency_places) * sign
     running_weight = Decimal(0)
     previous_units = 0
-    allocations, unrounded = [], {}
+    allocations = []
     for index, (name, detail, weight) in enumerate(zip(item_names, details, weights, strict=True)):
         running_weight += weight
         units = int((total_units * running_weight / total_weight).to_integral_value(
@@ -122,16 +141,53 @@ def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_p
             "base_taxable_amount": _amount(_units(detail.get("taxable_amount"), base_places), base_places),
         })
         previous_units = units
-        if has_transaction_weights:
-            unrounded[name] = weight
-        elif total_weight:
-            unrounded[name] = _decimal(txn_tax) * weight / total_weight
-        elif not total_units:
-            unrounded[name] = Decimal(0)
-    return allocations, unrounded
+    # Subsequent native tax rows must never inherit company-currency weights.
+    unrounded = txn_weights if has_transaction_weights else _fixed_tax_weights(item_names, source_rows, txn_tax)
+    return allocations, dict(zip(item_names, unrounded, strict=True))
 
 
-def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_places, source, child):
+def _tax_pricing_rule(tax):
+    charge_type = tax.get("charge_type")
+    if not charge_type:
+        return {}
+    return {
+        "charge_type": charge_type,
+        "rate": flt(tax.get("rate")),
+        "row_id": cint(tax.get("row_id")) or None,
+        "included_in_print_rate": cint(tax.get("included_in_print_rate")),
+        "included_in_paid_amount": cint(tax.get("included_in_paid_amount")),
+        "dont_recompute_tax": cint(tax.get("dont_recompute_tax")),
+    }
+
+
+def _matching_tax_account(left, right):
+    return all(left.get(field) == right.get(field) for field in ("account_head", "custom_pos_charge_kind"))
+
+
+def _saved_tax_pricing_rules(check, snapshot):
+    """Read captured tax rules, or recover matching template rows for old splits."""
+    template_name = check.get("taxes_and_charges")
+    template = ()
+    if template_name and any(
+        not row.get("charge_type") and not row.get("custom_pos_charge_kind") for row in snapshot["taxes"]
+    ):
+        template = frappe.get_all(
+            "Sales Taxes and Charges",
+            filters={"parent": template_name, "parenttype": "Sales Taxes and Charges Template"},
+            fields=["account_head", *_TAX_PRICING_FIELDS],
+            order_by="idx asc",
+        )
+
+    for index, tax in enumerate(snapshot["taxes"]):
+        if tax.get("charge_type"):
+            yield _tax_pricing_rule(tax)
+        elif index < len(template) and _matching_tax_account(template[index], tax):
+            yield _tax_pricing_rule(template[index])
+        else:
+            yield {}
+
+
+def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_places, source, child, rule):
     sign = -1 if tax.get("add_deduct_tax") == "Deduct" else 1
     row_ratios = dict(fallback)
     totals = {field: sum((_decimal(detail.get(field)) for detail in details), Decimal(0))
@@ -170,15 +226,12 @@ def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_
             if details and key in right and _units(tax.get(key), places) == total:
                 moved_units = sign * sum(_units(detail.get(detail_key), places) for detail in child_details)
                 left[key], right[key] = _amount(total - moved_units, places), _amount(moved_units, places)
-    source["taxes"].append({**labels, **left})
-    child["taxes"].append({**labels, **right})
+    source["taxes"].append({**labels, **rule, **left})
+    child["taxes"].append({**labels, **rule, **right})
 
 
-def _allocated_tax_details(check, taxes, source_rows):
+def _allocated_tax_details(saved, taxes, source_rows):
     """Use exact transaction shares from a prior split when splitting again."""
-    if not check.get("custom_split_balance"):
-        return {}
-    saved = get_saved_split_balance(check)
     if not saved:
         return {}
 
@@ -248,7 +301,12 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
                 details_by_tax.setdefault(detail.get("tax_row"), []).append(detail)
     taxes = check.get("taxes") or ()
     rows_by_name = {row.name: row for row in check.get("items") or ()}
-    saved_details = {} if repricing else _allocated_tax_details(check, taxes, rows_by_name)
+    saved = get_saved_split_balance(check) if check.get("custom_split_balance") and not repricing else None
+    saved_details = _allocated_tax_details(saved, taxes, rows_by_name)
+    saved_rules = iter(
+        (tax, rule) for tax, rule in zip(saved["taxes"], _saved_tax_pricing_rules(check, saved), strict=True)
+        if tax.get("custom_pos_charge_kind") != "Charged Tip"
+    ) if saved else iter(())
     exchange_rate = _decimal(check.get("conversion_rate")) or Decimal(1)
     prior_rows = {}
     running = {name: _net(row) for name, row in rows_by_name.items()}
@@ -275,8 +333,13 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
                 else None
             )
         prior_rows[index + 1] = {"amount": unrounded or None, "total": running}
+        rule = _tax_pricing_rule(tax)
+        if tax.get("custom_pos_charge_kind") != "Charged Tip":
+            prior_tax, prior_rule = next(saved_rules, ({}, {}))
+            if _matching_tax_account(tax, prior_tax):
+                rule = prior_rule or rule
         _partition_tax(tax, index, details, ratios_by_name, field_ratios, currency_places, base_places,
-                       source, child)
+                       source, child, rule)
 
     source["header"], child["header"] = _partition(HEADER_AMOUNTS, check, field_ratios, currency_places, base_places)
     for prefix, places in (("", currency_places), ("base_", base_places)):
@@ -375,23 +438,46 @@ def _repricing_split_discount(doc):
     return getattr(getattr(doc, "flags", None), "ury_split_discount_reprice", None) is _DISCOUNT_REPRICE
 
 
+def _restore_tax_pricing(check, snapshot):
+    if not snapshot["taxes"]:
+        return
+    live = list(check.get("taxes") or ())
+    tax_rows = []
+    rules = _saved_tax_pricing_rules(check, snapshot)
+    for index, (saved, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
+        if saved.get("custom_pos_charge_kind") == "Charged Tip":
+            continue
+        native = live[index] if index < len(live) else None
+        values = native.as_dict() if native and _matching_tax_account(native, saved) else {}
+        tax_rows.append({
+            **values, **saved,
+            "charge_type": "Actual", "row_id": None, "included_in_print_rate": 0, "dont_recompute_tax": 0,
+            **rule,
+        })
+    check.set("taxes", tax_rows + [row for row in live if row.get("custom_pos_charge_kind") == "Charged Tip"])
+    # The restored rows have new object identities. Native pricing rebuilds the per-item details.
+    check._item_wise_tax_details = []
+
+
 @contextmanager
 def reprice_split_discount(checks, *, precisions=None):
     """Refresh the monetary allocation after an explicit server-side discount edit."""
     active = [
-        doc for doc in checks
-        if doc is not None and isinstance(doc.get("custom_split_balance"), str) and get_saved_split_balance(doc)
+        (doc, snapshot) for doc in checks
+        if doc is not None and isinstance(doc.get("custom_split_balance"), str)
+        and (snapshot := get_saved_split_balance(doc))
     ]
-    for doc in active:
-        doc.flags.ury_split_discount_reprice = _DISCOUNT_REPRICE
     try:
-        yield active
+        for doc, snapshot in active:
+            doc.flags.ury_split_discount_reprice = _DISCOUNT_REPRICE
+            _restore_tax_pricing(doc, snapshot)
+        yield [doc for doc, _ in active]
         if precisions is not None:
-            for doc in active:
+            for doc, _ in active:
                 snapshot, _ = allocate_split_balances(doc, {}, *precisions(doc, doc.get("company")))
                 set_split_balance(doc, snapshot, [row.name for row in doc.items])
     finally:
-        for doc in active:
+        for doc, _ in active:
             doc.flags.ury_split_discount_reprice = None
 
 
@@ -433,6 +519,9 @@ def combine_split_balances(checks, currency_places, base_places):
         tax_indexes = {}
         for index, tax in enumerate(snapshot["taxes"]):
             labels = {key: val for key, val in tax.items() if key not in TAX_AMOUNTS}
+            previous_index = cint(labels.get("row_id")) - 1
+            if labels.get("charge_type") in _PREVIOUS_TAX and previous_index in tax_indexes:
+                labels["row_id"] = tax_indexes[previous_index] + 1
             identity = tuple(sorted(labels.items()))
             if identity not in taxes_by_account:
                 taxes_by_account[identity] = len(combined["taxes"])
