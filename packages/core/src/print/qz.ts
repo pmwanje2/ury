@@ -1,7 +1,7 @@
 import { loadQz } from './qz-runtime';
 import axios from 'axios';
 import { call } from '../frappe/client';
-import { configureQzSignature } from './qz-signing';
+import { runSignedQz } from './qz-signing';
 
 export const ESC_POS_DRAWER_KICK_PIN_2 = '1b700019fa';
 export const ESC_POS_DRAWER_KICK_PIN_5 = '1b700119fa';
@@ -40,7 +40,7 @@ export function resolveDrawerKickHex(opts?: {
 
 export async function loadQzPrinter(host: string): Promise<void> {
   const qz = await loadQz();
-  qz.security.setCertificatePromise((resolve: (data: string) => void, reject: (err?: string) => void) => {
+  qz.security.setCertificatePromise((resolve, reject) => {
     axios.get('/assets/ury/files/cert.pem')
       .then(({ data }) => resolve(data))
       .catch((err) => reject('Error fetching certificate: ' + String(err)));
@@ -58,21 +58,12 @@ export function disconnectQzPrinter(): void {
 export async function printWithQz(host: string, htmlToPrint: string): Promise<void> {
   const qz = await loadQz();
 
-  configureQzSignature(qz, call.post);
-
-  const printing = async () => {
+  return runSignedQz(qz, call.post, async () => {
+    if (!qz.websocket.isActive()) await loadQzPrinter(host);
     const printer = await qz.printers.getDefault();
     const data = [{ type: 'html', format: 'plain', data: htmlToPrint }];
-    const config = qz.configs.create(printer);
-    await qz.print(config, data);
-  };
-
-  if (qz.websocket.isActive()) {
-    await printing();
-  } else {
-    await loadQzPrinter(host);
-    await printing();
-  }
+    await qz.print(qz.configs.create(printer), data);
+  });
 }
 
 export async function kickDrawerQz(
@@ -84,18 +75,11 @@ export async function kickDrawerQz(
   const hex = resolveDrawerKickHex({ hex: hexCommand, pin });
   const qz = await loadQz();
 
-  configureQzSignature(qz, call.post);
-
-  const sendPulse = async (): Promise<KickDrawerQzResult> => {
-    const target: QzPrinterTarget = printerName || (await qz.printers.getDefault());
+  return runSignedQz(qz, call.post, async (): Promise<KickDrawerQzResult> => {
+    if (!qz.websocket.isActive()) await loadQzPrinter(host);
+    const target = printerName || (await qz.printers.getDefault());
     const config = qz.configs.create(target);
     await qz.print(config, [{ type: 'raw', format: 'command', flavor: 'hex', data: hex }]);
     return { status: 'Sent', hex, printer: target };
-  };
-
-  if (qz.websocket.isActive()) {
-    return sendPulse();
-  }
-  await loadQzPrinter(host);
-  return sendPulse();
+  });
 }

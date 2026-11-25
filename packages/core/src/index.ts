@@ -53,6 +53,7 @@ export {
   kickDrawerQz,
 } from './print/qz';
 export type { DrawerPin, QzPrinterTarget, KickDrawerQzResult } from './print/qz';
+export { QzSigningRefusedError } from './print/qz-signing';
 export {
   MERGED_POS_INVOICE_PRINT_FORMAT,
   UNSAFE_POS_INVOICE_PRINT_FORMATS,

@@ -14,7 +14,8 @@ import {
   cn,
   showToast,
 } from '@ury/ui'
-import { formatCurrency } from '@ury/core'
+import { formatCurrency, QzSigningRefusedError } from '@ury/core'
+import { t } from '../i18n'
 import { useServeStore } from '../store/serve-store'
 import { useRootStore, type RootState } from '../store/root-store'
 import {
@@ -706,7 +707,9 @@ export default function OrderPage() {
                   )
                 }
               } catch (e) {
-                showToast.error(e instanceof Error ? e.message : 'Print failed')
+                showToast.error(e instanceof QzSigningRefusedError
+                  ? t('errors.printer_signing_refused')
+                  : e instanceof Error ? e.message : 'Print failed')
               } finally {
                 setIsPrintingBill(false)
               }

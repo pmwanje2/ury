@@ -40,7 +40,8 @@ for (const client of ['shared POS', 'Desk']) {
     const encoded = await new Promise(callback(challenge));
     assert.equal(verify('RSA-SHA512', Buffer.from(challenge), publicKey, Buffer.from(encoded, 'base64')), true);
     allowed = false;
-    await assert.rejects(new Promise(callback(challenge)), /Not permitted/);
+    await assert.rejects(new Promise(callback(challenge)),
+      client === 'shared POS' ? /Printer signing was refused/ : /Not permitted/);
     assert.equal(requests, 2);
   });
 }
