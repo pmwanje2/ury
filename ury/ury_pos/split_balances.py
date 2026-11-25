@@ -81,10 +81,14 @@ def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_p
     if txn_tax is None:
         txn_tax = tax.get("tax_amount")
     weights = [_decimal(row.get("amount")) for row in details]
-    if tax.get("charge_type") == "On Net Total" or not any(weights):
-        # Use the original line rates where available. Company-currency
-        # rounding may have erased the tax on a small taxable line.
-        txn_weights = [_net(source_rows[row.get("item_row")]) * _decimal(row.get("rate")) for row in details]
+    charge_type = tax.get("charge_type")
+    if charge_type in ("On Net Total", "On Item Quantity") or not any(weights):
+        # Company-currency rounding can distort small transaction taxes.
+        txn_weights = []
+        for detail in details:
+            item = source_rows[detail.get("item_row")]
+            basis = _decimal(item.get("qty")) if charge_type == "On Item Quantity" else _net(item)
+            txn_weights.append(basis * _decimal(detail.get("rate")))
         if sum(txn_weights):
             weights = txn_weights
     total_weight = sum(weights)
@@ -182,9 +186,8 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
     source = {"items": {}, "taxes": [], "details": [], "header": {}}
     child = {"items": {}, "taxes": [], "details": [], "header": {}}
     ratios_by_name = {}
-    # Match ERPNext's stock ledger rounding on actual POS documents. Plain
-    # allocation inputs without site metadata use the commercial ceiling.
-    stock_places = (min(4, frappe.get_precision("Stock Ledger Entry", "actual_qty"))
+    # Match ERPNext's stock ledger rounding on actual POS documents.
+    stock_places = (frappe.get_precision("Stock Ledger Entry", "actual_qty")
                     if getattr(check, "doctype", None) == "POS Invoice" else None)
     local_total = base_total = local_move = base_move = Decimal(0)
     total_qty = moved_qty = Decimal(0)

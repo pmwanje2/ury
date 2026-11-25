@@ -2276,9 +2276,12 @@ def consolidate_checks(destination, sources):
             actor=frappe.session.user,
         )
 
+    from ury.ury.api.table_lifecycle import on_check_closed
+
     for source in sources:
         if source.restaurant_table and source.restaurant_table != destination.restaurant_table:
-            _free_tables_if_no_open_invoices(source.restaurant_table, source.custom_merged_tables)
+            if not on_check_closed(source):
+                _free_tables_if_no_open_invoices(source.restaurant_table, source.custom_merged_tables)
 
 
 def _resolve_pos_invoice_naming_series(restaurant):
