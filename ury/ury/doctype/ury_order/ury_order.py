@@ -817,6 +817,16 @@ def split_bill(
         frappe.throw(_("Only draft invoices can be split."))
     assert_not_efris_fiscalised(source)
 
+    split_profile_name = source.get("pos_profile")
+    if _is_valid_str(split_profile_name):
+        raw_clock_in_req = frappe.db.get_value(
+            "POS Profile", split_profile_name, "custom_require_clock_in_to_order"
+        )
+        if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
+            from ury.ury_pos import timeclock
+
+            timeclock.enforce_clock_in_for_profile_name(split_profile_name, user=frappe.session.user)
+
     move_map = {
         row["name"]: float(row["qty"])
         for row in items_to_move
@@ -3346,6 +3356,11 @@ def sync_order(
     round_digest = _round_digest(items) if round_id is not None else None
     user_role = frappe.get_roles()
     posprofile = frappe.get_doc("POS Profile", pos_profile)
+    # G36: optional clock-in gate when configured on the POS Profile and HR attendance is active.
+    if cint(posprofile.get("custom_require_clock_in_to_order")) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile(posprofile, user=frappe.session.user)
     client_invoice = _client_order_invoice(client_order_id, invoice, table)
 
     billing_user = any(
@@ -4417,6 +4432,12 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         )
 
     pos_profile_doc = frappe.get_doc("POS Profile", pos_invoice.pos_profile)
+
+    raw_clock_in_req = pos_profile_doc.get("custom_require_clock_in_to_order")
+    if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile(pos_profile_doc, user=frappe.session.user)
 
     merge_members, _table_map = _get_merge_cluster(table)
     if len(merge_members) > 1:
@@ -5721,6 +5742,20 @@ def make_invoice(
         complimentary=complimentary,
     )
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
+    # G36: optional clock-in gate before settling a check.
+    if cint(pos_prof.get("custom_require_clock_in_to_order")) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile(pos_prof, user=frappe.session.user)
+    # G43: prevent cross-till cashier settlement while the operator holds an open shift on another outlet.
+    try:
+        from ury.ury_pos import outlet_context
+
+        outlet_context.assert_no_conflicting_open_till(pos_profile, user=frappe.session.user)
+    except frappe.ValidationError:
+        raise
+    except Exception:
+        pass
     customer_disabled = _lock_settlement_customer(customer, pos_prof)
     existing_invoice = _client_order_invoice(client_order_id, invoice, table)
     if existing_invoice:

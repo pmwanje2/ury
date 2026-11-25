@@ -27,11 +27,22 @@ vi.mock("@ury/ui", () => ({
   Select: ({ children, ...props }: any) => <select {...props}>{children}</select>,
   SelectItem: ({ children, value }: any) => <option value={value}>{children}</option>,
   Spinner: ({ message }: any) => <div>{message}</div>,
+  Dialog: ({ open, children }: any) => (open ? <div>{children}</div> : null),
+  DialogContent: ({ children }: any) => <div>{children}</div>,
+  DialogDescription: ({ children }: any) => <p>{children}</p>,
+  DialogFooter: ({ children }: any) => <div>{children}</div>,
+  DialogHeader: ({ children }: any) => <div>{children}</div>,
+  DialogTitle: ({ children }: any) => <h2>{children}</h2>,
+  messageToPlainText: (s: string) => s,
   showToast: { success: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock("@ury/core", () => ({
   formatCurrency: (n: number) => n.toString(),
+  call: {
+    get: vi.fn().mockResolvedValue({ message: { available: false } }),
+    post: vi.fn().mockResolvedValue({ message: {} }),
+  },
 }));
 
 vi.mock("./POSOpeningPaymentTable", () => ({

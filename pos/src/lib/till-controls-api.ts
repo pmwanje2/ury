@@ -310,6 +310,17 @@ export async function getTillClosePreview(
   }
 }
 
+export interface ControlledCloseTipDeclaration {
+  user: string;
+  employee?: string;
+  currency?: string;
+  charged_tips_collected?: number;
+  tips_paid_from_till?: number;
+  net_tips_payable?: number;
+  declared_cash_tips: number;
+  remarks?: string;
+}
+
 export async function closeTillWithControls(payload: {
   pos_profile: string;
   pos_opening_entry: string;
@@ -323,6 +334,7 @@ export async function closeTillWithControls(payload: {
   close_other_approval_token?: string;
   close_other_reason?: string;
   period_end_date?: string;
+  tip_declarations?: ControlledCloseTipDeclaration[];
 }): Promise<{ name: string; docstatus: number }> {
   const body: Record<string, unknown> = {
     pos_profile: payload.pos_profile,
@@ -334,6 +346,9 @@ export async function closeTillWithControls(payload: {
   if (payload.close_other_approval_token) body.close_other_approval_token = payload.close_other_approval_token;
   if (payload.close_other_reason) body.close_other_reason = payload.close_other_reason;
   if (payload.period_end_date) body.period_end_date = payload.period_end_date;
+  if (payload.tip_declarations && payload.tip_declarations.length > 0) {
+    body.tip_declarations = payload.tip_declarations;
+  }
   const res = await call.post<{ message: { name: string; docstatus: number } }>(
     'ury.ury_pos.till_controls.close_till_with_controls',
     body,
@@ -371,6 +386,7 @@ export async function forceCloseTill(payload: {
   over_short_reason?: string;
   over_short_approval_token?: string;
   period_end_date?: string;
+  tip_declarations?: ControlledCloseTipDeclaration[];
 }): Promise<{ name: string; docstatus: number; force_closed?: boolean }> {
   const body: Record<string, unknown> = {
     pos_profile: payload.pos_profile,
@@ -383,6 +399,9 @@ export async function forceCloseTill(payload: {
   if (payload.over_short_reason) body.over_short_reason = payload.over_short_reason;
   if (payload.over_short_approval_token) body.over_short_approval_token = payload.over_short_approval_token;
   if (payload.period_end_date) body.period_end_date = payload.period_end_date;
+  if (payload.tip_declarations && payload.tip_declarations.length > 0) {
+    body.tip_declarations = payload.tip_declarations;
+  }
   const res = await call.post<{
     message: { name: string; docstatus: number; force_closed?: boolean };
   }>('ury.ury_pos.till_controls.force_close_till', body);

@@ -1566,6 +1566,35 @@ def get_till_close_preview(pos_profile: str, pos_opening_entry: str | None = Non
 	}
 
 
+def _parse_tip_declarations(raw_rows: Any) -> list[dict[str, Any]]:
+	if not raw_rows:
+		return []
+	if isinstance(raw_rows, str):
+		try:
+			raw_rows = frappe.parse_json(raw_rows)
+		except (ValueError, TypeError):
+			return []
+	if not isinstance(raw_rows, (list, tuple)):
+		return []
+	out: list[dict[str, Any]] = []
+	for item in raw_rows:
+		if not isinstance(item, dict):
+			continue
+		row: dict[str, Any] = {
+			"user": (item.get("user") or "").strip(),
+			"currency": item.get("currency") or "",
+			"charged_tips_collected": item.get("charged_tips_collected", 0),
+			"tips_paid_from_till": item.get("tips_paid_from_till", 0),
+			"net_tips_payable": item.get("net_tips_payable", 0),
+			"declared_cash_tips": item.get("declared_cash_tips"),
+			"remarks": item.get("remarks") or "",
+		}
+		if item.get("employee"):
+			row["employee"] = item["employee"]
+		out.append(row)
+	return out
+
+
 @frappe.whitelist(methods=["POST"])
 def close_till_with_controls(
 	pos_profile: str,
@@ -1576,6 +1605,7 @@ def close_till_with_controls(
 	close_other_approval_token: str | None = None,
 	close_other_reason: str | None = None,
 	period_end_date: str | None = None,
+	tip_declarations: Any = None,
 ) -> dict[str, Any]:
 	"""Close an open till through native POS Closing Entry with Over/Short tolerance PIN,
 	blind-close protection, close-another-till PIN, and FOR UPDATE lock against double-close."""
@@ -1631,6 +1661,8 @@ def close_till_with_controls(
 		if "custom_closing_foreign_amount" in row:
 			rec_row["custom_closing_foreign_amount"] = row["custom_closing_foreign_amount"]
 		closing.append("payment_reconciliation", rec_row)
+	for tip_row in _parse_tip_declarations(tip_declarations):
+		closing.append("custom_tip_declarations", tip_row)
 	closing.flags.ignore_permissions = True
 	deadlocked = False
 	try:
@@ -1888,6 +1920,7 @@ def force_close_till(
 	over_short_reason: str | None = None,
 	over_short_approval_token: str | None = None,
 	period_end_date: str | None = None,
+	tip_declarations: Any = None,
 ) -> dict[str, Any]:
 	"""Manager-PIN Force Close: snapshots open draft checks, optionally discards pending draft
 	cash movements when explicitly confirmed, and submits native POS Closing Entry so every
@@ -1945,6 +1978,8 @@ def force_close_till(
 		if "custom_closing_foreign_amount" in row:
 			rec_row["custom_closing_foreign_amount"] = row["custom_closing_foreign_amount"]
 		closing.append("payment_reconciliation", rec_row)
+	for tip_row in _parse_tip_declarations(tip_declarations):
+		closing.append("custom_tip_declarations", tip_row)
 	closing.flags.ignore_permissions = True
 	closing.flags.pos_force_close = True
 	deadlocked = False

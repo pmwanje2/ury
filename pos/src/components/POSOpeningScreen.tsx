@@ -14,6 +14,7 @@ import {
 } from '../lib/pos-opening-api';
 import { getActiveLanguage, t } from '../i18n';
 import POSOpeningPaymentTable from './POSOpeningPaymentTable';
+import TimeclockButton from './TimeclockButton';
 
 type OpeningBlockingState =
   | 'permissionDenied'
@@ -305,22 +306,34 @@ const POSOpeningScreen = ({ onSuccess, onError, onContinue }: POSOpeningScreenPr
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl my-auto">
         {/* Header */}
         <div className="px-8 pt-8 pb-6 border-b border-gray-100">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2 bg-blue-50 rounded-lg">
-              <Store className="w-6 h-6 text-blue-600" />
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-50 rounded-lg">
+                <Store className="w-6 h-6 text-blue-600" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">
+                  {t(occupied ? 'pos_opening.occupied_title' : 'pos_opening.title')}
+                </h1>
+                {user?.roles?.some(r => r === "URY Cashier" || r === "URY Manager") &&
+                  <a href="/pos/orders/settled" className="text-blue-700 underline">{t('orders.settled_closed')}</a>}
+                {!occupied && (
+                  <p className="text-sm text-gray-500">
+                    {t('pos_opening.subtitle')}
+                  </p>
+                )}
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                {t(occupied ? 'pos_opening.occupied_title' : 'pos_opening.title')}
-              </h1>
-              {user?.roles?.some(r => r === "URY Cashier" || r === "URY Manager") &&
-                <a href="/pos/orders/settled" className="text-blue-700 underline">{t('orders.settled_closed')}</a>}
-              {!occupied && (
-                <p className="text-sm text-gray-500">
-                  {t('pos_opening.subtitle')}
-                </p>
-              )}
-            </div>
+            {/* G36: Allow clocked-out operators to clock in right on the opening screen */}
+            <TimeclockButton
+              posProfile={context?.selected_profile}
+              disabled={isSubmitting}
+              onStatusChange={(nextStatus) => {
+                if (nextStatus.is_clocked_in) {
+                  setError(null);
+                }
+              }}
+            />
           </div>
         </div>
 
