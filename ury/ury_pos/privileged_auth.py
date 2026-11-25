@@ -535,7 +535,9 @@ def authorize_or_perform(
 
     # Path 1: Manager approval token supplied -> consume atomically through B2a.
     if token:
-        limit_kwargs = {"approval_amount": amount} if amount is not None else {}
+        limit_kwargs = {"reference_doctype": reference_doctype}
+        if amount is not None:
+            limit_kwargs["approval_amount"] = amount
         if override is None:
             frappe.throw(
                 _code(
