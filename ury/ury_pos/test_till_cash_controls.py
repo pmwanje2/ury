@@ -186,6 +186,8 @@ class FakeOverride:
     def _matching_authorise_rules(self, approver, profile, privilege, percent=None, amount=None, privilege_group=0):
         roles = set(self.store.user_roles.get(approver, ()))
         rules = self.store.privilege_rules.get(profile.company, [])
+        if not rules and roles & {"URY Manager", "URY Admin"}:
+            return [{"max_amount": 0}]
         matched = []
         for rule in rules:
             if rule["privilege"] != privilege or rule["role"] not in roles:

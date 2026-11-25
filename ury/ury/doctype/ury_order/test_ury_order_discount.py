@@ -378,7 +378,7 @@ def _load_modules():
     framework, utils = _make_frappe_double()
     brand_mod = _stub(
         "ury.brand",
-        coded_message=lambda key, msg="": f"[{key}] {msg}".strip(),
+        coded_message=lambda key, msg="": f"[{key if key.startswith('POS-') else 'POS-' + key}] {msg}".strip(),
     )
     class _FakeTracker:
         def __init__(self, key, max_consecutive_login_attempts=5, lock_interval=900):

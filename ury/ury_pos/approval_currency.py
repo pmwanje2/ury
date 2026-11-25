@@ -73,13 +73,6 @@ def profile_approval_quote(profile, framework, *, posting_date=None, currency=No
         rate = _positive_rate(get_exchange_rate(currency, company_currency, posting_date))
     except (ImportError, framework.ValidationError):
         rate = None
-    if rate is None:
-        rate = _positive_rate(framework.db.get_value(
-            "Currency Exchange",
-            {"from_currency": currency, "to_currency": company_currency, "date": ["<=", posting_date]},
-            "exchange_rate",
-            order_by="date desc",
-        ))
     return company_currency, rate
 
 
@@ -105,6 +98,23 @@ def invoice_approval_currency(invoice, framework) -> tuple[str, Decimal]:
     if rate is None:
         _invalid_rate(framework)
     return company_currency or currency, rate
+
+
+
+def verified_invoice_approval_currency(invoice, framework) -> tuple[str, Decimal]:
+    """Verify a new or changed invoice rate against the ERPNext posting-date quote."""
+    company_currency, recorded = invoice_approval_currency(invoice, framework)
+    currency = str(invoice.get("currency") or "").strip().upper()
+    if not company_currency or not currency or currency == company_currency:
+        return company_currency, recorded
+
+    _, authoritative = profile_approval_currency(
+        invoice, framework, posting_date=invoice.get("posting_date")
+    )
+    # ERPNext rounds the stored conversion rate to nine decimal places.
+    if recorded != authoritative and abs(recorded - authoritative) > Decimal("0.0000000005"):
+        _invalid_rate(framework)
+    return company_currency, authoritative
 
 
 def company_approval_amount(invoice, amount, framework, *, currency_and_rate=None) -> float:

@@ -241,7 +241,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     order: POSInvoice;
     item: (typeof selectedOrderItems)[number];
     newQty: number;
-    amount?: number;
+    displayAmount: number;
+    approvalAmount?: number;
     claim: Record<string, unknown>;
   } | null>(null);
   const [pendingCancelApproval, setPendingCancelApproval] = React.useState<{
@@ -672,7 +673,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           order,
           item,
           newQty,
-          amount: extractAuthChallenge(err)?.amount ?? undefined,
+          displayAmount: amount,
+          approvalAmount: extractAuthChallenge(err)?.amount ?? undefined,
           claim: {
             action: 'reduce_order_item_qty',
             item_row_name: item.name,
@@ -1796,7 +1798,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             }),
             t('manager_approval.amount_line', {
               amount: formatCurrency(
-                pendingVoidApproval.amount,
+                pendingVoidApproval.displayAmount,
                 pendingVoidApproval.order.currency || profileCurrency,
               ),
             }),
@@ -1804,7 +1806,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingVoidApproval.order.name }}
           claim={pendingVoidApproval.claim}
-          amount={pendingVoidApproval.amount}
+          amount={pendingVoidApproval.approvalAmount}
           onApproved={(res) => void handleVoidApprovalGranted(res)}
           onCancel={() => setPendingVoidApproval(null)}
         />

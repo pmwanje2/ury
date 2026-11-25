@@ -1038,7 +1038,8 @@ def _matching_authorise_rules(
             if has_al:
                 is_top_approver = bool(approver_role and approver_role in roles)
                 if is_top_approver:
-                    matched.append(rule)
+                    if _rule_covers_limits(rule, pct, amt):
+                        matched.append(rule)
                     continue
                 rule_cap = max(0.0, flt(rule.get("max_percent")))
                 cap = min(al_limit, rule_cap)
@@ -1050,7 +1051,7 @@ def _matching_authorise_rules(
             else:
                 if _rule_covers_limits(rule, pct, amt):
                     matched.append(rule)
-        if not matched and has_al and approver_role and approver_role in roles:
+        if not effective and has_al and approver_role and approver_role in roles:
             matched.append(frappe._dict(allow_self_approval=0))
         return matched
 
@@ -1073,7 +1074,7 @@ def _matching_authorise_rules(
                 and _rule_matches_group_and_clock(rule, approver, profile.company, privilege_group)
                 and _rule_covers_limits(rule, 100.0, amt)
             ]
-            if not matched and is_top_approver:
+            if not effective and is_top_approver:
                 matched.append(frappe._dict(allow_self_approval=0))
             return matched
         return [
@@ -1539,10 +1540,13 @@ def _claim_approval_amount(reference_doctype, reference_name, profile, privilege
         if row is not None and new_rate is not None:
             original = flt(row.get("custom_original_price_list_rate") or row.get("price_list_rate") or row.get("rate"))
             amount = abs(new_rate - original) * abs(flt(row.get("qty")))
-    elif privilege == "service_charge_waive" and claim.get("sc_action") == "waive":
-        from ury.ury_pos.pricing_actions import current_service_charge_amount
+    elif privilege == "service_charge_waive" and claim.get("sc_action") in ("waive", "change"):
+        from ury.ury_pos.pricing_actions import service_charge_approval_amount
 
-        amount = current_service_charge_amount(frappe.get_doc("POS Invoice", reference_name))
+        amount = service_charge_approval_amount(
+            frappe.get_doc("POS Invoice", reference_name), profile, claim["sc_action"],
+            new_rate=_parse_optional_number(claim.get("new_rate")), new_amount=amount,
+        )
     elif privilege == "room_charge_over_limit" and amount is not None:
         currency = str(claim.get("currency") or invoice.get("currency") or "").strip().upper()
         company_currency = company_currency_for(profile.get("company"), frappe)

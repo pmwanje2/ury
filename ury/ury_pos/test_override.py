@@ -372,7 +372,7 @@ class TestOverrideContract(unittest.TestCase):
         self.audit = MagicMock()
         self.frappe.utils = SimpleNamespace(
             cint=lambda v: int(v or 0),
-            flt=lambda v: float(v or 0),
+            flt=lambda v, precision=None: round(float(v or 0), precision) if precision is not None else float(v or 0),
             get_fullname=lambda u: self.store.users.get(u, Doc()).get("full_name") or u,
             now_datetime=lambda: self.clock,
             get_datetime=lambda v=None: self.clock if v is None else v,

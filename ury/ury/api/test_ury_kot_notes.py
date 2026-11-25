@@ -105,6 +105,7 @@ class OrderingCases:
             "order_type": "Take Away", "branch": "Branch A", "pos_profile": "POS A",
             "selling_price_list": "Standard Selling", "invoice_created": 1, "invoice_printed": 0,
             "grand_total": 100, "items": [], "custom_merged_tables": "", "waiter": "waiter@example.com",
+            "currency": "USD", "conversion_rate": 1,
         }.items():
             setattr(self.invoice, name, value)
         self.invoice.get.side_effect = lambda key, default=None: vars(self.invoice).get(key, default)
@@ -133,6 +134,8 @@ class OrderingCases:
             if as_dict or isinstance(field, (list, tuple)):
                 return {"enabled": 1, "user_type": "System User"}
             return 1 if field == "enabled" else "System User"
+        if doctype == "Company" and field == "default_currency":
+            return "USD"
         if doctype == "POS Profile" and field in ("company", "branch"):
             return {"company": "Company", "branch": "Branch A"}[field]
         if doctype == "Item" and field == "disabled":

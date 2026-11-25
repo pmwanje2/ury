@@ -17,7 +17,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-from ury.ury_pos.approval_currency import company_approval_amount
+from ury.ury_pos.approval_currency import company_approval_amount, verified_invoice_approval_currency
 from ury.ury_pos.auth_challenge import attach_auth_challenge
 
 from ury.brand import coded_message
@@ -1775,6 +1775,19 @@ def get_check_discounts(invoice):
     }
 
 
+def _discount_fx_changed(doc, previous):
+    return previous is None or (
+        (doc.get("currency") or "").upper() != (previous.get("currency") or "").upper()
+        or flt(doc.get("conversion_rate")) != flt(previous.get("conversion_rate"))
+        or doc.get("company") != previous.get("company")
+    )
+
+
+def _validated_discount_amount(doc, amount, *, verify_fx):
+    currency_and_rate = verified_invoice_approval_currency(doc, frappe) if verify_fx else None
+    return company_approval_amount(doc, amount, frappe, currency_and_rate=currency_and_rate)
+
+
 def validate_manual_line_discount_cap(doc, previous):
     """Check company-currency authority when a pricing save adds or increases manual line discounts."""
     if not any(
@@ -1794,7 +1807,9 @@ def validate_manual_line_discount_cap(doc, previous):
     user = frappe.session.user
     company = doc.get("company")
     profile = doc.get("pos_profile")
-    amount = company_approval_amount(doc, summary["discount_total"], frappe)
+    amount = _validated_discount_amount(
+        doc, summary["discount_total"], verify_fx=_discount_fx_changed(doc, previous)
+    )
     limit = user_discount_limit(user, company, profile, approval_amount=amount)
     if _above_limit(summary["discount_total"], summary["discount_basis"], None, limit, precision):
         frappe.throw(
@@ -1917,6 +1932,13 @@ def validate_pos_discount(doc, method=None):
     if curr_summary["discount_total"] <= 0:
         return
 
+    fx_changed = _discount_fx_changed(doc, previous)
+    approval_amount = _validated_discount_amount(doc, curr_summary["discount_total"], verify_fx=fx_changed)
+    is_comp = curr_summary["effective_percent"] >= 100.0 or (
+        curr_summary["discount_basis"] > 0 and flt(curr_summary["after_total"], prec) <= 0
+    )
+    privilege = "complimentary" if is_comp else "discount"
+
     # 4) Determine whether the discount changed or increased relative to saved doc
     prev_meta_dict = _read_meta(previous) if previous is not None else {}
     stored_approver = prev_approver or prev_meta_dict.get("approver")
@@ -1950,17 +1972,19 @@ def validate_pos_discount(doc, method=None):
         )
         or any_row_disc_increased
     )
-    if stored_approver and pct_scaled_with_basket:
-        _has_rules, approver_rules = _privilege_rules_for(doc.get("company"), "discount", pos_profile=doc.get("pos_profile"))
+    if stored_approver and (pct_scaled_with_basket or fx_changed):
+        _has_rules, approver_rules = _privilege_rules_for(
+            doc.get("company"), privilege, pos_profile=doc.get("pos_profile")
+        )
         caps = [
             flt(rule.get("max_amount"))
             for role in frappe.get_roles(stored_approver) or []
             if (rule := approver_rules.get(role)) and cint(rule.get("may_authorise")) == 1
         ]
-        if caps and all(cap > 0 for cap in caps):
-            current_amount = company_approval_amount(doc, curr_summary["discount_total"], frappe)
-            previous_amount = company_approval_amount(previous, prev_summary["discount_total"], frappe)
-            discount_increased |= current_amount > max(caps) and current_amount > previous_amount
+        if caps and all(cap > 0 for cap in caps) and approval_amount > max(caps):
+            discount_increased |= fx_changed or approval_amount > company_approval_amount(
+                previous, prev_summary["discount_total"], frappe
+            )
     is_new_discount = previous is None or prev_summary["discount_total"] <= 0
 
     if approval_flag and approval_flag.get("action") != "remove":
@@ -1999,12 +2023,8 @@ def validate_pos_discount(doc, method=None):
         )
 
     company = doc.get("company")
-    approval_amount = company_approval_amount(doc, curr_summary["discount_total"], frappe)
     limit_pct = user_discount_limit(
         frappe.session.user, company, doc.get("pos_profile"), approval_amount=approval_amount
-    )
-    is_comp = curr_summary["effective_percent"] >= 100.0 or (
-        curr_summary["discount_basis"] > 0 and flt(curr_summary["after_total"], prec) <= 0
     )
     over_limit = _above_limit(
         curr_summary["discount_total"],

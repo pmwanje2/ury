@@ -1953,7 +1953,6 @@ def prorate_return_service_charge(doc, *, recalc: bool = True) -> None:
         doc.calculate_taxes_and_totals()
 
 
-@frappe.whitelist(methods=["GET"])
 def current_service_charge_amount(doc) -> float:
     return sum(
         _effective_tax_row_amount(doc, row)
@@ -1962,6 +1961,32 @@ def current_service_charge_amount(doc) -> float:
     )
 
 
+def service_charge_approval_amount(doc, profile, action, *, new_rate=None, new_amount=None):
+    """Return the monetary exposure of a service charge override in invoice currency."""
+    if action == "restore":
+        return None
+    current = current_service_charge_amount(doc)
+    if action == "waive":
+        return abs(current)
+    if action != "change" or (new_rate is None and new_amount is None):
+        return None
+
+    if new_rate is None:
+        proposed = new_amount
+    elif new_rate == 0:
+        proposed = 0
+    else:
+        rule = _resolve_override_rule(doc, profile, match_service_charge_rule(doc, profile))
+        prec = _doc_precision(doc, "total_taxes_and_charges")
+        basis = doc.get("net_total")
+        if basis is None or (rule and rule.get("calculation_basis") == "Pre-Discount Subtotal"):
+            base_rows, _tip_rows = _partition_tax_rows(doc, profile)
+            basis = _compute_pre_discount_net(doc, base_rows, prec)
+        proposed = flt(flt(basis) * new_rate / 100, prec)
+    return max(abs(proposed), abs(current - proposed))
+
+
+@frappe.whitelist(methods=["GET"])
 def get_service_charge_status(invoice: str, pos_profile: str | None = None) -> dict[str, Any]:
     """Return active matched Service Charge rule, waived/override state, and current amounts for UI."""
     doc = frappe.get_doc("POS Invoice", invoice)
@@ -2085,7 +2110,9 @@ def adjust_service_charge(
         reason_note=reason_note or "",
     )
 
-    approval_amount = current_service_charge_amount(doc) if action == "waive" else amount_val
+    approval_amount = service_charge_approval_amount(
+        doc, profile, action, new_rate=rate_val, new_amount=amount_val
+    )
     auth = authorize_or_perform(
         privilege="service_charge_waive",
         pos_profile=profile.name,
