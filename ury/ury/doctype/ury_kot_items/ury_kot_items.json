@@ -17,7 +17,10 @@
   "course",
   "serve_priority",
   "indicate_course",
-  "reservation_line_key"
+  "reservation_line_key",
+  "parent_line_key",
+  "is_modifier",
+  "modifier_summary"
  ],
  "fields": [
   {
@@ -91,12 +94,32 @@
    "hidden": 1,
    "label": "Reservation Line Key",
    "read_only": 1
+  },
+  {
+   "fieldname": "parent_line_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Parent Line Key",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_modifier",
+   "fieldtype": "Check",
+   "label": "Is Modifier",
+   "read_only": 1
+  },
+  {
+   "fieldname": "modifier_summary",
+   "fieldtype": "Small Text",
+   "label": "Modifier Summary",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-11-06 12:00:00.000000",
+ "modified": "2026-11-24 14:30:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY KOT Items",

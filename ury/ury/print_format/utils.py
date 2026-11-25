@@ -1,6 +1,7 @@
 """Currency-aware formatting and safe print-asset helpers for URY Jinja print formats."""
 
 import base64
+import json
 import os
 
 import frappe
@@ -136,3 +137,60 @@ def resolve_bill_logo_src(path: str | None) -> str:
 				pass
 
 	return normalized
+
+
+def format_receipt_item_notes(row) -> str:
+	"""Return customer-receipt item notes with Simphony Opt 79 unpriced prep suppression.
+
+	Unpriced preparation modifiers marked `hide_on_receipt=1` in `custom_modifiers_json`
+	are omitted from customer guest checks and receipts while preserving manual free-text
+	notes (such as allergy notes) and visible combo choices. Kitchen and waiter slips never
+	call this helper so prep notes always print for staff.
+	"""
+	if row is None:
+		return ""
+
+	def _read(field, default=""):
+		if isinstance(row, dict):
+			return row.get(field, default)
+		if callable(getattr(row, "get", None)):
+			try:
+				return row.get(field, default)
+			except (AssertionError, AttributeError):
+				return default
+		return getattr(row, field, default)
+
+	comment = str(_read("comment", "") or "").strip()
+	if not comment:
+		return ""
+
+	raw_mods = _read("custom_modifiers_json", "")
+	hide_flag = cint(_read("custom_hide_unpriced_on_receipt", 0))
+	if not raw_mods and not hide_flag:
+		return comment
+
+	hidden_tokens = set()
+	if raw_mods:
+		try:
+			mods = json.loads(raw_mods) if isinstance(raw_mods, str) else list(raw_mods)
+		except (TypeError, ValueError):
+			mods = []
+		for mod in mods:
+			if not isinstance(mod, dict):
+				continue
+			if cint(mod.get("hide_on_receipt", hide_flag)) == 1:
+				prefix = (mod.get("prefix") or "").strip()
+				label = (mod.get("label") or mod.get("option_code") or "").strip()
+				token = f"{prefix} {label}".strip() if prefix else label
+				if token:
+					hidden_tokens.add(token.casefold())
+
+	if not hidden_tokens:
+		return comment
+
+	kept = []
+	for part in comment.split("·"):
+		clean = part.strip()
+		if clean and clean.casefold() not in hidden_tokens:
+			kept.append(clean)
+	return " · ".join(kept)

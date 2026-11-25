@@ -21,6 +21,10 @@ export interface BillSplitItem {
   qty: number;
   rate: number;
   amount: number;
+  reservation_line_key?: string | null;
+  custom_parent_line_key?: string | null;
+  custom_is_modifier?: number;
+  custom_modifier_prefix?: string | null;
 }
 
 interface BillSplitDialogProps {
@@ -97,19 +101,37 @@ const BillSplitDialog = ({
     return items.every((item) => (moveQtyByRow[item.name] ?? 0) <= item.qty);
   }, [items, moveQtyByRow, totals.moving, totals.staying]);
 
+  const linkedChildrenOf = (parent: BillSplitItem) => {
+    const pkey = parent.reservation_line_key || parent.name;
+    if (!pkey) return [];
+    return items.filter(
+      (row) => Number(row.custom_is_modifier || 0) === 1 && row.custom_parent_line_key === pkey
+    );
+  };
+
   const toggleItem = (item: BillSplitItem, checked: boolean) => {
-    setMoveQtyByRow((prev) => ({
-      ...prev,
-      [item.name]: checked ? item.qty : 0,
-    }));
+    if (Number(item.custom_is_modifier || 0) === 1) return;
+    setMoveQtyByRow((prev) => {
+      const next = { ...prev, [item.name]: checked ? item.qty : 0 };
+      for (const child of linkedChildrenOf(item)) {
+        next[child.name] = checked ? child.qty : 0;
+      }
+      return next;
+    });
     setError(null);
   };
 
   const adjustQty = (item: BillSplitItem, delta: number) => {
+    if (Number(item.custom_is_modifier || 0) === 1) return;
     setMoveQtyByRow((prev) => {
       const current = prev[item.name] ?? 0;
-      const next = Math.min(item.qty, Math.max(0, current + delta));
-      return { ...prev, [item.name]: next };
+      const nextQty = Math.min(item.qty, Math.max(0, current + delta));
+      const next = { ...prev, [item.name]: nextQty };
+      const ratio = item.qty > 0 ? nextQty / item.qty : 0;
+      for (const child of linkedChildrenOf(item)) {
+        next[child.name] = nextQty === 0 ? 0 : Math.min(child.qty, Math.round(child.qty * ratio * 1000) / 1000);
+      }
+      return next;
     });
     setError(null);
   };
@@ -166,6 +188,29 @@ const BillSplitDialog = ({
           {items.map((item) => {
             const moveQty = moveQtyByRow[item.name] ?? 0;
             const isSelected = moveQty > 0;
+            const isModifier = Number(item.custom_is_modifier || 0) === 1;
+
+            if (isModifier) {
+              return (
+                <div
+                  key={item.name}
+                  className={cn(
+                    'ms-6 rounded-md border border-s-2 border-s-blue-200 bg-gray-50/70 px-3 py-2 text-xs',
+                    isSelected ? 'border-primary/40 bg-primary-50/30' : 'border-border'
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-gray-700">
+                      + {item.custom_modifier_prefix ? `${item.custom_modifier_prefix} ` : ''}
+                      {item.item_name} ({item.qty})
+                    </span>
+                    <span className="font-semibold text-gray-700">
+                      {formatCurrency(item.amount, currency)}
+                    </span>
+                  </div>
+                </div>
+              );
+            }
 
             return (
               <div

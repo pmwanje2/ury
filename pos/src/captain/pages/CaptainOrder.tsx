@@ -262,6 +262,22 @@ export default function CaptainOrder() {
           // Same stable line identity the Cashier OrderPanel sends — see
           // OrderItem.reservationLineKey (B02b).
           reservation_line_key: item.reservationLineKey || item.uniqueId,
+          ...(item.parentLineKey ? { custom_parent_line_key: item.parentLineKey } : {}),
+          ...(item.lineRole ? { custom_line_role: item.lineRole } : {}),
+          ...(item.isModifier ? { custom_is_modifier: 1 } : {}),
+          ...(item.modifierPrefix ? { custom_modifier_prefix: item.modifierPrefix } : {}),
+          ...(item.modifierGroup ? { custom_modifier_group: item.modifierGroup } : {}),
+          ...(item.modifierOption ? { custom_modifier_option: item.modifierOption } : {}),
+          ...(item.selectedModifiers && item.selectedModifiers.length > 0
+            ? { custom_modifiers_json: JSON.stringify(item.selectedModifiers) }
+            : {}),
+          ...(item.bundleOverrides && item.bundleOverrides.length > 0
+            ? { custom_bundle_overrides_json: JSON.stringify(item.bundleOverrides) }
+            : {}),
+          ...(item.inheritParentRouting !== undefined
+            ? { custom_inherit_parent_routing: item.inheritParentRouting ? 1 : 0 }
+            : {}),
+          ...(item.hideUnpricedOnReceipt ? { custom_hide_unpriced_on_receipt: 1 } : {}),
         })),
         no_of_pax: noOfPax,
         pos_profile: posProfile.name,
@@ -453,6 +469,10 @@ export default function CaptainOrder() {
           qty: item.quantity,
           rate,
           amount: rate * item.quantity,
+          reservation_line_key: item.reservationLineKey || null,
+          custom_parent_line_key: item.parentLineKey || null,
+          custom_is_modifier: item.isModifier ? 1 : 0,
+          custom_modifier_prefix: item.modifierPrefix || null,
         };
       }),
     [activeOrders],
@@ -586,6 +606,33 @@ export default function CaptainOrder() {
   const MIN_PAX = 1;
   const MAX_PAX = 50;
 
+  const groupSectionLines = (lines: OrderDeltaLine[]) => {
+    const parents: OrderDeltaLine[] = [];
+    const childrenByParentKey = new Map<string, OrderDeltaLine[]>();
+    const standaloneChildren: OrderDeltaLine[] = [];
+    const parentKeysInSection = new Set<string>();
+
+    for (const l of lines) {
+      if (!l.isModifier) {
+        parents.push(l);
+        if (l.reservationLineKey) parentKeysInSection.add(l.reservationLineKey);
+        parentKeysInSection.add(l.uniqueId);
+      }
+    }
+    for (const l of lines) {
+      if (!l.isModifier) continue;
+      const pkey = l.parentLineKey || '';
+      if (pkey && parentKeysInSection.has(pkey)) {
+        const list = childrenByParentKey.get(pkey) || [];
+        list.push(l);
+        childrenByParentKey.set(pkey, list);
+      } else {
+        standaloneChildren.push(l);
+      }
+    }
+    return { parents, childrenByParentKey, standaloneChildren };
+  };
+
   // Render order list content — shared between mobile toggle view and tablet side pane
   const OrderListContent = () => (
     <div className="flex-1 overflow-y-auto p-3 space-y-5 pb-32">
@@ -657,82 +704,165 @@ export default function CaptainOrder() {
         </div>
       ) : (
         <>
-          {alreadyOrderedLines.length > 0 && (
-            <section>
-              <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 px-1">
-                {t('captain.already_ordered')}
-              </h2>
-              <div className="space-y-2">
-                {alreadyOrderedLines.map((line) => (
-                  <div key={`confirmed-${line.uniqueId}`}>
+          {alreadyOrderedLines.length > 0 && (() => {
+            const { parents, childrenByParentKey, standaloneChildren } = groupSectionLines(alreadyOrderedLines);
+            return (
+              <section>
+                <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 px-1">
+                  {t('captain.already_ordered')}
+                </h2>
+                <div className="space-y-2">
+                  {parents.map((line) => {
+                    const children =
+                      (line.reservationLineKey ? childrenByParentKey.get(line.reservationLineKey) : undefined) ||
+                      childrenByParentKey.get(line.uniqueId) ||
+                      [];
+                    return (
+                      <div key={`confirmed-${line.uniqueId}`} className="space-y-1">
+                        <CaptainOrderLine
+                          currency={tillCurrency}
+                          line={line}
+                          variant="confirmed"
+                          disabled={isInteractionDisabled}
+                          onDecrement={canModify && canReduce ? () => handleConfirmedReduce(line) : undefined}
+                          onRemove={canModify && canRemove ? () => handleConfirmedRemove(line) : undefined}
+                          onEditNote={canModify ? () => handleEditConfirmedNote(line) : undefined}
+                        />
+                        {children.map((child) => (
+                          <CaptainOrderLine
+                            key={`confirmed-child-${child.uniqueId}`}
+                            currency={tillCurrency}
+                            line={child}
+                            variant="confirmed"
+                            disabled={isInteractionDisabled}
+                          />
+                        ))}
+                        {canModify && canReduce && invoiceId && line.confirmedQty > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleReduceConfirmedNow(line)}
+                            disabled={isInteractionDisabled || reducingLineId === line.uniqueId}
+                            className="ms-3 mt-0.5 mb-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {reducingLineId === line.uniqueId
+                              ? t('captain.reducing')
+                              : t(activeOrders.some(item => item.uniqueId === line.uniqueId && item.ury_held) ? 'captain.reduce_qty' : 'captain.reduce_notify')}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {standaloneChildren.map((child) => (
                     <CaptainOrderLine
+                      key={`confirmed-child-${child.uniqueId}`}
                       currency={tillCurrency}
-                      line={line}
+                      line={child}
                       variant="confirmed"
                       disabled={isInteractionDisabled}
-                      onDecrement={canModify && canReduce ? () => handleConfirmedReduce(line) : undefined}
-                      onRemove={canModify && canRemove ? () => handleConfirmedRemove(line) : undefined}
-                      onEditNote={canModify ? () => handleEditConfirmedNote(line) : undefined}
                     />
-                    {canModify && canReduce && invoiceId && line.confirmedQty > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => handleReduceConfirmedNow(line)}
-                        disabled={isInteractionDisabled || reducingLineId === line.uniqueId}
-                        className="ms-3 mt-0.5 mb-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {reducingLineId === line.uniqueId
-                          ? t('captain.reducing')
-                          : t(activeOrders.some(item => item.uniqueId === line.uniqueId && item.ury_held) ? 'captain.reduce_qty' : 'captain.reduce_notify')}
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
 
-          {newOrChangedLines.length > 0 && (
-            <section>
-              <h2 className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-2 px-1">
-                {t('captain.new_changed')}
-              </h2>
-              <div className="space-y-2">
-                {newOrChangedLines.map((line) => (
-                  <CaptainOrderLine
+          {newOrChangedLines.length > 0 && (() => {
+            const { parents, childrenByParentKey, standaloneChildren } = groupSectionLines(newOrChangedLines);
+            return (
+              <section>
+                <h2 className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-2 px-1">
+                  {t('captain.new_changed')}
+                </h2>
+                <div className="space-y-2">
+                  {parents.map((line) => {
+                    const children =
+                      (line.reservationLineKey ? childrenByParentKey.get(line.reservationLineKey) : undefined) ||
+                      childrenByParentKey.get(line.uniqueId) ||
+                      [];
+                    return (
+                      <div key={`delta-${line.uniqueId}`} className="space-y-1">
+                        <CaptainOrderLine
+                          currency={tillCurrency}
+                          line={line}
+                          variant="delta"
+                          disabled={isInteractionDisabled}
+                          onIncrement={() => handleDeltaIncrement(line)}
+                          onDecrement={() => handleDeltaDecrement(line)}
+                          onEditNote={() => handleEditNewOrChanged(line)}
+                        />
+                        {children.map((child) => (
+                          <CaptainOrderLine
+                            key={`delta-child-${child.uniqueId}`}
+                            currency={tillCurrency}
+                            line={child}
+                            variant="delta"
+                            disabled={isInteractionDisabled}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {standaloneChildren.map((child) => (
+                    <CaptainOrderLine
+                      key={`delta-child-${child.uniqueId}`}
                       currency={tillCurrency}
-                    key={`delta-${line.uniqueId}`}
-                    line={line}
-                    variant="delta"
-                    disabled={isInteractionDisabled}
-                    onIncrement={() => handleDeltaIncrement(line)}
-                    onDecrement={() => handleDeltaDecrement(line)}
-                    onEditNote={() => handleEditNewOrChanged(line)}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
+                      line={child}
+                      variant="delta"
+                      disabled={isInteractionDisabled}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
 
-          {reductionPendingLines.length > 0 && (
-            <section>
-              <h2 className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-2 px-1">
-                {t('captain.reduction_pending')}
-              </h2>
-              <div className="space-y-2">
-                {reductionPendingLines.map((line) => (
-                  <CaptainOrderLine
+          {reductionPendingLines.length > 0 && (() => {
+            const { parents, childrenByParentKey, standaloneChildren } = groupSectionLines(reductionPendingLines);
+            return (
+              <section>
+                <h2 className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-2 px-1">
+                  {t('captain.reduction_pending')}
+                </h2>
+                <div className="space-y-2">
+                  {parents.map((line) => {
+                    const children =
+                      (line.reservationLineKey ? childrenByParentKey.get(line.reservationLineKey) : undefined) ||
+                      childrenByParentKey.get(line.uniqueId) ||
+                      [];
+                    return (
+                      <div key={`reduction-${line.uniqueId}`} className="space-y-1">
+                        <CaptainOrderLine
+                          currency={tillCurrency}
+                          line={line}
+                          variant="reduction"
+                          disabled={isInteractionDisabled}
+                          onRestore={canModify ? () => handleRestoreReduction(line) : undefined}
+                        />
+                        {children.map((child) => (
+                          <CaptainOrderLine
+                            key={`reduction-child-${child.uniqueId}`}
+                            currency={tillCurrency}
+                            line={child}
+                            variant="reduction"
+                            disabled={isInteractionDisabled}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {standaloneChildren.map((child) => (
+                    <CaptainOrderLine
+                      key={`reduction-child-${child.uniqueId}`}
                       currency={tillCurrency}
-                    key={`reduction-${line.uniqueId}`}
-                    line={line}
-                    variant="reduction"
-                    disabled={isInteractionDisabled}
-                    onRestore={canModify ? () => handleRestoreReduction(line) : undefined}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
+                      line={child}
+                      variant="reduction"
+                      disabled={isInteractionDisabled}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
         </>
       )}
     </div>

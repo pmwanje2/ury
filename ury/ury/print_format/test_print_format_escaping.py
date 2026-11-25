@@ -88,10 +88,18 @@ def merged_bill(text):
 		custom_ury_order_number=text("doc.custom_ury_order_number"),
 		cashier=CASHIER, currency=text("doc.currency"), tax_id=text("doc.tax_id"),
 		posting_date="2026-11-24", posting_time="13:15:00",
-		items=[Doc(
-			item_code=text("item.item_code"), item_name=text("item.item_name"), description=DESCRIPTION,
-			comment=text("item.comment"), qty=2, rate=50, amount=100,
-		)],
+		items=[
+			Doc(
+				item_code=text("item.item_code"), item_name=text("item.item_name"), description=DESCRIPTION,
+				comment=text("item.comment"), qty=2, rate=50, amount=100,
+				custom_is_modifier=0, custom_modifier_prefix="",
+			),
+			Doc(
+				item_code=text("mod.item_code"), item_name=text("mod.item_name"), description="",
+				comment="", qty=1, rate=10, amount=10,
+				custom_is_modifier=1, custom_modifier_prefix=text("mod.prefix"),
+			),
+		],
 		taxes=[
 			Doc(description=text("service.description"), account_head="Service Charge - DR", rate=10, tax_amount=10, included_in_print_rate=0, custom_pos_charge_kind="Service Charge"),
 			Doc(description=text("tax.description"), account_head="Output VAT 18% - DR", rate=18, tax_amount=18, included_in_print_rate=0, custom_pos_charge_kind=""),
@@ -121,7 +129,10 @@ def bill_copy(text):
 		name=text("partner.name"), docstatus=1, is_return=0, company="Demo Restaurant",
 		room_number=None, kamra_ref=None, custom_guest_label=None, customer_name=None,
 		currency=text("partner.currency"), customer=text("partner.customer"),
-		items=[Doc(item_name=text("partner.item_name"), comment=text("partner.item_comment"), qty=1, rate=50, amount=50)],
+		items=[Doc(
+			item_name=text("partner.item_name"), comment=text("partner.item_comment"), qty=1, rate=50, amount=50,
+			custom_is_modifier=0, custom_modifier_prefix="",
+		)],
 		taxes=[Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=9, included_in_print_rate=0, custom_pos_charge_kind="")],
 		total=50, net_total=50, discount_amount=0, additional_discount_percentage=0, rounding_adjustment=0,
 		grand_total=59, rounded_total=59, outstanding_amount=0, change_amount=0,
@@ -138,7 +149,16 @@ def bill_copy(text):
 		copy_number=2, copy_timestamp="2026-11-24 20:15:00", posting_date="2026-11-24", posting_time="13:15:00",
 		order_type=text("doc.order_type"), restaurant_table=text("doc.restaurant_table"),
 		currency=text("doc.currency"), customer=text("doc.customer"), customer_name=text("doc.customer_name"),
-		items=[Doc(item_name=text("item.item_name"), comment=text("item.comment"), qty=2, rate=50, amount=100)],
+		items=[
+			Doc(
+				item_name=text("item.item_name"), comment=text("item.comment"), qty=2, rate=50, amount=100,
+				custom_is_modifier=0, custom_modifier_prefix="",
+			),
+			Doc(
+				item_name=text("mod.item_name"), comment="", qty=1, rate=10, amount=10,
+				custom_is_modifier=1, custom_modifier_prefix=text("mod.prefix"),
+			),
+		],
 		taxes=[Doc(description=text("tax.description"), account_head="VAT", rate=18, tax_amount=18, included_in_print_rate=0, custom_pos_charge_kind="")],
 		total=100, net_total=100, discount_amount=0, additional_discount_percentage=0, rounding_adjustment=0,
 		grand_total=118, rounded_total=118, outstanding_amount=60, change_amount=0,
@@ -165,10 +185,12 @@ def waiter_slip(text):
 		order_no=text("kot.order_no"), waiter=WAITER, date="2026-11-24", time="20:15:00",
 		kot_items=[
 			Doc(display_mode="old_new", cancelled_qty=1, old_qty=3, new_qty=2, quantity=3,
-				item=text("changed.item"), item_name=text("changed.item_name"), comments=text("changed.comments")),
+				item=text("changed.item"), item_name=text("changed.item_name"), comments=text("changed.comments"),
+				is_modifier=0, modifier_summary=text("changed.modifier_summary")),
 			# No item name: the slip falls back to the item code.
 			Doc(display_mode="single_qty", cancelled_qty=0, old_qty=0, new_qty=1, quantity=1,
-				item=text("added.item"), item_name=None, comments=text("added.comments")),
+				item=text("added.item"), item_name=None, comments=text("added.comments"),
+				is_modifier=1, modifier_summary=text("added.modifier_summary")),
 		],
 	)
 
@@ -180,7 +202,7 @@ FORMATS = {
 		"doc.name", "doc.room_number", "folio.guest_name", "doc.custom_guest_label", "doc.customer_name",
 		"doc.mobile_number", "doc.order_type", "doc.custom_merged_tables", "doc.custom_ury_order_number",
 		"waiter.full_name", "cashier.full_name", "doc.restaurant", "doc.branch", "doc.no_of_pax",
-		"item.item_name", "item.comment", "service.description", "tax.description",
+		"item.item_name", "item.comment", "mod.item_name", "mod.prefix", "service.description", "tax.description",
 		"doc.custom_merged_pos_invoice", "merged.item_name", "merged.comment",
 		"doc.mode_of_payment", "doc.tender_currency", "doc.payment_ref", "doc.customer", "doc.currency", "doc.tax_id",
 		"partner.mode_of_payment", "partner.customer", "partner.currency",
@@ -191,14 +213,14 @@ FORMATS = {
 		"company.name", "address.line1", "address.city", "company.phone", "company.tax_id",
 		"doc.restaurant", "doc.branch", "doc.name", "doc.customer_name", "doc.currency",
 		"doc.room_number", "doc.custom_guest_label",
-		"item.item_name", "item.comment", "tax.description", "payment.mode_of_payment", "payment.tender_currency", "payment.reference_no", "doc.customer", "doc.tax_id",
+		"item.item_name", "item.comment", "mod.item_name", "mod.prefix", "tax.description", "payment.mode_of_payment", "payment.tender_currency", "payment.reference_no", "doc.customer", "doc.tax_id",
 		"partner.name", "partner.item_name", "partner.item_comment", "partner.tax_description", "partner.mode_of_payment",
 		"efris.fdn", "efris.verification_code", "efris.device_no", "efris.issued",
 		"efris.original_fdn", "efris.tax_category", "partner.application_ref",
 	)),
 	"ury_waiter_order_slip": (waiter_slip, (
 		"kot.invoice", "kot.restaurant_table", "kot.custom_guest_label", "kot.customer_name", "kot.order_no",
-		"waiter.full_name", "changed.item_name", "added.item",
+		"waiter.full_name", "changed.item_name", "changed.modifier_summary", "added.item", "added.modifier_summary",
 	)),
 }
 TAG_STRIPPED = {"service.description", "tax.description", "partner.tax_description"}

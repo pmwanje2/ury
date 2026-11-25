@@ -147,6 +147,65 @@ class TestAvailabilityOperations(unittest.TestCase):
         with self.assertRaisesRegex(self.frappe.PermissionError, r"\[AVAIL-SCOPE\]"):
             action(BRANCH, "Fish", status="Sold Out")
 
+    def test_set_item_availability_allows_branch_modifier_only_items_and_rejects_unrelated_items(self):
+        """R1 M4 RED: Modifier-only / combo-option items referenced by an active modifier group on the
+        branch menu can be 86'd / restored, while unrelated items remain refused."""
+        action = self.require("set_item_availability")
+        self.frappe.session.user = "operator@example.test"
+        self.frappe.db.exists.return_value = True
+        self.frappe.db.table_exists.return_value = True
+        self.row.item = "AVOCADO"
+        self.row.status = "Available"
+        self.row.save = Mock()
+        self.frappe.get_doc.return_value = self.row
+        self.items["AVOCADO"] = 0
+        self.items["RIBEYE"] = 0
+        self.api._branch_menu_items = Mock(return_value=[{"item": "RIBEYE", "name": "Ribeye Steak"}])
+
+        def _get_all(doctype, filters=None, fields=None, pluck=None, **kwargs):
+            filters = filters or {}
+            if doctype == "Item":
+                if pluck == "item_group":
+                    return ["Steaks"]
+                return [{"name": c, "disabled": 0, "item_group": "Steaks"} for c in filters.get("name", ("in", []))[1]]
+            if doctype == "URY Item Modifier Group":
+                if filters.get("parenttype") == "Item" and "RIBEYE" in filters.get("parent", ("in", []))[1]:
+                    return ["Steak Toppings"] if pluck else [{"modifier_group": "Steak Toppings"}]
+                return []
+            if doctype == "URY Modifier Group":
+                if "Steak Toppings" in filters.get("name", ("in", []))[1] and filters.get("disabled") == 0:
+                    return ["Steak Toppings"] if pluck else [{"name": "Steak Toppings"}]
+                return []
+            if doctype == "URY Modifier Option":
+                if "Steak Toppings" in filters.get("parent", ("in", []))[1] and filters.get("disabled") == 0:
+                    rows = [{"item": "AVOCADO", "upcharge_item": None}]
+                    return [r[pluck] for r in rows] if pluck else rows
+                return []
+            return self.get_all(doctype, filters=filters, fields=fields, **kwargs)
+
+        self.frappe.get_all.side_effect = _get_all
+        self.frappe.db.get_all.side_effect = _get_all
+
+        # Cashier can 86 modifier-only item AVOCADO
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        action(BRANCH, "AVOCADO", status="Sold Out")
+        self.assertEqual(self.row.status, "Sold Out")
+
+        # Manager can restore AVOCADO
+        self.frappe.get_roles.return_value = ["URY Manager"]
+        action(BRANCH, "AVOCADO", status="Available")
+        self.assertEqual(self.row.status, "Available")
+
+        # Unrelated item NOT on branch menu or its active modifier groups is still refused
+        with self.assertRaisesRegex(self.frappe.ValidationError, r"\[AVAIL-NOT-ON-MENU\]"):
+            action(BRANCH, "OUTSIDER", status="Sold Out")
+
+        # Cross-branch user is still refused with [AVAIL-SCOPE]
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        self.frappe.db.exists.return_value = False
+        with self.assertRaisesRegex(self.frappe.PermissionError, r"\[AVAIL-SCOPE\]"):
+            action(BRANCH, "AVOCADO", status="Sold Out")
+
     def sql_db(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

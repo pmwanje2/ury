@@ -715,10 +715,38 @@ def _copy_invoice_item_fields(item_row, qty):
         # split invoice's own backfill logic rescue it on the next sync,
         # the same way an un-split legacy invoice already gets rescued.
         reservation_line_key=item_row.get("reservation_line_key") or None,
+        custom_parent_line_key=item_row.get("custom_parent_line_key") or None,
+        custom_line_role=item_row.get("custom_line_role") or "Standard",
+        custom_is_modifier=cint(item_row.get("custom_is_modifier")),
+        custom_modifier_prefix=item_row.get("custom_modifier_prefix") or "",
+        custom_modifier_group=item_row.get("custom_modifier_group") or None,
+        custom_modifier_option=item_row.get("custom_modifier_option") or None,
+        custom_modifiers_json=item_row.get("custom_modifiers_json") or "",
+        custom_bundle_overrides_json=item_row.get("custom_bundle_overrides_json") or "",
+        custom_inherit_parent_routing=cint(item_row.get("custom_inherit_parent_routing", 1)),
+        custom_hide_unpriced_on_receipt=cint(item_row.get("custom_hide_unpriced_on_receipt")),
     )
     if item_row.get("margin_type"):
         data["margin_type"] = item_row.get("margin_type")
         data["margin_rate_or_amount"] = flt(item_row.get("margin_rate_or_amount"))
+    for priv_field in (
+        "custom_original_price_list_rate",
+        "custom_price_overridden",
+        "custom_price_override_reason",
+        "custom_price_override_approver",
+        "custom_is_open_item",
+        "custom_open_item_reference",
+        "custom_is_complimentary",
+        "custom_comp_type",
+        "custom_comp_reason",
+        "custom_comp_approver",
+        "custom_efris_tax_category",
+    ):
+        val = item_row.get(priv_field)
+        if val not in (None, "", 0, 0.0):
+            data[priv_field] = val
+    if cint(item_row.get("ignore_pricing_rule")) == 1 or cint(item_row.get("custom_price_overridden")) == 1:
+        data["ignore_pricing_rule"] = 1
     return data
 
 
@@ -850,6 +878,46 @@ def split_bill(
     }
     if not move_map:
         frappe.throw(_("Select at least one item to move."))
+
+    # Atomic parent-child modifier integrity during split:
+    # 1. Splitting a child modifier without its parent is refused.
+    # 2. Moving a parent automatically moves its linked child modifiers proportionally.
+    parent_by_key = {}
+    children_by_parent_key = defaultdict(list)
+    for item in source.items:
+        if cint(item.get("custom_is_modifier")) == 1 and item.get("custom_parent_line_key"):
+            children_by_parent_key[item.get("custom_parent_line_key")].append(item)
+        else:
+            key = item.get("reservation_line_key") or item.name
+            if key:
+                parent_by_key[key] = item
+
+    for item in source.items:
+        if move_map.get(item.name, 0) > 0 and cint(item.get("custom_is_modifier")) == 1:
+            pkey = item.get("custom_parent_line_key")
+            parent_row = parent_by_key.get(pkey) if pkey else None
+            if not parent_row or move_map.get(parent_row.name, 0) <= 0:
+                frappe.throw(
+                    coded_message(
+                        "MODIFIER-SPLIT-WITH-PARENT",
+                        _("Modifiers must be split together with their parent item."),
+                    ),
+                    frappe.ValidationError,
+                )
+
+    for pkey, child_rows in children_by_parent_key.items():
+        parent_row = parent_by_key.get(pkey)
+        if not parent_row:
+            continue
+        parent_move = move_map.get(parent_row.name, 0)
+        if parent_move <= 0 or flt(parent_row.qty) <= 0:
+            continue
+        ratio = min(1.0, flt(parent_move) / flt(parent_row.qty))
+        for child in child_rows:
+            if child.name not in move_map:
+                child_move = flt(child.qty) if ratio >= 1.0 else round(flt(child.qty) * ratio, 6)
+                if child_move > 0:
+                    move_map[child.name] = min(flt(child.qty), child_move)
 
     total_moving_qty = 0.0
     total_remaining_qty = 0.0
@@ -1009,16 +1077,47 @@ def split_bill(
         if move_map.get(item.name, 0) > 0 and not cint(item.get("is_disposable"))
     )
 
+    split_rate_prec = currency_precision(source)
+    verified_priv_child_rates = {}
+    copied_priv_snapshots = []
+    source_priv_snapshots = []
+
+    def _priv_rate_snapshot(row):
+        return {
+            "rate": flt(row.get("rate"), split_rate_prec),
+            "price_list_rate": flt(row.get("price_list_rate"), split_rate_prec),
+            "discount_percentage": flt(row.get("discount_percentage")),
+            "discount_amount": flt(row.get("discount_amount")),
+            "ignore_pricing_rule": 1
+            if (cint(row.get("ignore_pricing_rule")) == 1 or cint(row.get("custom_price_overridden")) == 1)
+            else 0,
+        }
+
     items_to_remove = []
     for item in source.items:
         move_qty = move_map.get(item.name, 0)
+        is_priv_row = (
+            cint(item.get("custom_price_overridden")) == 1
+            or cint(item.get("custom_is_complimentary")) == 1
+        )
+        if is_priv_row and move_qty < item.qty:
+            source_priv_snapshots.append((item, _priv_rate_snapshot(item)))
         if move_qty <= 0:
             continue
+        copied_qty = item.qty if move_qty >= item.qty else move_qty
+        copied_row = new_invoice.append("items", _copy_invoice_item_fields(item, copied_qty))
+        if copied_row is None and new_invoice.items:
+            copied_row = new_invoice.items[-1]
+        if is_priv_row and copied_row is not None:
+            snap = _priv_rate_snapshot(item)
+            copied_priv_snapshots.append((copied_row, snap))
+            if cint(item.get("custom_is_modifier")) == 1:
+                verified_priv_child_rates[("row_id", id(copied_row))] = snap["rate"]
+                if item.get("reservation_line_key"):
+                    verified_priv_child_rates[("rkey", str(item.get("reservation_line_key")))] = snap["rate"]
         if move_qty >= item.qty:
-            new_invoice.append("items", _copy_invoice_item_fields(item, item.qty))
             items_to_remove.append(item)
         else:
-            new_invoice.append("items", _copy_invoice_item_fields(item, move_qty))
             item.qty -= move_qty
 
     for item in items_to_remove:
@@ -1108,6 +1207,9 @@ def split_bill(
 
         source.set_missing_values()
         source.run_method("set_missing_values")
+        for row, snap in source_priv_snapshots:
+            for field, val in snap.items():
+                setattr(row, field, val)
         if split_profile is not None:
             _sync_service_charge(source, split_profile)
         source.calculate_taxes_and_totals()
@@ -1141,6 +1243,9 @@ def split_bill(
 
         new_invoice.set_missing_values()
         new_invoice.run_method("set_missing_values")
+        for row, snap in copied_priv_snapshots:
+            for field, val in snap.items():
+                setattr(row, field, val)
         if split_profile is not None:
             _sync_service_charge(new_invoice, split_profile)
         new_invoice.calculate_taxes_and_totals()
@@ -1294,12 +1399,16 @@ def split_bill(
         )
         if swap_for_inherited_approval:
             frappe.session.user = source.get("owner")
+        if verified_priv_child_rates and getattr(new_invoice, "flags", None) is not None:
+            new_invoice.flags.ury_verified_privileged_child_rates = verified_priv_child_rates
         try:
             if swap_for_inherited_approval:
                 new_invoice.insert(ignore_permissions=True)
             else:
                 new_invoice.insert()
         finally:
+            if getattr(new_invoice, "flags", None) is not None:
+                new_invoice.flags.ury_verified_privileged_child_rates = None
             if swap_for_inherited_approval:
                 frappe.session.user = orig_session_user
         new_invoice.reload()
@@ -1620,12 +1729,28 @@ def consolidate_checks(destination, sources):
     ).reservation_control_enabled
     destination_before = _reservation_lines(destination.items)
 
+    merge_rate_prec = currency_precision(destination)
+    verified_priv_child_rates = {}
     for source in sources:
         for row in source.items:
-            destination.append(
+            appended = destination.append(
                 "items",
                 row.as_dict(no_default_fields=True, no_child_table_fields=True, no_private_properties=True),
             )
+            if appended is None and destination.items:
+                appended = destination.items[-1]
+            if (
+                appended is not None
+                and cint(row.get("custom_is_modifier")) == 1
+                and (
+                    cint(row.get("custom_price_overridden")) == 1
+                    or cint(row.get("custom_is_complimentary")) == 1
+                )
+            ):
+                verified_rate = flt(row.get("rate"), merge_rate_prec)
+                verified_priv_child_rates[("row_id", id(appended))] = verified_rate
+                if row.get("reservation_line_key"):
+                    verified_priv_child_rates[("rkey", str(row.get("reservation_line_key")))] = verified_rate
 
     if discount_plan is not None:
         if discount_plan.get("has_header_discount"):
@@ -1703,12 +1828,19 @@ def consolidate_checks(destination, sources):
     )
     if swap_for_inherited_approval:
         frappe.session.user = destination.get("owner")
+    prev_verified_child_rates = getattr(
+        getattr(destination, "flags", None), "ury_verified_privileged_child_rates", None
+    )
+    if verified_priv_child_rates and getattr(destination, "flags", None) is not None:
+        destination.flags.ury_verified_privileged_child_rates = verified_priv_child_rates
     try:
         if swap_for_inherited_approval:
             destination.save(ignore_permissions=True)
         else:
             destination.save()
     finally:
+        if getattr(destination, "flags", None) is not None:
+            destination.flags.ury_verified_privileged_child_rates = prev_verified_child_rates
         if swap_for_inherited_approval:
             frappe.session.user = orig_session_user
         frappe.flags.ury_server_tender_received = prev_tender_flag
@@ -2005,7 +2137,16 @@ def invoice_pricing_date(invoice):
     return frappe.utils.getdate()
 
 
-def price_items_for_invoice(items, price_list, pos_profile, branch, menu, posting_date=None, customer=None):
+def price_items_for_invoice(
+    items,
+    price_list,
+    pos_profile,
+    branch,
+    menu,
+    posting_date=None,
+    customer=None,
+    price_overrides=None,
+):
     """Resolve course and price for each item and build the invoice item dicts.
 
     Returns a list of dicts in the same shape previously passed directly to
@@ -2041,55 +2182,73 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu, postin
     priced_items = []
     posting_date = frappe.utils.getdate(posting_date) if posting_date else frappe.utils.getdate()
     release_field, released = item_price_release_states()
+    price_overrides = price_overrides or {}
 
     for d in items:
         item_code = d.get("item")
         item_name = d.get("item_name")
+        line_key = d.get("reservation_line_key")
 
         course = frappe.db.get_value("URY Menu Item", {"item": item_code, "parent": menu}, "course")
 
-        item_price = price_valid_on(
-            item_code, price_list, posting_date, release_field, released, customer=customer,
-        )
-
-        if not item_price:
-            try:
-                raw_zero = frappe.db.get_value("Item", item_code, "custom_allow_zero_price")
-            except KeyError:
-                raw_zero = 0
-            zero_ok = isinstance(raw_zero, (int, float, str, bool)) and cint(raw_zero) == 1
-            if zero_ok:
-                item_price = frappe._dict(price_list_rate=0.0)
-            else:
-                frappe.throw(
-                    coded_message(
-                        "PRICE-NOT-VALID",
-                        _("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
-                    ),
-                    frappe.ValidationError,
-                )
-
-        if item_price:
-            if not item_name or item_name == item_code:
-                item_name = frappe.db.get_value("Item", item_code, "item_name") or item_name or item_code
-            department_warehouse = _department_warehouse_for_item(item_code, branch, company)
-            priced_items.append(
-                dict(
-                    item_code=item_code,
-                    item_name=item_name,
-                    qty=d.get("qty"),
-                    reservation_line_key=d.get("reservation_line_key"),
-                    **({"custom_course": course} if course else {}),
-                    **({"warehouse": department_warehouse} if department_warehouse else {}),
-                    comment=d.get("comment"),
-                    rate = item_price.price_list_rate,
-                    price_list_rate = item_price.price_list_rate,
-                    base_price_list_rate = item_price.price_list_rate,
-                    cost_center = frappe.db.get_value(
-                        "POS Profile", pos_profile, "cost_center"
-                        ),
-                )
+        override = price_overrides.get(line_key) if line_key else None
+        if override and override.get("is_validated_modifier"):
+            resolved_rate = override["rate"]
+        else:
+            item_price = price_valid_on(
+                item_code, price_list, posting_date, release_field, released, customer=customer,
             )
+            if not item_price:
+                try:
+                    raw_zero = frappe.db.get_value("Item", item_code, "custom_allow_zero_price")
+                except KeyError:
+                    raw_zero = 0
+                zero_ok = isinstance(raw_zero, (int, float, str, bool)) and cint(raw_zero) == 1
+                if zero_ok:
+                    item_price = frappe._dict(price_list_rate=0.0)
+                else:
+                    frappe.throw(
+                        coded_message(
+                            "PRICE-NOT-VALID",
+                            _("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
+                        ),
+                        frappe.ValidationError,
+                    )
+            resolved_rate = item_price.price_list_rate
+
+        if not item_name or item_name == item_code:
+            item_name = frappe.db.get_value("Item", item_code, "item_name") or item_name or item_code
+        department_warehouse = _department_warehouse_for_item(item_code, branch, company)
+        modifier_fields = {
+            "custom_parent_line_key": d.get("custom_parent_line_key") or None,
+            "custom_line_role": d.get("custom_line_role") or "Standard",
+            "custom_is_modifier": cint(d.get("custom_is_modifier")),
+            "custom_modifier_prefix": d.get("custom_modifier_prefix") or "",
+            "custom_modifier_group": d.get("custom_modifier_group") or None,
+            "custom_modifier_option": d.get("custom_modifier_option") or None,
+            "custom_modifiers_json": d.get("custom_modifiers_json") or "",
+            "custom_bundle_overrides_json": d.get("custom_bundle_overrides_json") or "",
+            "custom_inherit_parent_routing": cint(d.get("custom_inherit_parent_routing", 1)),
+            "custom_hide_unpriced_on_receipt": cint(d.get("custom_hide_unpriced_on_receipt")),
+        }
+        priced_items.append(
+            dict(
+                item_code=item_code,
+                item_name=item_name,
+                qty=d.get("qty"),
+                reservation_line_key=line_key,
+                **({"custom_course": course} if course else {}),
+                **({"warehouse": department_warehouse} if department_warehouse else {}),
+                comment=d.get("comment"),
+                rate=resolved_rate,
+                price_list_rate=resolved_rate,
+                base_price_list_rate=resolved_rate,
+                cost_center=frappe.db.get_value(
+                    "POS Profile", pos_profile, "cost_center"
+                ),
+                **modifier_fields,
+            )
+        )
 
     return priced_items
 
@@ -2387,6 +2546,7 @@ def _validate_sync_items_against_menu(
     order_type=None,
     local_dt=None,
     active_period=None,
+    validated_modifier_keys=None,
 ):
     """Reject newly added disabled / off-menu / out-of-daypart lines; keep historic + aggregators.
 
@@ -2394,13 +2554,30 @@ def _validate_sync_items_against_menu(
     Historic item codes already on the invoice may stay even if later disabled,
     removed from the menu, or outside their daypart window so captains can still
     update notes/qty of sent lines.
+    Server-validated modifier / combo upcharge lines are checked for Item.disabled
+    but are not required to appear as standalone dishes on URY Menu.
     """
     historic_codes = {prev["item_code"] for prev in (past_item or []) if prev.get("item_code")}
+    validated_modifier_keys = set(validated_modifier_keys or ())
     new_codes = []
+    modifier_codes = []
     for row in items or []:
         code = row.get("item")
-        if code and code not in historic_codes and code not in new_codes:
+        if not code or code in historic_codes:
+            continue
+        line_key = row.get("reservation_line_key")
+        if line_key and line_key in validated_modifier_keys:
+            if code not in modifier_codes:
+                modifier_codes.append(code)
+            continue
+        if code not in new_codes:
             new_codes.append(code)
+
+    for code in modifier_codes:
+        if frappe.db.get_value("Item", code, "disabled"):
+            frappe.throw(
+                _("Item {0} is disabled and cannot be added to the order.").format(code)
+            )
 
     if not new_codes:
         return
@@ -2941,6 +3118,13 @@ def _previous_line_snapshot(invoice_items):
                 "qty": item.qty,
                 "comments": item.get("comment") or "",
                 "ury_held": cint(item.get("ury_held")),
+                "custom_parent_line_key": item.get("custom_parent_line_key") or None,
+                "custom_line_role": item.get("custom_line_role") or "Standard",
+                "custom_is_modifier": cint(item.get("custom_is_modifier")),
+                "custom_modifier_prefix": item.get("custom_modifier_prefix") or "",
+                "custom_modifiers_json": item.get("custom_modifiers_json") or "",
+                "custom_bundle_overrides_json": item.get("custom_bundle_overrides_json") or "",
+                "custom_inherit_parent_routing": cint(item.get("custom_inherit_parent_routing", 1)),
             }
         )
     return snapshot
@@ -3155,7 +3339,19 @@ def _kitchen_snapshot(items):
         if not key and (code, note) in legacy:
             legacy[code, note]["qty"] += flt(item.get("qty"))
             continue
-        row = dict(item_code=code, item_name=item.get("item_name"), qty=flt(item.get("qty")), comments=note)
+        row = dict(
+            item_code=code,
+            item_name=item.get("item_name"),
+            qty=flt(item.get("qty")),
+            comments=note,
+            custom_parent_line_key=item.get("custom_parent_line_key") or None,
+            custom_line_role=item.get("custom_line_role") or "Standard",
+            custom_is_modifier=cint(item.get("custom_is_modifier")),
+            custom_modifier_prefix=item.get("custom_modifier_prefix") or "",
+            custom_modifiers_json=item.get("custom_modifiers_json") or "",
+            custom_bundle_overrides_json=item.get("custom_bundle_overrides_json") or "",
+            custom_inherit_parent_routing=cint(item.get("custom_inherit_parent_routing", 1)),
+        )
         if key:
             row["reservation_line_key"] = key
         else:
@@ -3730,17 +3926,31 @@ def sync_order(
                 alt_claim=b2a_compat_claim,
             )
             if sent_void_reason_info["is_waste"]:
-                wh_by_code = {row.get("item_code"): row.get("warehouse") for row in invoice.items}
-                uom_by_code = {row.get("item_code"): row.get("uom") for row in invoice.items}
-                sent_waste_items = [
-                    {
-                        "item_code": r["item_code"],
-                        "qty": abs(r["delta"]),
-                        "warehouse": wh_by_code.get(r["item_code"]),
-                        "uom": uom_by_code.get(r["item_code"]),
-                    }
-                    for r in sent_reductions
-                ]
+                row_by_line = {
+                    row.get("reservation_line_key"): row
+                    for row in (invoice.items or [])
+                    if row.get("reservation_line_key")
+                }
+                row_by_code = {}
+                for row in (invoice.items or []):
+                    code = row.get("item_code")
+                    if code and code not in row_by_code:
+                        row_by_code[code] = row
+                sent_waste_items = []
+                for r in sent_reductions:
+                    src_row = row_by_line.get(r["line_key"]) or row_by_code.get(r["item_code"]) or {}
+                    if (src_row.get("custom_line_role") or "") == "Combo Upcharge":
+                        continue
+                    sent_waste_items.append(
+                        {
+                            "item_code": r["item_code"],
+                            "qty": abs(r["delta"]),
+                            "warehouse": src_row.get("warehouse"),
+                            "uom": src_row.get("uom"),
+                            "custom_line_role": src_row.get("custom_line_role"),
+                            "custom_bundle_overrides_json": src_row.get("custom_bundle_overrides_json"),
+                        }
+                    )
 
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile, billing_user=billing_user)
@@ -3961,6 +4171,50 @@ def sync_order(
         )
         invoice.invoice_created = 1
 
+    menu = (
+        resolved_menu_meta.get("menu")
+        or _resolve_menu_for_sync(
+            invoice.branch,
+            table=table or invoice.restaurant_table,
+            room=opening_room or room,
+            order_type=effective_order_type,
+            local_dt=stamp_meta["local_dt"],
+        )
+        or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
+    )
+    _sync_order_company = invoice.company or getattr(posprofile, "company", None) or frappe.db.get_value("Branch", invoice.branch, "company")
+
+    # Validate G3 modifiers & G4 combo choices and resolve authoritative 0/2/3dp server prices.
+    from ury.ury.api.ury_modifiers import validate_and_normalize_order_items
+
+    rate_precision = 2
+    if callable(getattr(invoice, "precision", None)):
+        try:
+            prec = invoice.precision("rate")
+            if isinstance(prec, int) and not isinstance(prec, bool):
+                rate_precision = prec
+        except Exception:
+            pass
+    if invoice.get("currency"):
+        try:
+            frac = cint(frappe.db.get_value("Currency", invoice.currency, "fraction_units"))
+            if frac >= 1:
+                rate_precision = max(0, len(str(frac)) - 1)
+        except Exception:
+            pass
+
+    items, modifier_price_overrides = validate_and_normalize_order_items(
+        items,
+        past_item,
+        menu,
+        price_list,
+        invoice.branch,
+        _sync_order_company,
+        posting_date=invoice_pricing_date(invoice),
+        customer=invoice.customer,
+        currency_precision=rate_precision,
+    )
+
     # Reject newly-added lines that are disabled, off-menu, or outside daypart window
     # before pricing runs; historic lines already on the invoice are exempt
     # (see _validate_sync_items_against_menu docstring).
@@ -3973,22 +4227,11 @@ def sync_order(
         order_type=effective_order_type,
         local_dt=stamp_meta["local_dt"],
         active_period=resolved_menu_meta.get("serving_period"),
+        validated_modifier_keys=set(modifier_price_overrides.keys()),
     )
     from ury.ury.api.ury_availability import apply_count_delta
 
     apply_count_delta(invoice.branch, past_item, past_item + items if append else items, invoice=invoice)
-
-    menu = (
-        resolved_menu_meta.get("menu")
-        or _resolve_menu_for_sync(
-            invoice.branch,
-            table=table or invoice.restaurant_table,
-            room=opening_room or room,
-            order_type=effective_order_type,
-            local_dt=stamp_meta["local_dt"],
-        )
-        or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
-    )
 
     previous_by_key = {
         row.get("reservation_line_key"): row
@@ -4012,7 +4255,7 @@ def sync_order(
             target_pl = price_list if prev_row is not None else current_period_price_list
             priced_one = price_items_for_invoice(
                 [src], target_pl, pos_profile, invoice.branch, menu, posting_date=pricing_dt,
-                customer=invoice.customer,
+                customer=invoice.customer, price_overrides=modifier_price_overrides,
             )[0]
             if prev_row is not None:
                 priced_one["rate"] = prev_row.get("rate")
@@ -4025,7 +4268,7 @@ def sync_order(
     else:
         priced_items = price_items_for_invoice(
             items, price_list, pos_profile, invoice.branch, menu, posting_date=invoice_pricing_date(invoice),
-            customer=invoice.customer,
+            customer=invoice.customer, price_overrides=modifier_price_overrides,
         )
         for src, item_dict in zip(items, priced_items, strict=True):
             prev_row = previous_rows.get(src.get("name")) or previous_by_key.get(src.get("reservation_line_key"))
@@ -4033,8 +4276,6 @@ def sync_order(
                 for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
                     if prev_row.get(tax_field) is not None:
                         item_dict[tax_field] = prev_row.get(tax_field)
-
-    _sync_order_company = invoice.company or getattr(posprofile, "company", None) or frappe.db.get_value("Branch", invoice.branch, "company")
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
         reconcile_order_reservations(
             order_ref=_ensure_invoice_reservation_ref(invoice),
@@ -4823,9 +5064,13 @@ def cancel_order(invoice_id, reason, note=None, is_waste=0, approval_token=None)
                 "qty": flt(r.get("qty")),
                 "warehouse": r.get("warehouse"),
                 "uom": r.get("uom"),
+                "custom_line_role": r.get("custom_line_role"),
+                "custom_bundle_overrides_json": r.get("custom_bundle_overrides_json"),
             }
             for r in (pos_invoice.get("items") or [])
-            if flt(r.get("qty")) > 0 and cint(r.get("ury_held")) == 0
+            if flt(r.get("qty")) > 0
+            and cint(r.get("ury_held")) == 0
+            and (r.get("custom_line_role") or "") != "Combo Upcharge"
         ]
         if sent_rows:
             pos_profile_doc = frappe.get_doc("POS Profile", profile_name)

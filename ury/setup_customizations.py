@@ -8,7 +8,10 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 def after_install():
     create_custom_fields(get_custom_fields())
     from ury.ury_pos.kds_device_fields import ensure_kds_device_custom_fields
+    from ury.ury_pos.modifier_combo_fields import ensure_modifier_combo_custom_fields
+
     ensure_kds_device_custom_fields()
+    ensure_modifier_combo_custom_fields()
     from ury.ury_pos.privileged_fields import ensure_privileged_action_custom_fields
     ensure_privileged_action_custom_fields()
     add_roles_to_administrator()
@@ -102,9 +105,9 @@ def get_custom_fields():
 				{
 					"fieldname": "mobile_number",
 					"fieldtype": "Data",
-					"length": 64,
 					"fetch_from": "customer.mobile_number",
 					"label": "Mobile Number",
+					"length": 64,
 					"insert_after": "customer_name",
 					"translatable": 0,
 				},
@@ -117,9 +120,9 @@ def get_custom_fields():
 				{
 					"fieldname": "order_type",
 					"fieldtype": "Select",
-					"length": 64,
 					"default": "Dine In",
 					"label": "Order Type",
+					"length": 64,
 					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
 					"insert_after": "order_info",
 					"translatable": 0
@@ -181,8 +184,8 @@ def get_custom_fields():
 				{
 					"fieldname": "no_of_pax",
 					"fieldtype": "Data",
-					"length": 64,
 					"label": "Pax",
+					"length": 64,
 					"insert_after": "column_break_rwbwf",
 					"read_only": 0,
 					"translatable": 0
@@ -252,15 +255,16 @@ def get_custom_fields():
 					"fieldtype": "Link",
 					"insert_after": "custom_merged_tables",
 					"label": "Split From",
+					"length": 64,
 					"options": "POS Invoice",
 					"read_only": 1,
 				},
 				{
 					"fieldname": "custom_split_group",
 					"fieldtype": "Data",
-					"length": 64,
 					"insert_after": "custom_split_from",
 					"label": "Split Group",
+					"length": 64,
 					"read_only": 1,
 				},
 				{
@@ -292,10 +296,10 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_order_source",
 					"fieldtype": "Select",
-					"length": 64,
 					"default": "POS",
 					"options": "\nPOS\nCaptain\nQR Table\nQR Pickup\nKiosk\nTable Tablet",
 					"label": "Order Source",
+					"length": 64,
 					"insert_after": "self_ordering_info",
 					"read_only": 1,
 					"translatable": 0,
@@ -310,6 +314,7 @@ def get_custom_fields():
 					"fieldtype": "Link",
 					"options": "URY Ordering Device",
 					"label": "Ordering Device",
+					"length": 64,
 					"insert_after": "column_break_selford",
 					"read_only": 1,
 				},
@@ -318,6 +323,7 @@ def get_custom_fields():
 					"fieldtype": "Link",
 					"options": "URY Ordering Session",
 					"label": "Ordering Session",
+					"length": 64,
 					"insert_after": "custom_ordering_device",
 					"read_only": 1,
 				},
@@ -369,8 +375,8 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_room_charge_stay",
 					"fieldtype": "Data",
-					"length": 64,
 					"label": "Room Charge Stay",
+					"length": 64,
 					"description": "Verified stay identifier bound to a room-charge settlement.",
 					"insert_after": "custom_comments",
 					"read_only": 1,
@@ -391,7 +397,8 @@ def get_custom_fields():
 				},
 				{
 					"fieldname": "custom_override_reason",
-					"fieldtype": "Small Text",
+					"fieldtype": "Data",
+					"length": 140,
 					"label": "Override Reason",
 					"description": "Recorded reason for the manager override on this check.",
 					"insert_after": "custom_override_approver",

@@ -550,6 +550,65 @@ def _branch_menu_items(branch):
 	return list({r["item"]: {"item": r["item"], "name": r["item_name"] or r["item"]} for r in rows}.values())
 
 
+def _is_branch_modifier_item(branch, item_code, menu_item_codes):
+	"""True when `item_code` is referenced by an active Modifier / Combo Choice group on this branch's menu."""
+	if not item_code or not menu_item_codes:
+		return False
+	try:
+		if not (
+			frappe.db.table_exists("URY Modifier Group")
+			and frappe.db.table_exists("URY Modifier Option")
+			and frappe.db.table_exists("URY Item Modifier Group")
+		):
+			return False
+	except Exception:
+		return False
+
+	item_groups = list(
+		dict.fromkeys(
+			g
+			for g in (
+				frappe.get_all("Item", filters={"name": ("in", menu_item_codes)}, pluck="item_group") or []
+			)
+			if g
+		)
+	)
+	group_names = set(
+		frappe.get_all(
+			"URY Item Modifier Group",
+			filters={"parenttype": "Item", "parent": ("in", menu_item_codes)},
+			pluck="modifier_group",
+		)
+		or []
+	)
+	if item_groups:
+		group_names.update(
+			frappe.get_all(
+				"URY Item Modifier Group",
+				filters={"parenttype": "Item Group", "parent": ("in", item_groups)},
+				pluck="modifier_group",
+			)
+			or []
+		)
+	if not group_names:
+		return False
+
+	active_groups = frappe.get_all(
+		"URY Modifier Group",
+		filters={"name": ("in", sorted(group_names)), "disabled": 0},
+		pluck="name",
+	)
+	if not active_groups:
+		return False
+
+	options = frappe.get_all(
+		"URY Modifier Option",
+		filters={"parent": ("in", active_groups), "disabled": 0},
+		fields=["item", "upcharge_item"],
+	)
+	return any(opt.get("item") == item_code or opt.get("upcharge_item") == item_code for opt in options or [])
+
+
 def _branch_company(branch, *, lock=False):
 	company = frappe.db.get_value("Branch", branch, "company", for_update=lock) if branch else None
 	if not company:
@@ -695,7 +754,9 @@ def set_item_availability(
 		frappe.throw(_("[AVAIL-COUNT-INVALID] Choose an availability change."), frappe.ValidationError)
 	if count is not None:
 		count = _whole_count(count)
-	if not any(r["item"] == item_code for r in _branch_menu_items(branch)):
+	menu_items = _branch_menu_items(branch)
+	menu_codes = [r["item"] for r in menu_items]
+	if item_code not in menu_codes and not _is_branch_modifier_item(branch, item_code, menu_codes):
 		frappe.throw(_("[AVAIL-NOT-ON-MENU] This item is not on a menu for this branch."), frappe.ValidationError)
 
 	# Serialize new rows and first openings. Counts lock only their item rows.

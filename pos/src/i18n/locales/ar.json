@@ -112,6 +112,7 @@
     "processing_order": "جاري معالجة الطلب...",
     "loading_order": "جاري تحميل تفاصيل الطلب...",
     "edit_item": "تعديل العنصر",
+    "modify": "تخصيص",
     "add_comment": "إضافة تعليق",
     "edit_comment": "تعديل التعليق",
     "pax": "عدد الأشخاص",
@@ -714,7 +715,18 @@
     "no_addons": "لا توجد إضافات",
     "total": "الإجمالي",
     "update_order": "تحديث الطلب",
-    "add_to_order": "إضافة إلى الطلب"
+    "add_to_order": "إضافة إلى الطلب",
+    "required_badge": "مطلوب",
+    "optional_badge": "اختياري",
+    "included_badge": "مشمول",
+    "sold_out_badge": "نفدت الكمية",
+    "regular_prefix": "عادي",
+    "prefix_strip_label": "بادئة التعديل",
+    "select_required_prompt": "أكمل الاختيارات المطلوبة",
+    "combo_choices": "خيارات الوجبة",
+    "modifiers": "التعديلات",
+    "selection_count_required": "{{selected}}/{{min}} مطلوب",
+    "selection_count_range": "{{selected}}/{{max}} محدد"
   },
   "order_types": {
     "dine_in": "طلب محلي",

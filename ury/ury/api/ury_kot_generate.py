@@ -4,6 +4,7 @@ from collections import defaultdict
 import frappe
 from frappe.utils import cint, flt, get_datetime
 
+from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
 from ury.ury.api.ury_kot_routing import resolve_production_units
 from ury.ury.api.ury_production_context import resolve_production_context
 # Reuse the reservation service's stable per-line key derivation instead of
@@ -15,6 +16,34 @@ from ury.ury.api.ury_production_context import resolve_production_context
 # bare item_code, so the same item on two lines (different comments,
 # courses, or a plain duplicate) could have the wrong line cancelled.
 from ury.ury.api.ury_order_reservation_service import _line_context, _line_key, _line_ref
+
+
+def _modifier_summary_for_kot_item(item):
+    if item.get("modifier_summary"):
+        return item.get("modifier_summary")
+    if cint(item.get("custom_is_modifier")) == 1:
+        prefix = (item.get("custom_modifier_prefix") or "").strip()
+        extra = (item.get("comments") or "").strip()
+        parts = [p for p in (prefix, extra) if p]
+        return " · ".join(parts)
+    raw = item.get("custom_modifiers_json")
+    if raw:
+        try:
+            mods = json.loads(raw) if isinstance(raw, str) else list(raw)
+            parts = []
+            for m in mods:
+                if not isinstance(m, dict):
+                    continue
+                prefix = (m.get("prefix") or "").strip()
+                label = (m.get("label") or m.get("option_code") or "").strip()
+                text = f"{prefix} {label}".strip() if prefix else label
+                if text:
+                    parts.append(text)
+            if parts:
+                return " · ".join(parts)
+        except (TypeError, ValueError):
+            pass
+    return (item.get("comments") or "").strip()
 
 
 # Load JSON data or return as is if it's already a Python dictionary
@@ -37,6 +66,14 @@ def create_order_items(items):
             # computed one (see _line_keyed_items below) so it survives the
             # trip through KOT item creation instead of being dropped.
             "reservation_line_key": item.get("reservation_line_key"),
+            "custom_parent_line_key": item.get("custom_parent_line_key") or None,
+            "custom_line_role": item.get("custom_line_role") or "Standard",
+            "custom_is_modifier": cint(item.get("custom_is_modifier")),
+            "custom_modifier_prefix": item.get("custom_modifier_prefix") or "",
+            "custom_modifiers_json": item.get("custom_modifiers_json") or "",
+            "custom_bundle_overrides_json": item.get("custom_bundle_overrides_json") or "",
+            "custom_inherit_parent_routing": cint(item.get("custom_inherit_parent_routing", 1)),
+            "modifier_summary": item.get("modifier_summary") or "",
         }
         order_items.append(order_item)
     return order_items
@@ -48,7 +85,7 @@ def _line_keyed_items(items):
     of collapsing same-item lines by item_code.
 
     Returns an ordered dict: line_key -> {item_code, item_name, qty
-    (aggregated), comments, reservation_line_key}. Ordering follows first
+    (aggregated), comments, reservation_line_key, ...}. Ordering follows first
     appearance so callers can diff two calls (previous vs current) made on
     lists that are otherwise in the same relative order.
     """
@@ -67,10 +104,18 @@ def _line_keyed_items(items):
         if key not in result:
             result[key] = {
                 "reservation_line_key": key,
+                "raw_line_key": row.get("reservation_line_key") or None,
                 "item_code": item_code,
                 "item_name": row.get("item_name"),
                 "qty": 0,
                 "comments": row.get("comment", row.get("comments", "")),
+                "custom_parent_line_key": row.get("custom_parent_line_key") or None,
+                "custom_line_role": row.get("custom_line_role") or "Standard",
+                "custom_is_modifier": cint(row.get("custom_is_modifier")),
+                "custom_modifier_prefix": row.get("custom_modifier_prefix") or "",
+                "custom_modifiers_json": row.get("custom_modifiers_json") or "",
+                "custom_bundle_overrides_json": row.get("custom_bundle_overrides_json") or "",
+                "custom_inherit_parent_routing": cint(row.get("custom_inherit_parent_routing", 1)),
             }
         result[key]["qty"] = flt(result[key]["qty"]) + flt(row.get("qty"))
     return result
@@ -154,8 +199,11 @@ def create_kot_doc(
                 "item_name": item["item_name"],
                 "quantity": item["qty"],
                 "comments": item["comments"],
-                "course":course,
+                "course": course,
                 "reservation_line_key": item.get("reservation_line_key"),
+                "parent_line_key": item.get("custom_parent_line_key") or None,
+                "is_modifier": cint(item.get("custom_is_modifier")),
+                "modifier_summary": _modifier_summary_for_kot_item(item),
             },
         )
     if ignore_permissions:
@@ -216,6 +264,157 @@ def get_all_production_item_groups(branch):
         return all_production_item_groups
 
 
+def _extract_raw_line_key(item):
+    raw = item.get("raw_line_key") or item.get("reservation_line_key") or ""
+    if raw.startswith("ref:") and ":" in raw[4:]:
+        return raw.split(":", 2)[2]
+    return raw
+
+
+def _resolve_units_for_item_code(item_code, pos_profile, pos_invoice, pos_profile_id=None, room=None):
+    production_config = resolve_production_context(
+        item_code, pos_profile.branch, company=pos_invoice.company
+    )
+    production_policy = production_config.production_policy if production_config else None
+    return resolve_production_units(
+        item_code=item_code,
+        company=pos_invoice.company,
+        branch=pos_profile.branch,
+        production_policy=production_policy,
+        pos_profile=pos_profile_id or pos_profile.name,
+        order_type=pos_invoice.get("order_type"),
+        room=room,
+    )
+
+
+def _route_items_with_modifiers_and_combos(
+    kot_items, pos_profile, pos_invoice, *, is_cancel=False, pos_profile_id=None, room=None
+):
+    """Route items to production units applying:
+    - Simphony Opt 22: modifiers with `custom_inherit_parent_routing=1` inherit their parent's
+      station(s) and appear immediately beneath their parent row.
+    - G4 Combos: expand `custom_bundle_overrides_json` onto KOTs, routing `inherit_parent_routing=0`
+      choices (e.g. Beverage -> Bar) to their own station, and skip billing-only `Combo Upcharge` rows.
+    """
+    parent_units_by_key = {}
+    station_buckets = {}  # station -> list of (parent_order_key, item_dict)
+
+    def _add_to_station(station, item_dict, attach_under_parent_key=None):
+        bucket = station_buckets.setdefault(station, [])
+        if attach_under_parent_key:
+            # Insert right after the parent (and any previously attached children of that parent)
+            insert_idx = None
+            for idx, (owner_key, _row) in enumerate(bucket):
+                if owner_key == attach_under_parent_key:
+                    insert_idx = idx + 1
+            if insert_idx is not None:
+                bucket.insert(insert_idx, (attach_under_parent_key, item_dict))
+                return
+        owner = attach_under_parent_key or _extract_raw_line_key(item_dict) or item_dict.get("reservation_line_key") or ""
+        bucket.append((owner, item_dict))
+
+    # Pre-index saved invoice items in case a later round adds/cancels a modifier whose parent was sent earlier
+    saved_parent_item_by_key = {}
+    for inv_row in pos_invoice.get("items") or []:
+        if not cint(inv_row.get("custom_is_modifier")):
+            k = inv_row.get("reservation_line_key") or inv_row.get("name")
+            if k:
+                saved_parent_item_by_key[k] = inv_row.get("item_code")
+
+    child_items = []
+    for item in kot_items:
+        if cint(item.get("custom_is_modifier")) == 1:
+            child_items.append(item)
+            continue
+
+        item_code = item["item_code"]
+        resolved_units = _resolve_units_for_item_code(
+            item_code, pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
+        )
+        raw_key = _extract_raw_line_key(item)
+        if raw_key:
+            parent_units_by_key[raw_key] = list(resolved_units)
+        if item.get("reservation_line_key"):
+            parent_units_by_key[item["reservation_line_key"]] = list(resolved_units)
+
+        for production_unit in resolved_units:
+            _add_to_station(production_unit, item)
+
+        # G4 Combo expansion: route chosen components for BOTH forward and cancel KOTs so
+        # every station that received swapped components (e.g. Hot Kitchen + Bar) also receives
+        # matching cancel KOTs when the parent combo is reduced or cancelled.
+        raw_overrides = item.get("custom_bundle_overrides_json")
+        if raw_overrides:
+            overrides = parse_bundle_overrides(raw_overrides)
+            for ov in overrides:
+                chosen_code = ov["chosen_item"]
+                comp_name = (
+                    frappe.db.get_value("Item", chosen_code, "item_name")
+                    or ov.get("label")
+                    or chosen_code
+                )
+                unit_qty = flt(ov.get("qty") or 1)
+                comp_qty = unit_qty * flt(item.get("qty") or 1)
+                comp_row = {
+                    "item_code": chosen_code,
+                    "item_name": comp_name,
+                    "qty": comp_qty,
+                    "combo_unit_qty": unit_qty,
+                    "comments": ov.get("group") or "",
+                    "reservation_line_key": f"{raw_key}::combo::{chosen_code}" if raw_key else None,
+                    "custom_parent_line_key": raw_key or item.get("reservation_line_key"),
+                    "custom_line_role": "Combo Component",
+                    "custom_is_modifier": 1,
+                    "custom_modifier_prefix": "",
+                    "custom_inherit_parent_routing": cint(ov.get("inherit_parent_routing", 1)),
+                    "modifier_summary": ov.get("label") or comp_name,
+                }
+                if cint(ov.get("inherit_parent_routing", 1)) == 1 and resolved_units:
+                    comp_units = list(resolved_units)
+                else:
+                    comp_units = _resolve_units_for_item_code(
+                        chosen_code, pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
+                    ) or list(resolved_units)
+                for unit in comp_units:
+                    _add_to_station(unit, comp_row, attach_under_parent_key=raw_key)
+
+    # Route linked child modifiers (Simphony Opt 22)
+    for child in child_items:
+        # Non-stock Combo Upcharge fee SKUs are billing rows only; physical components routed above.
+        if child.get("custom_line_role") == "Combo Upcharge":
+            continue
+
+        parent_key = child.get("custom_parent_line_key") or ""
+        inherit = cint(child.get("custom_inherit_parent_routing", 1)) == 1
+        target_units = None
+
+        if inherit and parent_key:
+            if parent_key in parent_units_by_key:
+                target_units = parent_units_by_key[parent_key]
+            elif parent_key in saved_parent_item_by_key:
+                target_units = _resolve_units_for_item_code(
+                    saved_parent_item_by_key[parent_key],
+                    pos_profile,
+                    pos_invoice,
+                    pos_profile_id=pos_profile_id,
+                    room=room,
+                )
+                parent_units_by_key[parent_key] = list(target_units)
+
+        if target_units is None:
+            target_units = _resolve_units_for_item_code(
+                child["item_code"], pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
+            )
+
+        for unit in target_units:
+            _add_to_station(unit, child, attach_under_parent_key=parent_key or None)
+
+    return {
+        station: [row for _owner, row in entries]
+        for station, entries in station_buckets.items()
+    }
+
+
 # Process items to create KOT documents
 def process_items_for_kot(
     invoice_id,
@@ -244,47 +443,30 @@ def process_items_for_kot(
             "Create Restaurant Production unit against POS Profile: %s " % pos_profile.name
         )
 
-    # Build a map of production unit -> items for that unit using the unified resolver
+    # Build a map of production unit -> items using Opt 22 parent inheritance + combo split
+    # while forwarding pos_profile, order_type, and room for G27 routing overrides & failover.
     room = (
         frappe.db.get_value("URY Table", restaurant_table, "restaurant_room")
         if restaurant_table
         else None
     )
-    production_items_map = {}
-    for item in kot_items:
-        item_code = item["item_code"]
-        # Resolve this item's configured production_policy (if any) so
-        # DIRECT_RETAIL items -- which have no production routing
-        # requirement -- are correctly exempted from routing instead of
-        # being silently forced through the legacy item-group fallback.
-        production_config = resolve_production_context(
-            item_code, pos_profile.branch, company=pos_invoice.company
-        )
-        production_policy = production_config.production_policy if production_config else None
+    production_items_map = _route_items_with_modifiers_and_combos(
+        kot_items,
+        pos_profile,
+        pos_invoice,
+        is_cancel=False,
+        pos_profile_id=pos_profile_id,
+        room=room,
+    )
 
-        # Resolve production units for this item using the unified routing
-        # logic (overrides -> exact config -> legacy item-group fallback, with
-        # cycle-safe station failover).
-        resolved_units = resolve_production_units(
-            item_code=item_code,
-            company=pos_invoice.company,
-            branch=pos_profile.branch,
-            production_policy=production_policy,
-            pos_profile=pos_profile_id,
-            order_type=pos_invoice.get("order_type"),
-            room=room,
-        )
-        for production_unit in resolved_units:
-            if production_unit not in production_items_map:
-                production_items_map[production_unit] = []
-            production_items_map[production_unit].append(item)
-
-    # Print warning if any item was not routed (legacy behavior)
+    # Print warning if any non-fee item was not routed (legacy behavior)
     all_routed_items = set()
     for items_list in production_items_map.values():
         for item in items_list:
             all_routed_items.add(item["item_code"])
     for item in kot_items:
+        if item.get("custom_line_role") == "Combo Upcharge":
+            continue
         if item["item_code"] not in all_routed_items:
             item_group = frappe.db.get_value("Item", item["item_code"], "item_group")
             frappe.msgprint(
@@ -359,30 +541,16 @@ def process_items_for_cancel_kot(
         if effective_table
         else None
     )
-    # Build a map of production unit -> items for that unit using the unified resolver
-    production_items_map = {}
-    for item in kot_items:
-        item_code = item["item_code"]
-        # See process_items_for_kot() above for why production_policy is
-        # resolved and why a RoutingError is left to propagate.
-        production_config = resolve_production_context(
-            item_code, pos_profile.branch, company=pos_invoice.company
-        )
-        production_policy = production_config.production_policy if production_config else None
-
-        resolved_units = resolve_production_units(
-            item_code=item_code,
-            company=pos_invoice.company,
-            branch=pos_profile.branch,
-            production_policy=production_policy,
-            pos_profile=pos_profile_id,
-            order_type=pos_invoice.get("order_type"),
-            room=room,
-        )
-        for production_unit in resolved_units:
-            if production_unit not in production_items_map:
-                production_items_map[production_unit] = []
-            production_items_map[production_unit].append(item)
+    # Build a map of production unit -> items respecting Opt 22 parent inheritance
+    # and forwarding pos_profile, order_type, and room for G27 routing overrides & failover.
+    production_items_map = _route_items_with_modifiers_and_combos(
+        kot_items,
+        pos_profile,
+        pos_invoice,
+        is_cancel=True,
+        pos_profile_id=pos_profile_id,
+        room=room,
+    )
 
     # Create one cancel KOT per production unit
     for production_unit, production_items in production_items_map.items():
@@ -524,6 +692,24 @@ def create_cancel_kot_doc(
                         and not (cancel_line_key and item.get("reservation_line_key"))):
                     matched_item = item
                     break
+        if matched_item is None and cancelItem.get("custom_line_role") == "Combo Component":
+            parent_key = cancelItem.get("custom_parent_line_key")
+            parent_match = None
+            if parent_key:
+                for item in invoiceItems:
+                    if (
+                        item.get("reservation_line_key") == parent_key
+                        or _extract_raw_line_key(item) == parent_key
+                    ):
+                        parent_match = item
+                        break
+            unit_qty = flt(cancelItem.get("combo_unit_qty") or 1)
+            orig_qty = (
+                flt(parent_match["qty"]) * unit_qty
+                if parent_match is not None
+                else abs(flt(cancelItem["qty"]))
+            )
+            matched_item = {"qty": orig_qty}
         if matched_item is None:
             continue
         kot_cancel_doc.append(
@@ -534,8 +720,11 @@ def create_cancel_kot_doc(
                 "cancelled_qty": abs(flt(cancelItem["qty"])),
                 "quantity": matched_item["qty"],
                 "comments": cancelItem["comments"],
-                "course":course,
+                "course": course,
                 "reservation_line_key": cancel_line_key,
+                "parent_line_key": cancelItem.get("custom_parent_line_key") or None,
+                "is_modifier": cint(cancelItem.get("custom_is_modifier")),
+                "modifier_summary": _modifier_summary_for_kot_item(cancelItem),
             },
         )
 
@@ -585,19 +774,54 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
     if desk:
         previous_items = [row for row in previous_items or [] if not cint(row.get("ury_held"))]
         saved = pos_invoice.get("items") or []
-        if any(row.get("reservation_line_key") or cint(row.get("ury_held")) for row in saved):
+        if any(
+            row.get("reservation_line_key")
+            or cint(row.get("ury_held"))
+            or cint(row.get("custom_is_modifier"))
+            or row.get("custom_modifiers_json")
+            or row.get("custom_bundle_overrides_json")
+            for row in saved
+        ):
             by_name = {row.name: row for row in saved}
-            current_items = [dict(item_code=row.item_code, item_name=row.item_name, qty=row.qty,
-                                  comments=row.get("comment") or "",
-                                  reservation_line_key=row.get("reservation_line_key") or row.name)
-                             for row in saved if not cint(row.get("ury_held"))]
+            current_items = [
+                dict(
+                    item_code=row.item_code,
+                    item_name=row.item_name,
+                    qty=row.qty,
+                    comments=row.get("comment") or "",
+                    reservation_line_key=row.get("reservation_line_key") or row.name,
+                    custom_parent_line_key=row.get("custom_parent_line_key") or None,
+                    custom_line_role=row.get("custom_line_role") or "Standard",
+                    custom_is_modifier=cint(row.get("custom_is_modifier")),
+                    custom_modifier_prefix=row.get("custom_modifier_prefix") or "",
+                    custom_modifiers_json=row.get("custom_modifiers_json") or "",
+                    custom_bundle_overrides_json=row.get("custom_bundle_overrides_json") or "",
+                    custom_inherit_parent_routing=cint(row.get("custom_inherit_parent_routing", 1)),
+                )
+                for row in saved
+                if not cint(row.get("ury_held"))
+            ]
             baseline = []
             for row in previous_items:
                 child = by_name.get(row.get("name"))
                 if child and cint(child.get("ury_held")):
                     continue
                 key = child.get("reservation_line_key") if child else None
-                baseline.append(dict(row, reservation_line_key=key or _line_ref(row)))
+                merged = dict(row, reservation_line_key=key or _line_ref(row))
+                if child:
+                    for fld, default in (
+                        ("custom_parent_line_key", None),
+                        ("custom_line_role", "Standard"),
+                        ("custom_is_modifier", 0),
+                        ("custom_modifier_prefix", ""),
+                        ("custom_modifiers_json", ""),
+                        ("custom_bundle_overrides_json", ""),
+                        ("custom_inherit_parent_routing", 1),
+                    ):
+                        if fld not in merged or merged[fld] in (None, ""):
+                            val = child.get(fld)
+                            merged[fld] = default if val is None else val
+                baseline.append(merged)
             previous_items = baseline
 
     # Diff current vs previous items PER STABLE LINE (see _line_keyed_items),

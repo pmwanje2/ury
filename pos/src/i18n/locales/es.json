@@ -78,6 +78,7 @@
     "processing_order": "Procesando pedido...",
     "loading_order": "Cargando detalle del pedido...",
     "edit_item": "Editar artículo",
+    "modify": "Modificar",
     "add_comment": "Agregar comentario",
     "edit_comment": "Editar comentario",
     "pax": "Pax",
@@ -637,7 +638,18 @@
     "no_addons": "Sin adicionales",
     "total": "Total",
     "update_order": "Actualizar pedido",
-    "add_to_order": "Agregar al pedido"
+    "add_to_order": "Agregar al pedido",
+    "required_badge": "Obligatorio",
+    "optional_badge": "Opcional",
+    "included_badge": "Incluido",
+    "sold_out_badge": "Agotado",
+    "regular_prefix": "Normal",
+    "prefix_strip_label": "Prefijo de modificador",
+    "select_required_prompt": "Completa las selecciones obligatorias",
+    "combo_choices": "Opciones del combo",
+    "modifiers": "Modificadores",
+    "selection_count_required": "{{selected}}/{{min}} obligatorios",
+    "selection_count_range": "{{selected}}/{{max}} seleccionados"
   },
   "order_types": {
     "dine_in": "En mesa",

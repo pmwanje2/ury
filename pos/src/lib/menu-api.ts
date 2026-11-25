@@ -15,6 +15,61 @@ export interface TaxSummary {
   label?: string | null;
 }
 
+export interface ModifierOption {
+  option_code: string;
+  item: string | null;
+  label: string;
+  price_mode: 'Unpriced Prep' | 'Menu Item Price' | 'Combo Upcharge';
+  upcharge_amount: number;
+  upcharge_item?: string | null;
+  replaces_bundle_item?: string | null;
+  qty?: number;
+  is_default?: boolean;
+  unit_price: number;
+  available: boolean;
+}
+
+export interface ModifierGroup {
+  name: string;
+  display_title: string;
+  group_type: 'Condiment' | 'Combo Choice';
+  required: boolean;
+  prompt_on_add: boolean;
+  min_selections: number;
+  max_selections: number;
+  allow_prefixes: boolean;
+  allowed_prefixes: string[];
+  inherit_parent_routing: boolean;
+  hide_unpriced_on_receipt: boolean;
+  options: ModifierOption[];
+}
+
+export interface BundleDefaultItem {
+  item_code: string;
+  item_name: string;
+  qty: number;
+}
+
+export interface SelectedModifier {
+  group: string;
+  option_code: string;
+  label: string;
+  prefix?: string | null;
+  price_mode?: 'Unpriced Prep' | 'Menu Item Price' | 'Combo Upcharge';
+  hide_on_receipt?: number;
+}
+
+export interface BundleOverride {
+  group: string;
+  slot_item: string;
+  chosen_item: string;
+  option_code?: string;
+  label: string;
+  qty: number;
+  inherit_parent_routing?: number;
+  hide_on_receipt?: number;
+}
+
 export interface MenuItem {
   item: string;
   item_name: string;
@@ -31,6 +86,13 @@ export interface MenuItem {
   daypart_label?: string | null;
   promo_rate?: number | null;
   promo_label?: string | null;
+  is_combo_meal?: boolean;
+  product_bundle?: string | null;
+  bundle_defaults?: BundleDefaultItem[];
+  has_modifiers?: boolean;
+  has_required_modifiers?: boolean;
+  prompt_on_add?: boolean;
+  modifier_groups?: ModifierGroup[];
   custom_is_open_priced?: number;
   custom_allow_zero_price?: number;
 }

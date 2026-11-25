@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePOSStore, OrderItem } from '../../store/pos-store';
+import type { BundleOverride, SelectedModifier } from '../../lib/menu-api';
 import {
   getTableOrderContext,
   TableOrderContext,
@@ -15,6 +16,13 @@ export interface BaselineItem {
   comment?: string;
   /** The real POS Invoice Item child-table row name for this baseline (server-synced) line. */
   invoiceItemName?: string;
+  reservationLineKey?: string;
+  parentLineKey?: string | null;
+  isModifier?: boolean;
+  lineRole?: 'Standard' | 'Modifier' | 'Combo Header' | 'Combo Upcharge';
+  modifierPrefix?: string | null;
+  selectedModifiers?: SelectedModifier[];
+  bundleOverrides?: BundleOverride[];
 }
 
 export interface OrderDeltaLine {
@@ -44,6 +52,13 @@ export interface OrderDeltaLine {
    * not-yet-synced line (`baseQty === 0`).
    */
   invoiceItemName?: string;
+  reservationLineKey?: string;
+  parentLineKey?: string | null;
+  isModifier?: boolean;
+  lineRole?: 'Standard' | 'Modifier' | 'Combo Header' | 'Combo Upcharge';
+  modifierPrefix?: string | null;
+  selectedModifiers?: SelectedModifier[];
+  bundleOverrides?: BundleOverride[];
 }
 
 export interface UseTableOrderContextResult {
@@ -176,6 +191,13 @@ export const useTableOrderContext = (table: string | undefined): UseTableOrderCo
         quantity: item.quantity,
         comment: item.comment,
         invoiceItemName: item.invoiceItemName,
+        reservationLineKey: item.reservationLineKey,
+        parentLineKey: item.parentLineKey ?? null,
+        isModifier: Boolean(item.isModifier),
+        lineRole: item.lineRole,
+        modifierPrefix: item.modifierPrefix ?? null,
+        selectedModifiers: item.selectedModifiers,
+        bundleOverrides: item.bundleOverrides,
       }))
     );
   }, [orderLoading, activeOrders, context, table]);
@@ -215,7 +237,14 @@ export const useTableOrderContext = (table: string | undefined): UseTableOrderCo
         curQty,
         delta: curQty - baseQty,
         confirmedQty: Math.min(baseQty, curQty),
-        invoiceItemName: base?.invoiceItemName,
+        invoiceItemName: base?.invoiceItemName ?? cur?.invoiceItemName,
+        reservationLineKey: cur?.reservationLineKey ?? base?.reservationLineKey,
+        parentLineKey: cur?.parentLineKey ?? base?.parentLineKey ?? null,
+        isModifier: Boolean(cur?.isModifier ?? base?.isModifier),
+        lineRole: cur?.lineRole ?? base?.lineRole,
+        modifierPrefix: cur?.modifierPrefix ?? base?.modifierPrefix ?? null,
+        selectedModifiers: cur?.selectedModifiers ?? base?.selectedModifiers,
+        bundleOverrides: cur?.bundleOverrides ?? base?.bundleOverrides,
       });
     });
   }

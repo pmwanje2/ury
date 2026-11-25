@@ -177,12 +177,35 @@ def resolve_restaurant_menu(
     } if courses else {}
 
     posting_date = frappe.utils.getdate(local_dt.date() if local_dt else None)
+    if not price_list:
+        price_list = frappe.db.get_value(
+            "Price List", {"restaurant_menu": menu, "enabled": 1}, "name"
+        )
     release_field, released = (None, None)
     if price_list:
         try:
             release_field, released = item_price_release_states()
         except Exception:
             release_field, released = (None, None)
+
+    company = (
+        pos_profile.get("company")
+        if pos_profile is not None and hasattr(pos_profile, "get")
+        else frappe.db.get_value("Branch", branch, "company")
+    )
+    try:
+        from ury.ury.api.ury_modifiers import get_modifier_groups_for_items
+
+        modifier_meta = get_modifier_groups_for_items(
+            [item.item for item in menu_items],
+            price_list=price_list,
+            branch=branch,
+            company=company,
+            posting_date=posting_date,
+            customer=customer,
+        )
+    except Exception:
+        modifier_meta = {}
 
     item_codes = [item.item for item in menu_items if item.item]
     open_item_flags = {}
@@ -245,14 +268,18 @@ def resolve_restaurant_menu(
                 "menu_order": item.idx,
                 "unavailable_daypart": daypart_status["unavailable_daypart"],
                 "daypart_label": daypart_status["daypart_label"],
+                **(modifier_meta.get(item.item) or {
+                    "is_combo_meal": False,
+                    "product_bundle": None,
+                    "bundle_defaults": [],
+                    "has_modifiers": False,
+                    "has_required_modifiers": False,
+                    "prompt_on_add": False,
+                    "modifier_groups": [],
+                }),
             }
         )
 
-    company = (
-        pos_profile.get("company")
-        if pos_profile is not None and hasattr(pos_profile, "get")
-        else frappe.db.get_value("Branch", branch, "company")
-    )
     promos = active_item_promos(
         menu_items_with_image,
         company=company,
@@ -1568,6 +1595,18 @@ def getPosInvoiceItems(invoice):
                 "discount_amount": frappe.utils.flt(getattr(items, "discount_amount", 0)),
                 "max_discount": max_disc,
                 "is_disposable": items.is_disposable,
+                "comment": items.get("comment") or "",
+                "reservation_line_key": items.get("reservation_line_key") or None,
+                "custom_parent_line_key": items.get("custom_parent_line_key") or None,
+                "custom_line_role": items.get("custom_line_role") or "Standard",
+                "custom_is_modifier": cint(items.get("custom_is_modifier")),
+                "custom_modifier_prefix": items.get("custom_modifier_prefix") or "",
+                "custom_modifier_group": items.get("custom_modifier_group") or None,
+                "custom_modifier_option": items.get("custom_modifier_option") or None,
+                "custom_modifiers_json": items.get("custom_modifiers_json") or "",
+                "custom_bundle_overrides_json": items.get("custom_bundle_overrides_json") or "",
+                "custom_inherit_parent_routing": cint(items.get("custom_inherit_parent_routing", 1)),
+                "custom_hide_unpriced_on_receipt": cint(items.get("custom_hide_unpriced_on_receipt")),
             }
         )
     taxDetail = orderdItems.taxes

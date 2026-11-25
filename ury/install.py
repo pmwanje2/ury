@@ -74,6 +74,7 @@ def after_install():
     ensure_role_permissions()
     from ury.patches.v2_0 import (
         setup_pos_manager_authorisation,
+        setup_pos_modifiers_and_combos,
         setup_pos_tax_and_dayparts,
         setup_pos_timeclock_tips_fields,
         setup_pos_void_return_reopen,
@@ -82,6 +83,7 @@ def after_install():
     setup_pos_tax_and_dayparts.execute()
     setup_pos_timeclock_tips_fields.execute()
     setup_pos_void_return_reopen.execute()
+    setup_pos_modifiers_and_combos.execute()
 
 
 def before_tests():

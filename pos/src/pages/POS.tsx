@@ -113,12 +113,31 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
       Number(item?.custom_is_open_priced || 0) === 1 ||
       (Number(item?.custom_allow_zero_price || 0) === 1 && Number(item?.price || 0) === 0)
     ) {
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      clickCountRef.current = 0;
       setOpenItemDialog({
         itemCode: item.item || item.id,
         itemName: item.item_name || item.name || item.item,
       });
       return;
     }
+
+    // Single tap on any item with required modifiers, auto-prompt modifiers, or combo choices
+    // immediately opens the selector without adding an unconfigured item to the cart.
+    if (item.has_required_modifiers || item.prompt_on_add || item.is_combo_meal) {
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      clickCountRef.current = 0;
+      setSelectedItem(item);
+      setIsDialogOpen(true);
+      return;
+    }
+
     clickCountRef.current += 1;
     
     if (clickTimerRef.current) {

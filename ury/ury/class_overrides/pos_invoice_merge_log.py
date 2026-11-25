@@ -232,6 +232,7 @@ class CustomPOSInvoiceMergeLog(POSInvoiceMergeLog):
 			credit_note.posting_time = closing_time or get_time(self.posting_time)
 			credit_note.save()
 			credit_note.submit()
-			credit_notes[key] = credit_note.name
+			self.consolidated_credit_note = credit_note.name
+			credit_notes[credit_note.name] = [d.name for d in value]
 
 		return credit_notes
