@@ -1026,7 +1026,10 @@ def validate_invoice_print(doc, method):
 
 def table_status_delete(doc, method):
     if doc.restaurant_table:
-        release_merge_cluster_tables(doc.restaurant_table, commit=False)
+        from ury.ury.api.table_lifecycle import on_check_closed
+
+        if not on_check_closed(doc):
+            release_merge_cluster_tables(doc.restaurant_table, commit=False)
 
 
 def pos_invoice_naming(doc, method):
@@ -1777,7 +1780,10 @@ def restrict_existing_order(doc, event):
 
     # Enforce table reservation buffer lock check for Dine In orders
     if (doc.order_type or "Dine In") == "Dine In" and doc.restaurant_table:
+        from ury.ury.api.table_lifecycle import assert_table_seatable
         from ury.ury.api.table_reservation import check_table_reservation, parse_to_datetime
+
+        assert_table_seatable(doc.restaurant_table, doc.get("branch"))
         active_res = check_table_reservation(doc.restaurant_table)
         if active_res and active_res.get("is_lock_window_active") and active_res.get("status") == "Confirmed":
             res_time_raw = active_res.get("reserved_at")

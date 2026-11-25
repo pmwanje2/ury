@@ -84,6 +84,9 @@ def after_install():
     setup_pos_timeclock_tips_fields.execute()
     setup_pos_void_return_reopen.execute()
     setup_pos_modifiers_and_combos.execute()
+    from ury.patches.v3_46 import add_floor_lifecycle_fields
+
+    add_floor_lifecycle_fields.execute()
 
 
 def before_tests():

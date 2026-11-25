@@ -5,6 +5,7 @@ import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
 import {
   getRooms,
+  markTableClean,
   getTables,
   getTableCount,
   getVacantTablesForBranch,
@@ -22,13 +23,14 @@ import {
   type BranchReservationSettings,
 } from '../lib/table-api';
 import { getMergeGroupMembers, formatMergedTableLabelFromGroup, getTableRenderGroups, sortTablesByMergeGroups, formatReservationTime, isReservationLockWindowActive } from '../lib/table-utils';
-import { Spinner } from '@ury/ui';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, Spinner } from '@ury/ui';
+import { WaitList } from '../components/WaitList';
 import { Button } from '@ury/ui';
 import { Badge } from '@ury/ui';
 import { DINE_IN } from '../data/order-types';
 import { getCaptainTransferCandidates, captainTransfer, getTableOrder, tableTransfer } from '../lib/order-api';
 import { printOrder } from '../lib/print';
-import { resolvePrintFormat } from '../lib/invoice-api';
+import { searchPosInvoice, resolvePrintFormat } from '../lib/invoice-api';
 import { canCaptainTransfer, isUserRestrictedFromTableOrders } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { t } from '../i18n';
@@ -52,6 +54,7 @@ const TableView = () => {
   const hasTransferRole = canCaptainTransfer(user, posProfile);
 
   const branch = posProfile?.branch ?? null;
+  const [showWaitList, setShowWaitList] = useState(false);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
@@ -649,6 +652,31 @@ const TableView = () => {
   const tableRenderGroups = useMemo(() => getTableRenderGroups(tablesToDisplay), [tablesToDisplay]);
   const serviceRequestTables = useOpenServiceRequestTables();
 
+  const cleanTable = async (table: Table) => {
+    try {
+      await markTableClean(table.name);
+      if (selectedRoom) await loadTables(selectedRoom, { useCache: false });
+    } catch (error) {
+      showToast.error(extractErrorMessage(error, t('floor.clean_failed')));
+    }
+  };
+
+  const payTable = async (table: Table) => {
+    try {
+      const { message } = await getTableOrder(table.name, true, true);
+      if (!message?.name || !message.invoice_printed) {
+        showToast.error(t('tables.no_active_order'));
+        return;
+      }
+      const { data } = await searchPosInvoice(message.name, 'Draft');
+      const check = data.find((invoice) => invoice.name === message.name);
+      if (!check) throw new Error(t('tables.no_active_order'));
+      navigate('/orders', { state: { floorPaymentCheck: check } });
+    } catch (error) {
+      showToast.error(extractErrorMessage(error, t('tables.no_active_order')));
+    }
+  };
+
   const renderTableCard = (table: Table, className?: string) => {
     const mergeMembers = getMergeGroupMembers(table, tables);
     const mergeGroupLabel =
@@ -685,6 +713,9 @@ const TableView = () => {
         const request = serviceRequestTables.get(table.name);
         if (request) void resolveTableServiceRequest(request.name).catch(() => {});
       }}
+      allowDirtySeating={branchSettings?.block_dirty_table_seating === 0}
+      onMarkClean={() => void cleanTable(table)}
+      onPay={() => void payTable(table)}
       isPrinting={printingTable === table.name}
     />
     );
@@ -725,6 +756,8 @@ const TableView = () => {
         selectedRoom={selectedRoom}
         tables={tablesToDisplay}
         onBackToGrid={() => setIsLayoutView(false)}
+        onMarkClean={(table) => void cleanTable(table)}
+        onPay={(table) => void payTable(table)}
         onRefresh={() => loadTables(selectedRoom, { useCache: false })}
       />
     );
@@ -768,7 +801,9 @@ const TableView = () => {
                 ))}
               </div>
 
-              <div className="flex-shrink-0">
+              <div className="flex flex-wrap justify-end gap-2">
+                {isReservationEnabled && <Button variant="outline" className="min-h-11"
+                  onClick={() => setShowWaitList(true)}>{t('floor.waitlist')}</Button>}
                 <Button
                   variant="tab"
                   className="flex items-center gap-2 text-sm"
@@ -782,6 +817,18 @@ const TableView = () => {
           </div>
         </div>
       </div>
+
+      {showWaitList && branch && (
+        <Dialog open onOpenChange={setShowWaitList}>
+          <DialogContent size="lg" className="!absolute inset-y-0 end-0 m-0 max-h-dvh w-full max-w-xl overflow-y-auto rounded-none bg-background">
+            <DialogHeader><DialogTitle>{t('floor.waitlist')}</DialogTitle></DialogHeader>
+            <div className="px-4 pb-6">
+              <WaitList key={branch} branch={branch} rooms={rooms}
+                onSeated={() => { if (selectedRoom) void loadTables(selectedRoom, { useCache: false }); }} />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <div className="flex-1 overflow-auto bg-gray-50 p-6">
         <div className="max-w-screen-xl mx-auto h-full">
@@ -798,7 +845,7 @@ const TableView = () => {
               <p>{t('tables.no_tables_found')}</p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 pb-40">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 pb-40">
               {tableRenderGroups.map((group) =>
                 group.length === 1 ? (
                   renderTableCard(group[0])

@@ -24,8 +24,15 @@ export interface BillSplitItem {
   reservation_line_key?: string | null;
   custom_parent_line_key?: string | null;
   custom_is_modifier?: number;
+  custom_seat_no?: number;
+  is_disposable?: number;
   custom_modifier_prefix?: string | null;
 }
+
+export type MultiSplitRequest =
+  | { mode: 'by_seat' }
+  | { mode: 'even'; splitCount: number }
+  | { mode: 'manual'; splits: Array<Array<{ name: string; qty: number }>> };
 
 interface BillSplitDialogProps {
   open: boolean;
@@ -34,6 +41,7 @@ interface BillSplitDialogProps {
   items: BillSplitItem[];
   currency?: string;
   sourceCustomer?: Customer | null;
+  onConfirmMulti?: (payload: MultiSplitRequest) => Promise<void>;
   onConfirm: (payload: {
     itemsToMove: Array<{ name: string; qty: number }>;
     customer?: string;
@@ -42,7 +50,7 @@ interface BillSplitDialogProps {
   }) => Promise<void>;
 }
 
-const BillSplitDialog = ({
+const LegacyBillSplitDialog = ({
   open,
   onOpenChange,
   invoiceName,
@@ -362,5 +370,183 @@ const BillSplitDialog = ({
     </Dialog>
   );
 };
+
+function BillSplitDialog(props: BillSplitDialogProps) {
+  return props.onConfirmMulti && props.open
+    ? <MultiCheckDialog key={props.invoiceName} {...props} onConfirmMulti={props.onConfirmMulti} />
+    : <LegacyBillSplitDialog {...props} />;
+}
+
+function MultiCheckDialog({
+  items, currency, onConfirmMulti, onOpenChange, ...props
+}: BillSplitDialogProps & { onConfirmMulti: NonNullable<BillSplitDialogProps['onConfirmMulti']> }) {
+  const [mode, setMode] = useState<MultiSplitRequest['mode']>('manual');
+  const [count, setCount] = useState('2');
+  const [panes, setPanes] = useState<Array<Record<string, number>>>([{}]);
+  const [shareByLine, setShareByLine] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [legacy, setLegacy] = useState(false);
+  const [error, setError] = useState('');
+  const parents = items.filter((item) => !item.custom_parent_line_key && !item.custom_is_modifier && !item.is_disposable);
+  const seats = [...new Set(parents.map((item) => item.custom_seat_no || 0))].sort((a, b) => a - b);
+  const remainder = (name: string, qty: number) => Math.round(
+    (qty - panes.reduce((sum, pane) => sum + (pane[name] || 0), 0)) * 10000,
+  ) / 10000;
+  const validCount = Number.isInteger(Number(count)) && Number(count) >= 2 && Number(count) <= 20;
+  const validManual = parents.some((item) => remainder(item.name, item.qty) > 0)
+    && parents.every((item) => remainder(item.name, item.qty) >= 0)
+    && panes.every((pane) => Object.values(pane).some((qty) => qty > 0));
+
+  if (legacy) {
+    return <LegacyBillSplitDialog {...props} items={items} currency={currency} onOpenChange={onOpenChange} />;
+  }
+
+  const setQuantity = (paneIndex: number, name: string, qty: number) => {
+    setPanes((current) => current.map((pane, index) => index === paneIndex ? { ...pane, [name]: qty } : pane));
+    setError('');
+  };
+  const applyShare = (item: BillSplitItem, divisor: number) => {
+    if (!Number.isInteger(divisor) || divisor < 2 || divisor > 20) return;
+    const part = Math.floor(item.qty * 10000 / divisor) / 10000;
+    setPanes((current) => Array.from({ length: Math.max(current.length, divisor - 1) }, (_, index) => ({
+      ...current[index], [item.name]: index < divisor - 1 ? part : 0,
+    })));
+    setError('');
+  };
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      if (mode === 'manual') {
+        await onConfirmMulti({
+          mode, splits: panes.map((pane) => Object.entries(pane).filter(([, qty]) => qty > 0)
+            .map(([name, qty]) => ({ name, qty }))),
+        });
+      } else if (mode === 'even') {
+        await onConfirmMulti({ mode, splitCount: Number(count) });
+      } else {
+        await onConfirmMulti({ mode });
+      }
+      onOpenChange(false);
+    } catch (err) {
+      setError(parseFrappeError(err, t('bill_split.split_failed')));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!busy) onOpenChange(open); }}>
+      <DialogContent variant="large" size="lg" className="max-h-dialog-max-h overflow-y-auto bg-background text-foreground">
+        <DialogHeader>
+          <DialogTitle>{t('bill_split.split_bill')}</DialogTitle>
+          <DialogDescription>{props.invoiceName}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 px-4 pb-3 sm:px-6">
+          <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label={t('bill_split.split_bill')}>
+            {(['by_seat', 'even', 'manual'] as const).map((tab, index, tabs) => (
+              <button key={tab} type="button" role="tab" id={`split-${tab}`} aria-controls="split-panel"
+                aria-selected={mode === tab} tabIndex={mode === tab ? 0 : -1} disabled={busy}
+                className={cn('min-h-11 rounded-md px-1 text-sm font-semibold', mode === tab && 'bg-background shadow')}
+                onKeyDown={(event) => {
+                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                  event.preventDefault();
+                  const rtl = document.dir === 'rtl';
+                  const next = tabs[(index + ((event.key === 'ArrowRight') !== rtl ? 1 : 2)) % 3];
+                  setMode(next);
+                  document.getElementById(`split-${next}`)?.focus();
+                }}
+                onClick={() => { setMode(tab); setError(''); }}>{t(`floor.split_${tab}`)}</button>
+            ))}
+          </div>
+
+          <div role="tabpanel" id="split-panel" aria-labelledby={`split-${mode}`} className="space-y-3">
+            {mode === 'by_seat' && (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {seats.map((seat) => (
+                  <section key={seat} className="rounded-lg border p-3">
+                    <h3 className="font-semibold">{seat ? t('floor.seat_number', { seat }) : t('floor.table_shared')}</h3>
+                    <ul>{parents.filter((item) => (item.custom_seat_no || 0) === seat)
+                      .map((item) => <li key={item.name}>{item.qty} × {item.item_name}</li>)}</ul>
+                  </section>
+                ))}
+              </div>
+            )}
+            {mode === 'even' && (
+              <label className="flex items-center justify-between gap-4">
+                {t('floor.split_count')}
+                <input type="number" min={2} max={20} step={1} value={count} disabled={busy}
+                  onChange={(event) => setCount(event.target.value)}
+                  className="min-h-11 w-24 rounded border bg-background px-2" />
+              </label>
+            )}
+            {mode === 'manual' && <>
+              <div className="space-y-2 rounded-lg border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-semibold">{t('floor.check_number', { check: 1 })}</h3>
+                  <button type="button" className="min-h-11 text-sm underline" onClick={() => setLegacy(true)} disabled={busy}>
+                    {t('floor.guest_split')}
+                  </button>
+                </div>
+                {parents.map((item) => (
+                  <div key={item.name} className="flex flex-wrap items-center justify-between gap-2">
+                    <span>{remainder(item.name, item.qty)} × {item.item_name}</span>
+                    <label className="flex items-center gap-2 text-sm">
+                      <span>{t('floor.share')}</span>
+                      <select className="min-h-11 rounded border bg-background px-2" disabled={busy}
+                        value={shareByLine[item.name] || ''} onChange={(event) => {
+                          const value = event.target.value;
+                          setShareByLine((previous) => ({ ...previous, [item.name]: value }));
+                          if (value !== 'custom') applyShare(item, Number(value));
+                        }}>
+                        <option value="">—</option>
+                        {[2, 3, 4].map((divisor) => <option key={divisor} value={divisor}>1/{divisor}</option>)}
+                        <option value="custom">{t('floor.custom')}</option>
+                      </select>
+                      {shareByLine[item.name] === 'custom' && <input type="number" min={2} max={20}
+                        aria-label={t('floor.split_count')} className="min-h-11 w-16 rounded border bg-background px-2"
+                        disabled={busy} onChange={(event) => applyShare(item, Number(event.target.value))} />}
+                    </label>
+                  </div>
+                ))}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {panes.map((pane, index) => (
+                  <section key={index} className="min-w-0 rounded-lg border p-3">
+                    <h3 className="font-semibold">{t('floor.check_number', { check: index + 2 })}</h3>
+                    <p className="mb-1 text-sm tabular-nums">{formatCurrency(
+                      parents.reduce((sum, item) => sum + item.rate * (pane[item.name] || 0), 0), currency,
+                    )}</p>
+                    {parents.map((item) => (
+                      <label key={item.name} className="flex items-center justify-between gap-2 text-sm">
+                        <span>{item.item_name}</span>
+                        <input aria-label={`${item.item_name} · ${t('floor.check_number', { check: index + 2 })}`}
+                          type="number" min={0} max={item.qty} step={0.0001} disabled={busy}
+                          value={pane[item.name] || ''} onChange={(event) => setQuantity(index, item.name, Number(event.target.value))}
+                          className="min-h-11 w-24 rounded border bg-background px-2" />
+                      </label>
+                    ))}
+                  </section>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" className="min-h-11" disabled={busy || panes.length >= 19}
+                  onClick={() => setPanes([...panes, {}])}>{t('floor.add_check')}</Button>
+                {panes.length > 1 && <Button type="button" variant="outline" className="min-h-11" disabled={busy}
+                  onClick={() => setPanes(panes.slice(0, -1))}>{t('floor.remove_check')}</Button>}
+              </div>
+            </>}
+          </div>
+          {error && <p role="alert" className="text-sm font-semibold text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" className="min-h-11" disabled={busy} onClick={() => onOpenChange(false)}>{t('common.cancel')}</Button>
+          <Button className="min-h-11" disabled={busy || !(mode === 'manual' ? validManual : mode === 'even' ? validCount : seats.length > 1)}
+            onClick={() => void submit()}>{t('bill_split.confirm_split')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export default BillSplitDialog;

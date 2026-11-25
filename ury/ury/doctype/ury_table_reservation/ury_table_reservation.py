@@ -21,6 +21,15 @@ class URYTableReservation(Document):
         before = self.get_doc_before_save()
         if before and before.branch != self.branch:
             ensure_reservations_enabled(before.branch)
+        if before and bool(before.get("is_waitlist")) != bool(self.get("is_waitlist")):
+            frappe.throw(_("The reservation type cannot be changed."))
+        if self.get("is_waitlist"):
+            if self.requested_room and frappe.db.get_value("URY Room", self.requested_room, "branch") != self.branch:
+                frappe.throw(_("The requested room does not belong to this outlet."))
+            if not self.flags.get("ury_waitlist_action") and (
+                not before or (self.status != before.status and self.status in ("Waiting", "Waitlist Notified", "Seated"))
+            ):
+                frappe.throw(_("Use the wait list to manage this party."))
         self.validate_mandatory_fields()
         self.validate_status_transitions()
         self.validate_table_branch()
@@ -54,14 +63,16 @@ class URYTableReservation(Document):
             self.customer_phone = frappe.db.get_value("Customer", self.customer, "mobile_number") or ""
 
     def validate_mandatory_fields(self):
-        if not self.customer:
+        if not self.customer and not self.is_waitlist:
             frappe.throw(_("Please select a customer."))
         if not self.customer_phone:
             frappe.throw(_("Please enter the customer's phone number."))
         if not self.no_of_pax or int(self.no_of_pax) < 1:
             frappe.throw(_("Please enter a valid number of persons."))
-        if not self.reserved_table:
+        if not self.reserved_table and (not self.is_waitlist or self.status == "Seated"):
             frappe.throw(_("Please select a table."))
+        if self.is_waitlist and (self.quoted_wait_minutes or 0) < 0:
+            frappe.throw(_("Quoted wait must be non-negative."))
         if not self.reserved_at:
             frappe.throw(_("Please select a reservation time."))
         if self.status == "Cancelled" and not (self.cancel_reason or "").strip():
@@ -82,6 +93,9 @@ class URYTableReservation(Document):
 
     def validate_status_transitions(self):
         if self.is_new():
+            if self.get("is_waitlist"):
+                self.status = "Waiting"
+                return
             if self.status not in ("Requested", "Confirmed", "Active"):
                 self.status = "Confirmed"
             return
@@ -96,7 +110,12 @@ class URYTableReservation(Document):
         if old_status == new_status:
             return
 
+        if not self.get("is_waitlist") and new_status in ("Waiting", "Waitlist Notified"):
+            frappe.throw(_("Only walk-in parties can join the wait list."))
+
         allowed_transitions = {
+            "Waiting": ["Waitlist Notified", "Seated", "Cancelled"],
+            "Waitlist Notified": ["Seated", "Cancelled"],
             "Requested": ["Confirmed", "Cancelled"],
             "Active": ["Completed", "Cancelled", "No Show"],
             "Confirmed": ["Seated", "Cancelled", "No Show"],
@@ -130,6 +149,9 @@ class URYTableReservation(Document):
             )
 
         if new_status == "Seated":
+            from ury.ury.api.table_lifecycle import assert_table_seatable
+
+            assert_table_seatable(self.reserved_table, self.branch)
             self.validate_table_is_free_to_seat()
         if old_status == "Seated" and new_status == "Confirmed":
             self.validate_unseat()
@@ -163,16 +185,18 @@ class URYTableReservation(Document):
                 self.reserved_table,
                 {
                     "occupied": 1,
+                    "custom_table_state": "Seated",
+                    "custom_dirty_since": None,
                     "latest_invoice_time": now_datetime(),
                 },
             )
         if self.status == "Confirmed" and old_status == "Seated" and self.reserved_table:
             # Unseated before ordering: the table is free again.
-            frappe.db.set_value("URY Table", self.reserved_table, {"occupied": 0, "latest_invoice_time": None})
+            frappe.db.set_value("URY Table", self.reserved_table, {"occupied": 0, "latest_invoice_time": None, "custom_table_state": "Available"})
 
     def validate_conflicts(self):
         # Only Confirmed / Active / Requested reservations require validation rules
-        if self.status not in ("Confirmed", "Active", "Requested"):
+        if self.get("is_waitlist") or self.status not in ("Confirmed", "Active", "Requested"):
             return
         before = self.get_doc_before_save()
         if before and before.status == "Seated":

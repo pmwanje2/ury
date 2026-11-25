@@ -436,7 +436,7 @@ def getRestaurantMenu(pos_profile, room=None, order_type=None, customer=None):
 
 @frappe.whitelist()
 def getMenuCourses():
-    courses = frappe.get_all("URY Menu Course", fields=["name", "icon"])
+    courses = frappe.get_all("URY Menu Course", filters={"disabled": 0}, fields=["name", "icon"])
     return [{"name": d.name, "label": _(d.name), "icon": d.icon} for d in courses]
 
 def _user_branch_assignments(pos_profile=None):
@@ -1606,6 +1606,10 @@ def getPosInvoiceItems(invoice):
                 "max_discount": max_disc,
                 "is_disposable": items.is_disposable,
                 "comment": items.get("comment") or "",
+                "custom_course": items.get("custom_course"),
+                "custom_seat_no": cint(items.get("custom_seat_no")),
+                "custom_is_shareable": cint(frappe.get_cached_value("Item", items.item_code, "custom_is_shareable"))
+                if items.item_code else 0,
                 "reservation_line_key": items.get("reservation_line_key") or None,
                 "custom_parent_line_key": items.get("custom_parent_line_key") or None,
                 "custom_line_role": items.get("custom_line_role") or "Standard",

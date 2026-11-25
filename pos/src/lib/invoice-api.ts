@@ -16,6 +16,7 @@ import { OrderStatusType, OrderType } from '../data/order-types';
 import type { Filter } from 'frappe-js-sdk/lib/db/types';
 
 export interface POSInvoice {
+  branch?: string;
   ury_client_order_id?: string | null;
   name: string;
   pos_profile?: string | null;
@@ -103,6 +104,9 @@ export interface POSInvoiceItem {
   name: string;
   item_code?: string;
   item_name: string;
+  custom_course?: string;
+  custom_seat_no?: number;
+  custom_is_shareable?: number;
   qty: number;
   rate: number;
   price_list_rate: number;

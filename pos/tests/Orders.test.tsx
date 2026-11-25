@@ -268,6 +268,8 @@ describe('Outstanding settlement working area', () => {
     vi.spyOn(call, 'post').mockResolvedValue({ message: { new_invoice: 'POS-CHILD' } });
     const row = await renderOrders();
     await act(async () => buttonIn(row, 'Split bill')!.click());
+    const multiCheck = container.querySelector('[role="dialog"]')!;
+    await act(async () => buttonIn(multiCheck, 'Split to a named check')!.click());
     const dialog = container.querySelector('[role="dialog"]')!;
     await act(async () => (dialog.querySelector('[role="button"]') as HTMLElement).click());
     await act(async () => dialog.querySelector<HTMLButtonElement>('button:has(svg.lucide-minus)')!.click());

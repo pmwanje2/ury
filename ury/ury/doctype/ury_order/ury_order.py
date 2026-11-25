@@ -4,7 +4,9 @@
 import hashlib
 import json
 from collections import defaultdict
+from contextlib import ExitStack
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -535,6 +537,8 @@ TABLE_RELEASE_FIELDS = {
     "occupied": 0,
     "latest_invoice_time": None,
     "merged_with": None,
+    "custom_table_state": "Available",
+    "custom_dirty_since": None,
 }
 
 
@@ -571,9 +575,13 @@ def release_tables_after_print(invoice):
     # Same rule as the POS print paths: a table stays occupied while another
     # draft check (e.g. the other half of a split) is still unprinted.
     tables = _get_table_group(invoice_doc.restaurant_table, invoice_doc.custom_merged_tables)
+    from ury.ury.api.table_lifecycle import update_table_after_check
+
+    if update_table_after_check(tables, invoice_doc.get("branch"), printed=True):
+        return True
     if not _has_open_pos_invoices_for_cluster(tables):
         for table in tables:
-            frappe.db.set_value("URY Table", table, {"occupied": 0, "latest_invoice_time": None})
+            frappe.db.set_value("URY Table", table, {"occupied": 0, "latest_invoice_time": None, "custom_table_state": "Available"})
 
     return True
 
@@ -672,6 +680,9 @@ def _has_open_pos_invoices_for_tables(tables):
 def _free_tables_if_no_open_invoices(
     restaurant_table,
     custom_merged_tables=None,
+    *,
+    printed=False,
+    branch=None,
 ):
 
     if not restaurant_table:
@@ -682,6 +693,11 @@ def _free_tables_if_no_open_invoices(
         custom_merged_tables,
     )
 
+    if printed:
+        from ury.ury.api.table_lifecycle import update_table_after_check
+
+        if update_table_after_check(tables, branch, printed=True):
+            return
     if _has_open_pos_invoices_for_cluster(tables):
         return
 
@@ -700,10 +716,14 @@ def _copy_invoice_item_fields(item_row, qty):
         discount_amount=flt(item_row.get("discount_amount")),
         comment=item_row.get("comment"),
         custom_course=item_row.get("custom_course"),
+        custom_seat_no=cint(item_row.get("custom_seat_no")),
+        custom_origin_invoice_item=item_row.get("custom_origin_invoice_item") or item_row.name,
+        custom_kitchen_anchor=item_row.get("custom_kitchen_anchor"),
         ury_held=cint(item_row.get("ury_held")),
         cost_center=item_row.cost_center,
         uom=item_row.uom,
         conversion_factor=item_row.conversion_factor,
+        stock_uom=item_row.get("stock_uom"),
         warehouse=item_row.warehouse,
         # Preserve the stable line identity the reservation/KOT layers key
         # on (see ury_order_reservation_service.LINE_REF_FIELDS). A row with
@@ -743,6 +763,9 @@ def _copy_invoice_item_fields(item_row, qty):
         "custom_comp_reason",
         "custom_comp_approver",
         "custom_efris_tax_category",
+        "custom_tax_exempt",
+        "item_tax_template",
+        "item_tax_rate",
     ):
         val = item_row.get(priv_field)
         if val not in (None, "", 0, 0.0):
@@ -770,35 +793,35 @@ def _guest_label(value):
     return label or None
 
 
-def _split_kots_to_move(source, move_map, reservations_enabled):
-    whole, selected, known = set(), set(), set()
-    released_dishes = set()
+def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None):
+    """Move a ticket only when all of its issued quantities move together."""
+    by_key = {}
+    by_code = defaultdict(list)
     for item in source.items:
-        keys = {item.get("reservation_line_key") or item.name, _line_key(item.item_code, item, 1)}
-        known.update(keys)
-        qty = move_map.get(item.name, 0)
-        if qty > 0:
-            selected.update(keys)
-            if not cint(item.get("ury_held")):
-                released_dishes.add(item.item_code)
-            if qty == item.qty:
-                whole.update(keys)
+        by_code[item.item_code].append(item.name)
+        for key in (item.get("reservation_line_key") or item.name, _line_key(item.item_code, item, 1)):
+            by_key[key] = item
 
     movable = []
     for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
-        rows = frappe.get_all("URY KOT Items", filters={"parent": ticket, "parenttype": "URY KOT"},
-                              fields=["reservation_line_key", "item"])
-        keys = {row.reservation_line_key for row in rows}
-        if keys and keys <= whole:
+        rows = frappe.get_all(
+            "URY KOT Items", filters={"parent": ticket, "parenttype": "URY KOT"},
+            fields=["reservation_line_key", "item", "quantity"],
+        )
+        matches = [(by_key.get(row.reservation_line_key), row) for row in rows]
+        if matches and all(
+            line and not line.get("custom_kitchen_anchor")
+            and move_map.get(line.name, 0) == line.qty
+            and (row.get("quantity") is None or abs(flt(row.quantity)) <= line.qty)
+            for line, row in matches
+        ):
             movable.append(ticket)
-        elif reservations_enabled and (keys & selected or any(
-            row.reservation_line_key not in known and row.item in released_dishes for row in rows
-        )):
-            # Fulfilment looks up stock by the single invoice on the kitchen ticket.
-            frappe.throw(
-                coded_message("SPLIT-RESERVED-KOT", _("Move the entire released kitchen ticket together.")),
-                frappe.ValidationError,
-            )
+        elif anchored is not None:
+            for line, row in matches:
+                if line:
+                    anchored.add(line.name)
+                else:
+                    anchored.update(by_code[row.item])
     return movable
 
 
@@ -816,30 +839,8 @@ def _has_manual_line_discount(rows):
     return False
 
 
-@frappe.whitelist()
-def split_bill(
-    source_invoice,
-    items_to_move,
-    customer=None,
-    guest_label=None,
-    approval_token=None,
-    reason=None,
-    reason_note=None,
-    approval=None,
-):
-    """Move selected line items from a draft bill to a new sibling POS Invoice."""
-    _is_valid_str = _pa_is_valid_str
-    _table_exists = _pa_table_exists
-    assert_not_efris_fiscalised = _pa_assert_not_efris_fiscalised
-    assert_not_offline_replay = _pa_assert_not_offline_replay
-    authorize_or_perform = _pa_authorize_or_perform
-    is_company_policy_active = _pa_is_company_policy_active
-
-    assert_not_offline_replay()
-    if isinstance(items_to_move, str):
-        items_to_move = json.loads(items_to_move)
-    guest_label = _guest_label(guest_label)
-
+def _load_check_for_split(source_invoice):
+    _pa_assert_not_offline_replay()
     try:
         source = frappe.get_doc("POS Invoice", source_invoice, for_update=True)
     except TypeError:
@@ -861,10 +862,10 @@ def split_bill(
 
     if source.docstatus != 0:
         frappe.throw(_("Only draft invoices can be split."))
-    assert_not_efris_fiscalised(source)
+    _pa_assert_not_efris_fiscalised(source)
 
     split_profile_name = source.get("pos_profile")
-    if _is_valid_str(split_profile_name):
+    if _pa_is_valid_str(split_profile_name):
         raw_clock_in_req = frappe.db.get_value(
             "POS Profile", split_profile_name, "custom_require_clock_in_to_order"
         )
@@ -872,6 +873,93 @@ def split_bill(
             from ury.ury_pos import timeclock
 
             timeclock.enforce_clock_in_for_profile_name(split_profile_name, user=frappe.session.user)
+
+    return source
+
+
+def _authorize_check_split(source, plans, approval_token, reason, reason_note, *, action):
+    # Check Simphony Opt 102 (`custom_max_splits_before_pin`) and `split_check` privilege / PIN.
+    pos_profile_name = source.get("pos_profile")
+    raw_company = source.get("company")
+    company = raw_company if _pa_is_valid_str(raw_company) else (
+        frappe.db.get_value("Branch", source.branch, "company") if _pa_is_valid_str(source.branch) else None
+    )
+    max_splits = 0
+    if _pa_is_valid_str(pos_profile_name) and _pa_table_exists("POS Profile"):
+        raw_max_splits = frappe.db.get_value("POS Profile", pos_profile_name, "custom_max_splits_before_pin")
+        max_splits = max(0, cint(raw_max_splits)) if raw_max_splits is not None else 0
+
+    existing_splits = 0
+    if max_splits > 0:
+        if source.get("custom_split_group"):
+            group_count = frappe.db.count(
+                "POS Invoice",
+                {"custom_split_group": source.custom_split_group, "docstatus": ["!=", 2]},
+            )
+            existing_splits = max(0, cint(group_count) - 1)
+        if source.get("custom_split_from"):
+            existing_splits = max(existing_splits, 1)
+
+    over_split_cap = max_splits > 0 and existing_splits + len(plans) > max_splits
+    policy_active = _pa_is_company_policy_active(company)
+
+    # Compute ownership access; a verified Manager PIN can authorise splitting a teammate's or billed check.
+    access_ok = True
+    try:
+        _enforce_order_access(
+            source,
+            pos_profile_name=pos_profile_name,
+            require_modify=True,
+            deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
+        )
+    except frappe.PermissionError:
+        access_ok = False
+        if not approval_token and not policy_active:
+            raise
+
+    moves = [[[k, round(flt(v), 4)] for k, v in sorted(plan.items())] for plan in plans]
+    claim = {"action": action, "source_invoice": source.name}
+    if action == "split_bill":
+        claim["move_items"] = moves[0]
+    else:
+        claim["splits"] = moves
+    if policy_active or over_split_cap or approval_token or not access_ok or _pa_table_exists("POS Authorisation Log"):
+        _pa_authorize_or_perform(
+            privilege="split_check",
+            pos_profile=pos_profile_name if _pa_is_valid_str(pos_profile_name) else None,
+            company=company if _pa_is_valid_str(company) else None,
+            skip_profile_company_lookup=True,
+            reference_doctype="POS Invoice",
+            reference_name=source.name,
+            claim=claim,
+            token=approval_token,
+            reason=reason,
+            reason_note=reason_note,
+            require_reason=None if policy_active else False,
+            force_pin=over_split_cap,
+            allow_fallback_predicate=access_ok,
+            deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
+        )
+
+    return company
+
+
+@frappe.whitelist()
+def split_bill(
+    source_invoice,
+    items_to_move,
+    customer=None,
+    guest_label=None,
+    approval_token=None,
+    reason=None,
+    reason_note=None,
+    approval=None,
+):
+    """Move selected line items from a draft bill to a new sibling POS Invoice."""
+    if isinstance(items_to_move, str):
+        items_to_move = json.loads(items_to_move)
+    guest_label = _guest_label(guest_label)
+    source = _load_check_for_split(source_invoice)
 
     move_map = {
         row["name"]: float(row["qty"])
@@ -937,69 +1025,35 @@ def split_bill(
     if total_remaining_qty <= 0:
         frappe.throw(_("At least one item must remain on the original bill."))
 
-    # Check Simphony Opt 102 (`custom_max_splits_before_pin`) and `split_check` privilege / PIN.
-    pos_profile_name = source.get("pos_profile")
-    raw_company = source.get("company")
-    company = raw_company if _is_valid_str(raw_company) else (
-        frappe.db.get_value("Branch", source.branch, "company") if _is_valid_str(source.branch) else None
+    _validate_split_share_quantities(
+        source.items, [{key: Decimal(str(qty)) for key, qty in move_map.items()}],
     )
-    max_splits = 0
-    if _is_valid_str(pos_profile_name) and _table_exists("POS Profile"):
-        raw_max_splits = frappe.db.get_value("POS Profile", pos_profile_name, "custom_max_splits_before_pin")
-        max_splits = max(0, cint(raw_max_splits)) if raw_max_splits is not None else 0
+    company = _authorize_check_split(
+        source, [move_map], approval_token, reason, reason_note, action="split_bill",
+    )
+    return _apply_check_split(source, move_map, company, customer, guest_label, approval, items_to_move)
 
-    existing_splits = 0
-    if max_splits > 0:
-        if source.get("custom_split_group"):
-            group_count = frappe.db.count(
-                "POS Invoice",
-                {"custom_split_group": source.custom_split_group, "docstatus": ["!=", 2]},
-            )
-            existing_splits = max(0, cint(group_count) - 1)
-        if source.get("custom_split_from"):
-            existing_splits = max(existing_splits, 1)
 
-    over_split_cap = max_splits > 0 and existing_splits >= max_splits
-    policy_active = is_company_policy_active(company)
-
-    # Compute ownership access; a verified Manager PIN can authorise splitting a teammate's or billed check.
-    access_ok = True
-    try:
-        _enforce_order_access(
-            source,
-            pos_profile_name=pos_profile_name,
-            require_modify=True,
-            deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
-        )
-    except frappe.PermissionError:
-        access_ok = False
-        if not approval_token and not policy_active:
-            raise
-
-    if policy_active or over_split_cap or approval_token or not access_ok or _table_exists("POS Authorisation Log"):
-        authorize_or_perform(
-            privilege="split_check",
-            pos_profile=pos_profile_name if _is_valid_str(pos_profile_name) else None,
-            company=company if _is_valid_str(company) else None,
-            skip_profile_company_lookup=True,
-            reference_doctype="POS Invoice",
-            reference_name=source.name,
-            claim={
-                "action": "split_bill",
-                "source_invoice": source.name,
-                "move_items": [[k, round(flt(v), 4)] for k, v in sorted(move_map.items())],
-            },
-            token=approval_token,
-            reason=reason,
-            reason_note=reason_note,
-            require_reason=None if policy_active else False,
-            force_pin=over_split_cap,
-            allow_fallback_predicate=access_ok,
-            deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
-        )
-
+def _apply_check_split(
+    source, move_map, company, customer=None, guest_label=None, approval=None, items_to_move=None,
+):
     reservations_enabled = get_branch_stock_policy(branch=source.branch, company=company).reservation_control_enabled
-    movable_kots = _split_kots_to_move(source, move_map, reservations_enabled)
+    anchored_items = set()
+    movable_kots = _split_kots_to_move(
+        source, move_map, reservations_enabled, anchored=anchored_items,
+    )
+    anchored_origins = {
+        item.get("custom_origin_invoice_item") or item.name for item in source.items
+        if item.get("custom_kitchen_anchor") or (item.name in anchored_items and item.name in move_map)
+    }
+    for item in source.items:
+        origin = item.get("custom_origin_invoice_item") or item.name
+        moved = move_map.get(item.name, 0)
+        if origin in anchored_origins:
+            item.custom_kitchen_anchor = item.get("custom_kitchen_anchor") or source.name
+        if origin in anchored_origins or 0 < moved < item.qty:
+            item.custom_origin_invoice_item = origin
+    split_root = source.get("custom_split_from") or source.name
 
     new_invoice = frappe.new_doc("POS Invoice")
     header_fields = [
@@ -1020,6 +1074,8 @@ def split_bill(
         "customer_name",
         "selling_price_list",
         "taxes_and_charges",
+        "custom_tax_exempt",
+        "custom_serving_period",
         "company",
         "currency",
         "conversion_rate",
@@ -1032,7 +1088,7 @@ def split_bill(
     split_group = source.get("custom_split_group") or frappe.generate_hash(length=10)
     source.custom_split_group = split_group
 
-    new_invoice.custom_split_from = source.name
+    new_invoice.custom_split_from = split_root
     new_invoice.custom_split_group = split_group
     new_invoice.invoice_printed = 0
     new_invoice.invoice_created = 0
@@ -1062,6 +1118,7 @@ def split_bill(
             "qty": item.qty,
         }
         for item in source.items
+        if not item.get("custom_kitchen_anchor")
     ]
 
     # Snapshot pre-split header discount and gross shares for exact proration on flat discounts.
@@ -1096,6 +1153,7 @@ def split_bill(
         }
 
     items_to_remove = []
+    linked_parent_keys = {row.get("custom_parent_line_key") for row in source.items if row.get("custom_parent_line_key")}
     for item in source.items:
         move_qty = move_map.get(item.name, 0)
         is_priv_row = (
@@ -1107,7 +1165,10 @@ def split_bill(
         if move_qty <= 0:
             continue
         copied_qty = item.qty if move_qty >= item.qty else move_qty
-        copied_row = new_invoice.append("items", _copy_invoice_item_fields(item, copied_qty))
+        fields = _copy_invoice_item_fields(item, copied_qty)
+        if not fields["reservation_line_key"] and item.name in linked_parent_keys:
+            fields["reservation_line_key"] = item.name
+        copied_row = new_invoice.append("items", fields)
         if copied_row is None and new_invoice.items:
             copied_row = new_invoice.items[-1]
         if is_priv_row and copied_row is not None:
@@ -1120,7 +1181,7 @@ def split_bill(
         if move_qty >= item.qty:
             items_to_remove.append(item)
         else:
-            item.qty -= move_qty
+            item.qty = float(Decimal(str(item.qty)) - Decimal(str(move_qty)))
 
     for item in items_to_remove:
         source.remove(item)
@@ -1195,11 +1256,16 @@ def split_bill(
     source_received = _received_payment_rows(source)
     received_total = sum(flt(row.get("amount")) for row in source_received)
 
+    previous_split_flag = getattr(frappe.flags, "ury_bill_split", False)
     frappe.flags.ury_bill_split = True
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
     frappe.flags.ury_server_discount_write = True
+    precision_context = ExitStack()
     try:
+        for check in (source, new_invoice):
+            ensure_share_quantity_precision(check)
+            precision_context.enter_context(with_currency_precision(check, split_rate_prec))
         split_profile = None
         if source.get("pos_profile") and frappe.db.exists("POS Profile", source.pos_profile):
             try:
@@ -1418,7 +1484,7 @@ def split_bill(
             "POS Invoice",
             new_invoice.name,
             {
-                "custom_split_from": source.name,
+                "custom_split_from": split_root,
                 "custom_split_group": split_group,
             },
             update_modified=False,
@@ -1457,6 +1523,7 @@ def split_bill(
                 "qty": item.qty,
             }
             for item in source.items
+            if not item.get("custom_kitchen_anchor")
         ]
         if reservations_enabled:
             reconcile_order_reservations(
@@ -1476,6 +1543,7 @@ def split_bill(
                 "qty": item.qty,
             }
             for item in new_invoice.items
+            if not item.get("custom_kitchen_anchor")
         ]
         if reservations_enabled:
             reconcile_order_reservations(
@@ -1490,15 +1558,191 @@ def split_bill(
         for ticket in movable_kots:
             frappe.db.set_value("URY KOT", ticket, "invoice", new_invoice.name, update_modified=False)
     finally:
+        precision_context.close()
         frappe.flags.ury_server_tender_received = prev_tender_flag
         frappe.flags.ury_server_discount_write = prev_disc_flag
-        frappe.flags.ury_bill_split = False
+        frappe.flags.ury_bill_split = previous_split_flag
 
     return {
         "source_invoice": source.name,
         "new_invoice": new_invoice.name,
     }
 
+
+
+def assert_no_shared_kitchen_void(invoice):
+    """A payment share cannot void a physical ticket or release its stock."""
+    if not invoice.get("custom_split_group"):
+        return
+    attached = any(row.get("custom_kitchen_anchor") for row in invoice.get("items") or [])
+    dependants = frappe.db.exists(
+        "POS Invoice Item",
+        {"custom_kitchen_anchor": invoice.name, "parent": ["!=", invoice.name], "docstatus": ["!=", 2]},
+    )
+    if attached or dependants:
+        frappe.throw(coded_message(
+            "SPLIT-KITCHEN-SHARED",
+            _("Shared kitchen items must be consolidated before the check can be voided."),
+        ))
+
+
+def _assert_shared_kitchen_lines_unchanged(previous, accepted):
+    current_by_key = {_line_ref(row): row for row in accepted}
+    for row in previous:
+        if not row.get("custom_kitchen_anchor"):
+            continue
+        current = current_by_key.get(_line_ref(row))
+        if not current or any(
+            (current.get(field) or default) != (row.get(field) or default)
+            for field, default in (("qty", 0), ("custom_course", ""), ("custom_seat_no", 0))
+        ) or (current.get("comment") or current.get("comments") or "") != (row.get("comments") or ""):
+            frappe.throw(coded_message(
+                "SPLIT-KITCHEN-SHARED", _("Shared kitchen items must be consolidated before changing the line."),
+            ))
+
+
+def ensure_share_quantity_precision(doc, method=None):
+    """Keep four-decimal shares through native POS rounding and stock settlement."""
+    rows = doc.get("items") or []
+    if not any(
+        (row.get("custom_origin_invoice_item") or row.get("pos_invoice_item"))
+        and flt(row.get("qty")) != round(flt(row.get("qty")), 3) for row in rows
+    ):
+        return
+    for record, parentfield in [(doc, "items"), *((row, None) for row in rows)]:
+        if not callable(getattr(record, "precision", None)):
+            continue
+        for field in ("qty", "stock_qty"):
+            precision = record.precision(field, parentfield)
+            if isinstance(precision, int) and precision < 4:
+                record._precision[parentfield or "main"][field] = 4
+
+
+_MAX_SPLIT_CHECKS = 20
+_SHARE_UNIT = Decimal("0.0001")
+
+
+def _split_decimal(value):
+    try:
+        qty = Decimal(str(value))
+        if qty.is_finite() and qty > 0 and qty == qty.quantize(_SHARE_UNIT):
+            return qty
+    except (InvalidOperation, ValueError):
+        pass
+    frappe.throw(_("Enter a positive split quantity with up to four decimal places."))
+
+
+def _plan_split_checks(source, splits, mode, split_count):
+    rows = source.get("items") or []
+    roots = [item for item in rows if not item.get("custom_parent_line_key")]
+    parent_names = {item.get("reservation_line_key") or item.name: item.name for item in roots}
+    children = defaultdict(list)
+    for item in rows:
+        if key := item.get("custom_parent_line_key"):
+            if key not in parent_names:
+                frappe.throw(_("A linked item has no parent on this check."))
+            children[parent_names[key]].append(item)
+    quantities = {item.name: Decimal(str(item.qty)) for item in roots}
+    if mode == "even":
+        count = _split_decimal(split_count)
+        if not 2 <= count <= _MAX_SPLIT_CHECKS or count % 1:
+            frappe.throw(_("Choose between 2 and 20 checks."))
+        # Round down so the source owns every remaining unit at four decimals.
+        plans = [
+            {name: (qty / count).quantize(_SHARE_UNIT, rounding=ROUND_DOWN) for name, qty in quantities.items()}
+            for _index in range(int(count) - 1)
+        ]
+    elif mode == "by_seat":
+        seats = defaultdict(dict)
+        for item in roots:
+            seats[cint(item.get("custom_seat_no"))][item.name] = quantities[item.name]
+        seat_numbers = sorted(seats)
+        plans = [seats[seat] for seat in seat_numbers[1:]]
+    elif mode == "manual":
+        if not isinstance(splits, list) or not 1 <= len(splits) < _MAX_SPLIT_CHECKS:
+            frappe.throw(_("Choose between 2 and 20 checks."))
+        plans = []
+        for group in splits:
+            if not isinstance(group, list):
+                frappe.throw(_("Select items for every new check."))
+            plan = {}
+            for selection in group:
+                if not isinstance(selection, dict):
+                    frappe.throw(_("Select a valid invoice item."))
+                name = selection.get("name")
+                if not isinstance(name, str) or name not in quantities or name in plan:
+                    frappe.throw(_("Select each parent item only once per check."))
+                plan[name] = _split_decimal(selection.get("qty"))
+            plans.append(plan)
+    else:
+        frappe.throw(_("Choose a valid split method."))
+
+    if not plans or len(plans) >= _MAX_SPLIT_CHECKS or any(not plan for plan in plans):
+        frappe.throw(_("Select items for every new check."))
+    allocated = defaultdict(Decimal)
+    for plan in plans:
+        for name, qty in list(plan.items()):
+            if qty <= 0 or allocated[name] + qty > quantities[name]:
+                frappe.throw(_("Split quantities exceed the available quantity or precision."))
+            allocated[name] += qty
+            for child in children[name]:
+                child_qty = Decimal(str(child.qty))
+                piece = (child_qty * qty / quantities[name]).quantize(_SHARE_UNIT, rounding=ROUND_DOWN)
+                if allocated[name] == quantities[name]:
+                    piece = child_qty - allocated[child.name]
+                if piece <= 0:
+                    frappe.throw(_("A linked item cannot be split at this quantity."))
+                plan[child.name] = piece
+                allocated[child.name] += piece
+    if not any(qty > allocated[name] for name, qty in quantities.items()):
+        frappe.throw(_("At least one item must remain on the original bill."))
+
+    _validate_split_share_quantities(rows, plans)
+    return [{name: float(qty) for name, qty in plan.items()} for plan in plans]
+
+
+def _validate_split_share_quantities(rows, plans):
+    for item in rows:
+        parts = [plan[item.name] for plan in plans if item.name in plan]
+        if not parts:
+            continue
+        remaining = Decimal(str(item.qty)) - sum(parts)
+        if len(parts) == 1 and remaining == 0:
+            continue
+        pieces = (*parts, remaining)
+        conversion = Decimal(str(item.get("conversion_factor") or 1))
+        for uom, factor in ((item.get("uom"), Decimal(1)), (item.get("stock_uom"), conversion)):
+            if uom and any((qty * factor) % 1 for qty in pieces):
+                if cint(frappe.db.get_value("UOM", uom, "must_be_whole_number")):
+                    frappe.throw(coded_message("SPLIT-WHOLE-UOM", _("This unit of measure requires whole quantities.")))
+        if any(qty % 1 for qty in pieces) and not item.get("custom_parent_line_key") and not cint(
+            frappe.db.get_value("Item", item.item_code, "custom_is_shareable")
+        ):
+            frappe.throw(coded_message("SPLIT-ITEM-NOT-SHAREABLE", _("This item does not allow fractional shares.")))
+
+
+@frappe.whitelist(methods=["POST"])
+def split_check_multi(source_invoice, splits=None, mode="manual", split_count=None,
+                      approval_token=None, reason=None, reason_note=None):
+    """Create all sibling checks in one transaction with one split approval."""
+    savepoint = "ury_split_check_multi"
+    frappe.db.savepoint(savepoint)
+    try:
+        source = _load_check_for_split(source_invoice)
+        if isinstance(splits, str):
+            splits = frappe.parse_json(splits)
+        plans = _plan_split_checks(source, splits, mode, split_count)
+        company = _authorize_check_split(
+            source, plans, approval_token, reason, reason_note, action="split_check_multi",
+        )
+        names = []
+        for plan in plans:
+            result = _apply_check_split(source, plan, company)
+            names.append(result["new_invoice"])
+        return {"source_invoice": source.name, "new_invoices": names}
+    except Exception:
+        frappe.db.rollback(save_point=savepoint)
+        raise
 
 
 def _reservation_lines(rows):
@@ -1931,10 +2175,15 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             frappe.throw(frappe._("Not permitted to view orders outside your active branch"), frappe.PermissionError)
 
     if table:
+        from ury.ury.api.table_lifecycle import holds_until_settlement
+
+        branch, menu_name, restaurant = get_restaurant_and_menu_name(table)
         filters = {"docstatus": 0}
         if invoiceNo:
             filters["name"] = invoiceNo
-        elif is_payment != "Payments":
+        elif is_payment == "Printed":
+            filters["invoice_printed"] = 1
+        elif is_payment != "Payments" and not holds_until_settlement(branch):
             filters["invoice_printed"] = 0
 
         or_filters = {
@@ -1950,8 +2199,6 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             limit=1,
         )
         invoice_name = invoices[0].name if invoices else None
-        branch, menu_name, restaurant = get_restaurant_and_menu_name(table)
-
         if invoice_name:
             invoice = frappe.get_doc("POS Invoice", invoice_name)
             _enforce_read_permission(invoice)
@@ -2013,9 +2260,12 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             )
 
             completed_res = get_completed_reservation_for_table(table, branch) if reservations_enabled(branch) else None
-            if completed_res and completed_res.get("customer"):
-                invoice.customer = completed_res.get("customer")
-                if completed_res.get("customer_name"):
+            if completed_res:
+                if completed_res.get("customer"):
+                    invoice.customer = completed_res.get("customer")
+                elif completed_res.get("customer_name"):
+                    invoice.custom_guest_label = completed_res.get("customer_name")[:GUEST_LABEL_MAX]
+                if completed_res.get("customer") and completed_res.get("customer_name"):
                     invoice.customer_name = completed_res.get("customer_name")
                 if completed_res.get("customer_phone"):
                     invoice.mobile_number = completed_res.get("customer_phone")
@@ -2191,7 +2441,15 @@ def price_items_for_invoice(
         item_name = d.get("item_name")
         line_key = d.get("reservation_line_key")
 
-        course = frappe.db.get_value("URY Menu Item", {"item": item_code, "parent": menu}, "course")
+        if d.get("custom_course"):
+            from ury.ury.api.ury_kot_generate import resolve_line_course
+
+            course = resolve_line_course(d, item_code, menu)
+        else:
+            course = frappe.db.get_value("URY Menu Item", {"item": item_code, "parent": menu}, "course")
+        seat = d.get("custom_seat_no", 0)
+        if cint(seat) < 0 or flt(seat) != cint(seat):
+            frappe.throw(_("Seat number must be a non-negative whole number."))
 
         override = price_overrides.get(line_key) if line_key else None
         if override and override.get("is_validated_modifier"):
@@ -2239,6 +2497,7 @@ def price_items_for_invoice(
                 item_name=item_name,
                 qty=d.get("qty"),
                 reservation_line_key=line_key,
+                **({"custom_seat_no": cint(seat)} if seat else {}),
                 **({"custom_course": course} if course else {}),
                 **({"warehouse": department_warehouse} if department_warehouse else {}),
                 comment=d.get("comment"),
@@ -2794,11 +3053,14 @@ def get_table_order_context(table):
             "permissions": denied_permissions,
         }
 
-    # Resolve the active order the same way get_order_invoice does: a draft,
-    # not-yet-printed POS Invoice on this table or a table merged into it.
+    from ury.ury.api.table_lifecycle import holds_until_settlement
+
+    filters = {"docstatus": 0}
+    if not holds_until_settlement(table_doc.branch):
+        filters["invoice_printed"] = 0
     invoices = frappe.get_all(
         "POS Invoice",
-        filters={"docstatus": 0, "invoice_printed": 0},
+        filters=filters,
         or_filters={
             "restaurant_table": table,
             "custom_merged_tables": ["like", f"%{table}%"],
@@ -3120,6 +3382,9 @@ def _previous_line_snapshot(invoice_items):
                 "qty": item.qty,
                 "comments": item.get("comment") or "",
                 "ury_held": cint(item.get("ury_held")),
+                "custom_course": item.get("custom_course"),
+                "custom_seat_no": cint(item.get("custom_seat_no")),
+                **({"custom_kitchen_anchor": item.get("custom_kitchen_anchor")} if item.get("custom_kitchen_anchor") else {}),
                 "custom_parent_line_key": item.get("custom_parent_line_key") or None,
                 "custom_line_role": item.get("custom_line_role") or "Standard",
                 "custom_is_modifier": cint(item.get("custom_is_modifier")),
@@ -3338,14 +3603,18 @@ def _kitchen_snapshot(items):
         code = item.get("item") or item.get("item_code")
         note = item.get("comment") or item.get("comments") or ""
         key = item.get("reservation_line_key")
-        if not key and (code, note) in legacy:
-            legacy[code, note]["qty"] += flt(item.get("qty"))
+        course, seat = item.get("custom_course"), cint(item.get("custom_seat_no"))
+        context = (code, note, course, seat)
+        if not key and context in legacy:
+            legacy[context]["qty"] += flt(item.get("qty"))
             continue
         row = dict(
             item_code=code,
             item_name=item.get("item_name"),
             qty=flt(item.get("qty")),
             comments=note,
+            custom_course=course,
+            custom_seat_no=seat,
             custom_parent_line_key=item.get("custom_parent_line_key") or None,
             custom_line_role=item.get("custom_line_role") or "Standard",
             custom_is_modifier=cint(item.get("custom_is_modifier")),
@@ -3357,7 +3626,7 @@ def _kitchen_snapshot(items):
         if key:
             row["reservation_line_key"] = key
         else:
-            legacy[code, note] = row
+            legacy[context] = row
         rows.append(row)
     return rows
 
@@ -3552,6 +3821,10 @@ def sync_order(
                     guest_label = collision_plan["custom_guest_label"]
                 collision_split_create = True
 
+    if table and not invoice and not client_invoice and not invoice_doc:
+        from ury.ury.api.table_lifecycle import assert_table_seatable
+
+        assert_table_seatable(table, posprofile.get("branch"))
     invoice = invoice_doc or client_invoice or get_order_invoice(table, invoice, order_type)
     if invoice.name and invoice.pos_profile and invoice.pos_profile != pos_profile:
         frappe.throw(
@@ -4284,11 +4557,18 @@ def sync_order(
                 for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
                     if prev_row.get(tax_field) is not None:
                         item_dict[tax_field] = prev_row.get(tax_field)
+    for src, priced in zip(items, priced_items, strict=True):
+        if priced.get("custom_course"):
+            src["custom_course"] = priced["custom_course"]
+    if not append:
+        _assert_shared_kitchen_lines_unchanged(past_item, items)
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
+        anchored = {_line_ref(row) for row in past_item if row.get("custom_kitchen_anchor")}
+        accepted = past_item + items if append else items
         reconcile_order_reservations(
             order_ref=_ensure_invoice_reservation_ref(invoice),
-            previous_items=past_item,
-            accepted_items=past_item + items if append else items,
+            previous_items=[row for row in past_item if _line_ref(row) not in anchored],
+            accepted_items=[row for row in accepted if _line_ref(row) not in anchored],
             branch=invoice.branch,
             company=_sync_order_company,
             actor=frappe.session.user,
@@ -4298,6 +4578,10 @@ def sync_order(
         invoice.items = []
     for source, item_dict in zip(items, priced_items, strict=True):
         old_row = previous_rows.get(source.get("name")) if source.get("name") else None
+        origin_row = old_row or previous_by_key.get(source.get("reservation_line_key"))
+        if origin_row and origin_row.get("custom_origin_invoice_item"):
+            item_dict["custom_origin_invoice_item"] = origin_row.get("custom_origin_invoice_item")
+            item_dict["custom_kitchen_anchor"] = origin_row.get("custom_kitchen_anchor")
         if source.get("name"):
             item_dict["name"] = source["name"]
         # Preserve server-authorised price overrides, open items, and line comps across normal edits.
@@ -4452,15 +4736,13 @@ def sync_order(
         )
 
     # table status
-    if invoice.invoice_printed == 0:
-        frappe.db.set_value(
-            "URY Table", invoice.restaurant_table, {"occupied": 1, "latest_invoice_time": invoice.creation}
-        )
-        if invoice.custom_merged_tables:
-            for merged_table in invoice.custom_merged_tables.split(","):
-                frappe.db.set_value(
-                    "URY Table", merged_table.strip(), {"occupied": 1, "latest_invoice_time": invoice.creation}
-                )
+    if invoice.restaurant_table and invoice.invoice_printed == 0:
+        from ury.ury.api.table_lifecycle import set_table_state
+
+        set_table_state(invoice.restaurant_table, "Seated", since=invoice.creation)
+        for merged_table in (invoice.custom_merged_tables or "").split(","):
+            if merged_table.strip():
+                set_table_state(merged_table.strip(), "Seated", since=invoice.creation)
 
     return invoice.as_dict()
 
@@ -5039,13 +5321,19 @@ def cancel_order(invoice_id, reason, note=None, is_waste=0, approval_token=None)
                 frappe.PermissionError,
             )
 
+    assert_no_shared_kitchen_void(pos_invoice)
+
     from ury.ury.api.ury_availability import apply_count_delta
 
     apply_count_delta(pos_invoice.branch, pos_invoice.items, [], invoice=pos_invoice)
 
     # Release the full merge cluster, not only the primary table and CSV partners.
     if pos_invoice.restaurant_table:
-        release_merge_cluster_tables(pos_invoice.restaurant_table, commit=False)
+        from ury.ury.api.table_lifecycle import holds_until_settlement, table_policy
+
+        policy = table_policy(pos_invoice.get("branch"))
+        if not holds_until_settlement(pos_invoice.get("branch")) and not cint(policy.get("custom_enable_bussing_state")):
+            release_merge_cluster_tables(pos_invoice.restaurant_table, commit=False)
 
     # KOT cancellation is part of the order-cancellation transaction. Skip only
     # when the check was genuinely unsent (all items held, no sent KOTs).
@@ -6433,10 +6721,16 @@ def _submit_and_release_tables(
         )
 
     if release_invoice.restaurant_table:
-        _free_tables_if_no_open_invoices(
-            release_invoice.restaurant_table,
-            release_invoice.custom_merged_tables,
-        )
+        from ury.ury.api.table_lifecycle import update_table_after_check
+
+        if not update_table_after_check(
+            _get_table_group(release_invoice.restaurant_table, release_invoice.custom_merged_tables),
+            release_invoice.get("branch"), exclude_invoice=release_invoice.name,
+        ):
+            _free_tables_if_no_open_invoices(
+                release_invoice.restaurant_table,
+                release_invoice.custom_merged_tables,
+            )
 
 
 @frappe.whitelist()

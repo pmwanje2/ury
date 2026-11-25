@@ -2,6 +2,7 @@ import json
 from collections import defaultdict
 
 import frappe
+from frappe import _
 from frappe.utils import cint, flt, get_datetime
 
 from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
@@ -16,6 +17,20 @@ from ury.ury.api.ury_production_context import resolve_production_context
 # bare item_code, so the same item on two lines (different comments,
 # courses, or a plain duplicate) could have the wrong line cancelled.
 from ury.ury.api.ury_order_reservation_service import _line_context, _line_key, _line_ref
+
+
+def resolve_line_course(item, item_code, menu):
+    course = item.get("custom_course")
+    if not course:
+        return frappe.db.get_value("URY Menu Item", {"item": item_code, "parent": menu}, "course")
+    if not isinstance(course, str):
+        frappe.throw(_("Select an enabled menu course."))
+    enabled_course = frappe.db.get_value(
+        "URY Menu Course", course, ["name", "disabled"], as_dict=True,
+    )
+    if not enabled_course or cint(enabled_course.disabled):
+        frappe.throw(_("Select an enabled menu course."))
+    return enabled_course.name
 
 
 def _modifier_summary_for_kot_item(item):
@@ -67,6 +82,8 @@ def create_order_items(items):
             # trip through KOT item creation instead of being dropped.
             "reservation_line_key": item.get("reservation_line_key"),
             "custom_parent_line_key": item.get("custom_parent_line_key") or None,
+            "custom_course": item.get("custom_course"),
+            "custom_seat_no": cint(item.get("custom_seat_no")),
             "custom_line_role": item.get("custom_line_role") or "Standard",
             "custom_is_modifier": cint(item.get("custom_is_modifier")),
             "custom_modifier_prefix": item.get("custom_modifier_prefix") or "",
@@ -110,6 +127,8 @@ def _line_keyed_items(items):
                 "qty": 0,
                 "comments": row.get("comment", row.get("comments", "")),
                 "custom_parent_line_key": row.get("custom_parent_line_key") or None,
+                "custom_course": row.get("custom_course"),
+                "custom_seat_no": cint(row.get("custom_seat_no")),
                 "custom_line_role": row.get("custom_line_role") or "Standard",
                 "custom_is_modifier": cint(row.get("custom_is_modifier")),
                 "custom_modifier_prefix": row.get("custom_modifier_prefix") or "",
@@ -191,7 +210,7 @@ def create_kot_doc(
         menu = frappe.db.get_value("URY Restaurant", {"branch": pos_invoice.branch}, "active_menu")
 
     for item in items:
-        course = frappe.db.get_value("URY Menu Item", {"item": item["item_code"],"parent":menu}, "course")
+        course = resolve_line_course(item, item["item_code"], menu)
         kot_doc.append(
             "kot_items",
             {
@@ -200,6 +219,7 @@ def create_kot_doc(
                 "quantity": item["qty"],
                 "comments": item["comments"],
                 "course": course,
+                "seat_no": cint(item.get("custom_seat_no")),
                 "reservation_line_key": item.get("reservation_line_key"),
                 "parent_line_key": item.get("custom_parent_line_key") or None,
                 "is_modifier": cint(item.get("custom_is_modifier")),
@@ -600,7 +620,7 @@ def create_cancel_kot_doc(
     )
     releases = []
 
-    def consume(item, key, note, qty, originals=None):
+    def consume(item, key, note, qty, originals=None, *, course=None, seat=0):
         matched = []
         for release in reversed(releases):
             name, row, remaining = release
@@ -608,7 +628,10 @@ def create_cancel_kot_doc(
                 continue
             if row.item != item or (row.get("comments") or "") != (note or ""):
                 continue
-            if key and row.get("reservation_line_key") and key != row.get("reservation_line_key"):
+            if key and row.get("reservation_line_key"):
+                if key != row.get("reservation_line_key"):
+                    continue
+            elif (course and row.get("course") and course != row.get("course")) or seat != cint(row.get("seat_no")):
                 continue
             take = min(qty, remaining)
             if take > 0:
@@ -624,13 +647,17 @@ def create_cancel_kot_doc(
         if ticket.get("type") in ("Cancelled", "Partially cancelled"):
             originals = {name.strip() for name in (ticket.get("original_kot") or "").split(",")}
             for row in ticket.kot_items:
-                consume(row.item, row.get("reservation_line_key"), row.get("comments"), flt(row.cancelled_qty), originals)
+                consume(row.item, row.get("reservation_line_key"), row.get("comments"),
+                        flt(row.cancelled_qty), originals, course=row.get("course"), seat=cint(row.get("seat_no")))
         else:
             releases.extend([ticket.name, row, flt(row.get("quantity"))] for row in ticket.kot_items)
 
     original_kots = []
     for row in cancel_items:
-        original_kots.extend(consume(row["item_code"], row.get("reservation_line_key"), row.get("comments"), abs(flt(row["qty"]))))
+        original_kots.extend(consume(
+            row["item_code"], row.get("reservation_line_key"), row.get("comments"), abs(flt(row["qty"])),
+            course=row.get("custom_course"), seat=cint(row.get("custom_seat_no")),
+        ))
     set_kots = ",".join(dict.fromkeys(original_kots))
     kot_cancel_doc = frappe.get_doc(
         {
@@ -671,7 +698,9 @@ def create_cancel_kot_doc(
         # branch.
         menu = frappe.db.get_value("URY Restaurant", {"branch": pos_invoice.branch}, "active_menu")
     for cancelItem in cancel_items:
-        course = frappe.db.get_value("URY Menu Item", {"item": cancelItem["item_code"],"parent":menu}, "course")
+        course = cancelItem.get("custom_course") or frappe.db.get_value(
+            "URY Menu Item", {"item": cancelItem["item_code"], "parent": menu}, "course",
+        )
         cancel_line_key = cancelItem.get("reservation_line_key")
         # Resolve the single invoice line this cancellation belongs to.
         # Matching by reservation_line_key when available prevents this
@@ -723,6 +752,7 @@ def create_cancel_kot_doc(
                 "course": course,
                 "reservation_line_key": cancel_line_key,
                 "parent_line_key": cancelItem.get("custom_parent_line_key") or None,
+                "seat_no": cint(cancelItem.get("custom_seat_no")),
                 "is_modifier": cint(cancelItem.get("custom_is_modifier")),
                 "modifier_summary": _modifier_summary_for_kot_item(cancelItem),
             },
@@ -791,6 +821,8 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
                     comments=row.get("comment") or "",
                     reservation_line_key=row.get("reservation_line_key") or row.name,
                     custom_parent_line_key=row.get("custom_parent_line_key") or None,
+                    custom_course=row.get("custom_course"),
+                    custom_seat_no=cint(row.get("custom_seat_no")),
                     custom_line_role=row.get("custom_line_role") or "Standard",
                     custom_is_modifier=cint(row.get("custom_is_modifier")),
                     custom_modifier_prefix=row.get("custom_modifier_prefix") or "",
@@ -811,6 +843,8 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
                 if child:
                     for fld, default in (
                         ("custom_parent_line_key", None),
+                        ("custom_course", None),
+                        ("custom_seat_no", 0),
                         ("custom_line_role", "Standard"),
                         ("custom_is_modifier", 0),
                         ("custom_modifier_prefix", ""),

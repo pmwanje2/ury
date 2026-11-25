@@ -14,14 +14,14 @@ import SettledBills from './SettledBills';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import PaymentDialog from '../components/PaymentDialog';
 import DiscountPanel from '../components/DiscountPanel';
-import BillSplitDialog from '../components/BillSplitDialog';
+import BillSplitDialog, { type MultiSplitRequest } from '../components/BillSplitDialog';
 import BillMergeDialog from '../components/BillMergeDialog';
 import OrderActionsMenu from '../components/OrderActionsMenu';
 import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
 import { printBillCopy, printOrder } from '../lib/print';
 import { call, getSessionUser } from '@ury/core';
-import { splitBill, cancelOrder, reprintKot } from '../lib/order-api';
+import { splitBill, splitCheckMulti, cancelOrder, reprintKot } from '../lib/order-api';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
 import CheckPrivilegedDialog, { type CheckPrivilegedTab } from '../components/CheckPrivilegedDialog';
 import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
@@ -221,6 +221,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     );
   };
   const navigate = useNavigate();
+  const location = useLocation();
   const mounted = useRef(false);
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
@@ -298,13 +299,21 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     }
   }, [selectedOrder?.name]);
 
-  const canSplitBill = useMemo(() => {
-    if (!selectedOrder || selectedOrderItems.length === 0) return false;
+  useEffect(() => {
+    const check = (location.state as { floorPaymentCheck?: POSInvoice } | null)?.floorPaymentCheck;
+    if (!check || !owner) return;
+    navigate(location.pathname, { replace: true, state: null });
+    if (!check.invoice_printed || (check.branch && check.branch !== posStore.posProfile?.branch)) return;
+    const branch = check.branch || posStore.posProfile?.branch;
+    const payable = { ...check, branch };
+    void selectOrder(payable).then((loaded) => { if (loaded) setShowPaymentDialog(true); });
+  }, [location.pathname, location.state, navigate, owner, posStore.posProfile?.branch, selectOrder]);
 
-    const hasSplittableItems =
-      selectedOrderItems.length >= 2 ||
-      selectedOrderItems.some((item) => item.qty > 1);
-    if (!hasSplittableItems) return false;
+  const canSplitBill = useMemo(() => {
+    if (!selectedOrder || !selectedOrderItems.length) return false;
+    if (selectedOrderItems.length === 1 && !selectedOrderItems.some(
+      (item) => item.qty > 1 || item.custom_is_shareable === 1,
+    )) return false;
 
     // Tab label (Unbilled/Draft) is a UI filter; doc status is always "Draft" for open bills.
     // Use invoice_printed to distinguish pre-print vs post-print split eligibility.
@@ -585,6 +594,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         item_name: item.item_name,
         item_image: null,
         course: item.custom_course || '',
+        seatNo: item.custom_seat_no || 0,
+        courseOverride: item.custom_course || undefined,
         invoiceItemName: item.name,
         ury_held: item.ury_held || 0,
         comment: item.comment || '',
@@ -798,6 +809,33 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       }
       showToast.error(overrideActionErrorMessage(err));
     }
+  }
+
+  async function handleSplitChecks(payload: MultiSplitRequest, approval?: ManagerApprovalResult) {
+    if (!selectedOrder) return;
+    const source = selectedOrder.name;
+    let result;
+    try {
+      result = await splitCheckMulti(source, payload, approval && {
+        approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note,
+      });
+    } catch (error) {
+      const challenge = extractAuthChallenge(error);
+      if (!approval?.token && challenge?.claim && (isAuthRequiredError(error) || isReasonRequiredError(error))) {
+        setPendingOrderApproval({
+          privilege: 'split_check',
+          title: t('privileged_actions.split_check'),
+          summaryLines: [source],
+          referenceName: source,
+          claim: challenge.claim,
+          retry: (response) => handleSplitChecks(payload, response),
+        });
+        return;
+      }
+      throw error;
+    }
+    await fetchOrders();
+    showToast.success(t('bill_split.split_success', { invoice: result.new_invoices.join(', ') }));
   }
 
   async function handleSplitBill(
@@ -1782,6 +1820,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               : null
           }
           onConfirm={handleSplitBill}
+          onConfirmMulti={handleSplitChecks}
         />
       )}
       {pendingVoidApproval && (

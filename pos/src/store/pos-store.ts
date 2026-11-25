@@ -72,6 +72,8 @@ export type CustomerSource = 'auto' | 'manual' | 'order';
 
 export interface OrderItem extends MenuItem {
   quantity: number;
+  seatNo?: number;
+  courseOverride?: string;
   selectedVariant?: { id: string; name: string; price: number };
   selectedAddons?: { id: string; name: string; price: number }[];
   uniqueId?: string;
@@ -181,6 +183,7 @@ interface POSState {
   categories: Category[];
   categoriesDerived: boolean;
   activeOrders: OrderItem[];
+  activeSeat: number;
   selectedCategory: string;
   selectedTable: string | null;
   selectedRoom: string | null;
@@ -244,6 +247,8 @@ interface POSStore extends POSState {
   fetchCategories: () => Promise<void>;
   fetchPaymentModes: () => Promise<void>;
   addToOrder: (item: OrderItem) => Promise<void>;
+  setActiveSeat: (seat: number) => void;
+  setLinePlacement: (id: string, placement: Pick<OrderItem, 'seatNo' | 'courseOverride'>) => void;
   addConfiguredItems: (parent: OrderItem, children: OrderItem[], replaceParentUniqueId?: string) => Promise<void>;
   removeFromOrder: (uniqueId: string) => Promise<void>;
   updateQuantity: (uniqueId: string, quantity: number) => Promise<void>;
@@ -311,9 +316,11 @@ const generateUniqueId = (item: OrderItem): string => {
   ) {
     return item.uniqueId || item.reservationLineKey || `${item.id}-${uuidv4()}`;
   }
+  const placement = item.seatNo || item.courseOverride
+    ? `-seat-${item.seatNo || 0}-course-${item.courseOverride || ''}` : '';
   const variantId = item.selectedVariant?.id || 'default';
   const addonIds = item.selectedAddons?.map(addon => addon.id).sort().join('-') || 'no-addons';
-  return `${item.id}-${variantId}-${addonIds}`;
+  return `${item.id}-${variantId}-${addonIds}${placement}`;
 };
 
 function parseJsonArray<T>(raw?: string | null): T[] {
@@ -337,6 +344,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   categories: [],
   categoriesDerived: false,
   activeOrders: [],
+  activeSeat: 0,
   selectedCategory: '',
   selectedTable: null,
   selectedRoom: null,
@@ -446,6 +454,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     set({
       requiresOutletSelection: false,
       activeOrders: [],
+      activeSeat: 0,
       selectedTable: null,
       selectedRoom: null,
       selectedAggregator: null,
@@ -714,8 +723,21 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     set({ cartId: uuidv4() });
   },
 
+  setActiveSeat: (seat) => set({ activeSeat: seat }),
+  setLinePlacement: (id, placement) => set((state) => {
+    const parent = state.activeOrders.find((line) => line.uniqueId === id);
+    if (!parent || parent.invoiceItemName) return state;
+    return { activeOrders: state.activeOrders.map((line) =>
+      line === parent || (!!parent.reservationLineKey && line.parentLineKey === parent.reservationLineKey)
+        ? { ...line, ...placement } : line,
+    ) };
+  }),
+
   addToOrder: async (item: OrderItem) => {
     try {
+      if (!item.invoiceItemName && get().selectedOrderType === 'Dine In') {
+        item = { ...item, seatNo: item.seatNo ?? get().activeSeat };
+      }
       if (!get().validateQuantity(item.quantity)) {
         throw new CartError(`Quantity must be between ${MIN_QUANTITY} and ${MAX_QUANTITY}`);
       }
@@ -770,6 +792,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       let parentKey = parent.reservationLineKey || parent.uniqueId || uuidv4();
       let parentUniqueId = parent.uniqueId || parentKey;
       let parentInvoiceItemName = parent.invoiceItemName;
+      let seatNo = parent.seatNo ?? (get().selectedOrderType === 'Dine In' ? get().activeSeat : 0);
+      let courseOverride = parent.courseOverride;
       let oldChildren: OrderItem[] = [];
       let baseOrders = current;
       let insertAt = current.length;
@@ -779,6 +803,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         if (oldIdx !== -1) {
           insertAt = oldIdx;
           const oldParent = current[oldIdx];
+          seatNo = oldParent.seatNo ?? seatNo;
+          courseOverride = oldParent.courseOverride ?? courseOverride;
           const oldKey = oldParent.reservationLineKey || oldParent.uniqueId;
           parentKey = oldKey || parentKey;
           parentUniqueId = oldParent.uniqueId || parentKey;
@@ -794,6 +820,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
       const normalizedParent: OrderItem = {
         ...parent,
+        seatNo,
+        courseOverride,
         uniqueId: parentUniqueId,
         reservationLineKey: parentKey,
         ...(parentInvoiceItemName ? { invoiceItemName: parentInvoiceItemName } : {}),
@@ -823,6 +851,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         const childInvoiceItemName = matchedPrev?.invoiceItemName ?? child.invoiceItemName;
         return {
           ...child,
+          seatNo,
+          courseOverride,
           uniqueId: childUniqueId,
           reservationLineKey: childResKey,
           ...(childInvoiceItemName ? { invoiceItemName: childInvoiceItemName } : {}),
@@ -918,7 +948,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     set({ selectedCustomer: resolveDefaultCustomer(selectedOrderType, posProfile) });
   },
   setSelectedTable: (table: string | null, room: string | null, doNotLoadOrder: boolean = false) => {
-    set({ selectedTable: table, selectedRoom: room });
+    set((state) => ({ selectedTable: table, selectedRoom: room, activeSeat: state.selectedTable === table ? state.activeSeat : 0 }));
     if (table ) {
       if (!doNotLoadOrder) 
         get().loadTableOrder(table);
@@ -941,6 +971,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     set({ 
       activeOrders: [],
       selectedOrderType: type,
+      activeSeat: 0,
       isUpdatingOrder: false,
       editCustomer: null,
       orderId: null,
@@ -1092,6 +1123,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
             item_name: item.item_name,
             item_image: null,
             course: item.custom_course || '',
+            seatNo: item.custom_seat_no || 0,
+            courseOverride: item.custom_course || undefined,
             invoiceItemName: item.name,
             ury_held: item.ury_held || 0,
             description: item.description || '',

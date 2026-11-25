@@ -186,6 +186,11 @@ def reduce_order_item_qty(
 		)
 
 	item_code = item_row.item_code
+	if item_row.get("custom_kitchen_anchor"):
+		from ury.ury.doctype.ury_order.ury_order import assert_no_shared_kitchen_void
+
+		assert_no_shared_kitchen_void(pos_invoice)
+
 	current_qty = item_row.qty
 
 	try:

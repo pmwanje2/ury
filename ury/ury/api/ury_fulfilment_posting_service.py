@@ -1235,7 +1235,15 @@ def post_intents_for_kot(kot, actor=None):
 def post_intents_for_pos_invoice(invoice, actor=None):
 	"""Create and process posting intents for all KOTs linked to this POS Invoice."""
 	inv_name = invoice if isinstance(invoice, str) else invoice.name
-	kots = frappe.get_all("URY KOT", filters={"invoice": inv_name, "docstatus": ["!=", 2]}, pluck="name")
+	anchors = frappe.get_all(
+		"POS Invoice Item",
+		filters={"parent": inv_name, "parenttype": "POS Invoice", "custom_kitchen_anchor": ["is", "set"]},
+		pluck="custom_kitchen_anchor",
+	)
+	kots = frappe.get_all(
+		"URY KOT", filters={"invoice": ["in", sorted({inv_name, *anchors})], "docstatus": ["!=", 2]},
+		pluck="name",
+	)
 
 	merged_invoice = frappe.db.get_value("POS Invoice", inv_name, "custom_merged_pos_invoice")
 	if merged_invoice:

@@ -8,6 +8,8 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "custom_dirty_since",
+  "custom_table_state",
   "table_info_tab",
   "no_of_seats",
   "minimum_seating",
@@ -30,6 +32,20 @@
   "latest_invoice_time"
  ],
  "fields": [
+  {
+   "fieldname": "custom_dirty_since",
+   "fieldtype": "Datetime",
+   "label": "Dirty Since",
+   "read_only": 1
+  },
+  {
+   "fieldname": "custom_table_state",
+   "fieldtype": "Select",
+   "label": "Table State",
+   "default": "Available",
+   "options": "Available\nSeated\nCheck Printed\nDirty",
+   "read_only": 1
+  },
   {
    "fieldname": "table_info_tab",
    "fieldtype": "Tab Break",

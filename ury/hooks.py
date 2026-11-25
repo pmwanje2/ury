@@ -285,6 +285,7 @@ doc_events = {
     "POS Invoice": {
         "before_insert": "ury.ury.hooks.ury_pos_invoice.before_insert",
         "before_validate": [
+            "ury.ury.doctype.ury_order.ury_order.ensure_share_quantity_precision",
             "ury.ury.hooks.ury_pos_invoice.before_validate",
             # Simphony tender rules: non-cash over-tender is refused or becomes a
             # charged tip; tips are a Tips Payable line. Runs before the native
@@ -302,9 +303,13 @@ doc_events = {
             "ury.ury.hooks.ury_pos_invoice.on_submit",
             "ury.ury.api.ury_feature_flags.maybe_wire_fulfilment_on_submit",
             "ury.ury.api.table_reservation.complete_seated_reservation_on_submit",
+            "ury.ury.api.table_lifecycle.on_check_closed",
         ],
         "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
-        "on_discard": "ury.ury.api.table_reservation.release_reservation_check_binding",
+        "on_discard": [
+            "ury.ury.api.table_reservation.release_reservation_check_binding",
+            "ury.ury.api.table_lifecycle.on_check_closed",
+        ],
         "before_cancel": "ury.ury.hooks.ury_pos_invoice.before_cancel",
         "on_cancel": [
             "ury.ury.hooks.ury_pos_invoice.on_trash",
@@ -319,6 +324,7 @@ doc_events = {
     "Mode of Payment": {"validate": "ury.ury.hooks.ury_pos_tender.validate_mode_of_payment_halo"},
     "Branch": {"validate": "ury.ury.api.table_reservation.validate_branch_reservation_settings"},
     "Sales Invoice": {
+        "before_validate": "ury.ury.doctype.ury_order.ury_order.ensure_share_quantity_precision",
         "validate": "ury.ury.hooks.ury_sales_invoice.validate",
         "before_insert": "ury.ury.hooks.ury_sales_invoice.before_insert",
         "on_update":"ury.ury.hooks.ury_sales_invoice.on_update",

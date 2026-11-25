@@ -14,7 +14,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from ury.ury.api.ury_availability import _resolve_production_config, get_reservation_availability as get_item_availability
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
@@ -82,6 +82,9 @@ def _line_context(row):
 		value = row.get(fieldname)
 		if value not in (None, ""):
 			context[fieldname] = value
+	seat = cint(row.get("custom_seat_no") or row.get("seat_no"))
+	if seat:
+		context["custom_seat_no"] = seat
 	return context
 
 

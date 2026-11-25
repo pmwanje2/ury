@@ -49,7 +49,12 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   availabilityMap?: MenuAvailability;
 }) => {
   const { 
-    activeOrders, 
+    activeOrders,
+    activeSeat = 0,
+    categories = [],
+    categoriesDerived,
+    setActiveSeat,
+    setLinePlacement,
     removeFromOrder, 
     updateQuantity, 
     clearOrder, 
@@ -78,6 +83,9 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     lastModifiedTime
   } = usePOSStore();
   const activeCurrency = posProfile?.currency || storeCurrency;
+  const [extraSeatLimit, setExtraSeatLimit] = useState(0);
+  const seatLimit = Math.max(noOfPax || 0, 4, activeSeat, extraSeatLimit, ...activeOrders.map((line) => line.seatNo || 0));
+  const seats = Array.from({ length: Math.min(99, seatLimit) + 1 }, (_, index) => index);
   const user = useRootStore((state: RootState) => state.user);
   const outbox = useOutbox(posProfile, user);
   const [offlineTarget, setOfflineTarget] = useState('');
@@ -526,6 +534,8 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
           // a 1 -> 2 bump cancels the original KOT and re-fires a full one
           // instead of raising a +1 delta (B02b).
           reservation_line_key: item.reservationLineKey || item.uniqueId,
+          ...(item.seatNo ? { custom_seat_no: item.seatNo } : {}),
+          ...(item.courseOverride ? { custom_course: item.courseOverride } : {}),
           ...(item.parentLineKey ? { custom_parent_line_key: item.parentLineKey } : {}),
           ...(item.lineRole ? { custom_line_role: item.lineRole } : {}),
           ...(item.isModifier ? { custom_is_modifier: 1 } : {}),
@@ -648,6 +658,20 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
             </Button>
           </div>
         </div>
+        {selectedOrderType === DINE_IN && setActiveSeat && (
+          <div className="mt-3 flex flex-wrap items-center gap-1" role="group" aria-label={t('floor.seat')}>
+            {seats.map((seat) => (
+              <Button key={seat} type="button" variant={activeSeat === seat ? 'default' : 'outline'}
+                aria-pressed={activeSeat === seat} disabled={isInteractionDisabled} className="min-h-11 min-w-11 px-2"
+                onClick={() => setActiveSeat(seat)}>
+                {seat ? t('floor.seat_short', { seat }) : t('floor.table_shared')}
+              </Button>
+            ))}
+            <Button type="button" variant="outline" className="min-h-11 min-w-11 px-2" aria-label={t('floor.add_seat')}
+              disabled={isInteractionDisabled || seatLimit >= 99}
+              onClick={() => { setExtraSeatLimit(seatLimit + 1); setActiveSeat(seatLimit + 1); }}>+</Button>
+          </div>
+        )}
       </div>
       
       {orderLoading ? (
@@ -745,6 +769,24 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                               {ov.label}
                             </span>
                           ))}
+                        </div>
+                      )}
+                      {!item.invoiceItemName && setLinePlacement && (
+                        <div className="my-1 flex flex-wrap gap-1">
+                          {selectedOrderType === DINE_IN && <select
+                            aria-label={t('floor.seat')} className="min-h-11 max-w-full rounded-md border bg-background px-2 text-xs text-foreground"
+                            value={item.seatNo || 0} disabled={isInteractionDisabled}
+                            onChange={(event) => setLinePlacement(item.uniqueId!, { seatNo: Number(event.target.value) })}>
+                            {seats.map((seat) => <option key={seat} value={seat}>
+                              {seat ? t('floor.seat_short', { seat }) : t('floor.table_shared')}</option>)}
+                          </select>}
+                          {!categoriesDerived && categories.length > 0 && <select
+                            aria-label={t('floor.course')} className="min-h-11 max-w-full rounded-md border bg-background px-2 text-xs text-foreground"
+                            value={item.courseOverride || ''} disabled={isInteractionDisabled}
+                            onChange={(event) => setLinePlacement(item.uniqueId!, { courseOverride: event.target.value || undefined })}>
+                            <option value="">{t('floor.course')}{item.course ? ` · ${item.course}` : ''}</option>
+                            {categories.map((course) => <option key={course.name} value={course.name}>{course.label}</option>)}
+                          </select>}
                         </div>
                       )}
                       <p className="flex items-center gap-1.5 text-gray-600 text-sm tabular-nums">

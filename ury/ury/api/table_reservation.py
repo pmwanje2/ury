@@ -11,6 +11,9 @@ from frappe.utils import (
     get_time,
 )
 from datetime import datetime, timedelta, time
+from math import ceil
+
+from ury.ury.api.table_lifecycle import assert_outlet_access
 from ury.ury.report.average_table_time.average_table_time import (
     get_branch_last_day_avg_time,
     get_branch_last_week_avg_time,
@@ -218,7 +221,11 @@ def get_branch_reservation_settings(branch):
             ],
             as_dict=True,
         ) or {}
-        return _reservation_settings(branch_doc, branch)
+        settings = _reservation_settings(branch_doc, branch)
+        from ury.ury.api.table_lifecycle import table_policy
+
+        settings["block_dirty_table_seating"] = cint(table_policy(branch).get("custom_block_dirty_table_seating"))
+        return settings
     except Exception as e:
         frappe.log_error(f"Error in get_branch_reservation_settings: {str(e)}", "Reservation Settings Error")
         return _reservation_settings({})
@@ -255,6 +262,7 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
         SELECT name, reserved_at, branch
         FROM `tabURY Table Reservation`
         WHERE reserved_table = %s
+          AND COALESCE(is_waitlist, 0) = 0
           AND status IN ('Confirmed', 'Active', 'Requested', 'Seated')
     """
     params = [table]
@@ -409,6 +417,7 @@ def check_table_reservation(table):
             filters={
                 "reserved_table": table,
                 "status": ["in", ["Confirmed", "Active"]],
+                "is_waitlist": 0,
             },
             fields=[
                 "name",
@@ -1106,7 +1115,7 @@ def open_checks_on(tables):
     if not tables:
         return []
     fields = ["name", "restaurant_table", "custom_merged_tables", "custom_split_group",
-        "custom_split_from", "creation"]
+        "custom_split_from", "creation", "invoice_printed"]
     checks = {check.name: check for check in frappe.db.get_all(
         "POS Invoice", filters={"docstatus": 0, "restaurant_table": ["in", sorted(tables)]}, fields=fields)}
     for table in sorted(tables):
@@ -1223,7 +1232,8 @@ def sync_branch_table_occupancy(branch=None):
                 table_name,
                 {
                     "occupied": 0,
-                    "latest_invoice_time": None
+                    "latest_invoice_time": None,
+                    "custom_table_state": "Available",
                 },
                 update_modified=False
             )
@@ -1283,6 +1293,7 @@ def get_active_reservations(branch=None, date=None):
                 cancel_reason, pos_invoice
             FROM `tabURY Table Reservation`
             WHERE branch = %s
+              AND COALESCE(is_waitlist, 0) = 0
               {date_clause}
             ORDER BY reserved_at ASC
         """
@@ -1424,7 +1435,8 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
             SELECT name, reserved_table, reserved_at, branch
             FROM `tabURY Table Reservation`
             WHERE reserved_table IN ({placeholders})
-              AND status IN ('Confirmed', 'Active', 'Requested', 'Seated')
+              AND COALESCE(is_waitlist, 0) = 0
+          AND status IN ('Confirmed', 'Active', 'Requested', 'Seated')
         """
         res_params = list(table_names)
         if exclude_reservation:
@@ -1576,3 +1588,161 @@ def complete_seated_reservation_on_submit(doc, method=None):
             reservation.save(ignore_permissions=True)
         except Exception:
             frappe.log_error(frappe.get_traceback(), "Reservation completion on bill close")
+
+
+_WAITLIST_OPEN = ("Waiting", "Waitlist Notified")
+
+
+def _waitlist_access(branch, perm):
+    assert_outlet_access(branch)
+    if not frappe.has_permission("URY Table Reservation", perm):
+        frappe.throw(_("Not permitted to manage the wait list."), frappe.PermissionError)
+    ensure_reservations_enabled(branch)
+
+
+def _validate_waitlist_room(branch, requested_room):
+    if requested_room and frappe.db.get_value("URY Room", requested_room, "branch") != branch:
+        frappe.throw(_("The requested room does not belong to this outlet."), frappe.PermissionError)
+
+
+def _waitlist_integer(value, minimum):
+    result = cint(value)
+    try:
+        valid = float(value) == result and result >= minimum
+    except (ValueError, TypeError, OverflowError):
+        valid = False
+    if not valid:
+        frappe.throw(_("Enter a valid party size or wait time."))
+    return result
+
+
+def _waitlist_filters(branch):
+    return {"branch": branch, "is_waitlist": 1, "status": ["in", _WAITLIST_OPEN]}
+
+
+@frappe.whitelist(methods=["GET"])
+def estimate_wait_time(branch, no_of_pax, requested_room=None):
+    _waitlist_access(branch, "read")
+    _validate_waitlist_room(branch, requested_room)
+    pax = _waitlist_integer(no_of_pax, 1)
+    settings = get_branch_reservation_settings(branch)
+    duration = reservation_stay_minutes(settings)
+    now = now_datetime()
+    filters = {"branch": branch, "is_take_away": 0}
+    if requested_room:
+        filters["restaurant_room"] = requested_room
+    tables = frappe.get_list(
+        "URY Table", filters=filters,
+        fields=["name", "occupied", "custom_table_state", "latest_invoice_time",
+                "no_of_seats", "minimum_seating"], limit_page_length=0,
+    )
+    fits = [table for table in tables if _party_fits(table, pax)]
+    if not fits:
+        return {"quoted_wait_minutes": None}
+
+    def minutes_until_ready(table):
+        slot = check_table_reservation(table.name)
+        if slot and slot.get("is_lock_window_active"):
+            return max(0, ceil((parse_to_datetime(slot.reserved_at, now) - now).total_seconds() / 60) + duration)
+        if table.custom_table_state == "Dirty":
+            return min(10, duration)
+        if not table.occupied:
+            return 0
+        start = parse_to_datetime(table.latest_invoice_time, now)
+        return max(1, ceil(duration - (now - start).total_seconds() / 60))
+
+    candidates = sorted(minutes_until_ready(table) for table in fits)
+    waiting = frappe.db.count("URY Table Reservation", _waitlist_filters(branch))
+    waves, next_table = divmod(waiting, len(candidates))
+    return {"quoted_wait_minutes": candidates[next_table] + duration * waves}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_walkin_waitlist(branch):
+    _waitlist_access(branch, "read")
+    rows = frappe.get_list(
+        "URY Table Reservation", filters=_waitlist_filters(branch),
+        fields=["name", "customer_name", "customer_phone", "no_of_pax", "requested_room",
+                "quoted_wait_minutes", "joined_at", "notified_at", "status"],
+        order_by="joined_at asc, name asc", limit_page_length=0,
+    )
+    now = now_datetime()
+    for row in rows:
+        row["elapsed_minutes"] = max(0, int((now - parse_to_datetime(row.joined_at, now)).total_seconds() / 60))
+    return rows
+
+
+@frappe.whitelist(methods=["POST"])
+def add_walkin_waitlist(branch, customer_name, customer_phone, no_of_pax, requested_room=None,
+                        quoted_wait_minutes=None, customer=None):
+    _waitlist_access(branch, "create")
+    _validate_waitlist_room(branch, requested_room)
+    pax = _waitlist_integer(no_of_pax, 1)
+    quoted = estimate_wait_time(branch, pax, requested_room)["quoted_wait_minutes"] if quoted_wait_minutes is None else quoted_wait_minutes
+    quoted = _waitlist_integer(0 if quoted is None else quoted, 0)
+    name, phone = (customer_name or "").strip(), (customer_phone or "").strip()
+    if not name or not phone:
+        frappe.throw(_("Enter the party name and phone number."))
+    joined = now_datetime()
+    party = frappe.get_doc(dict(
+        doctype="URY Table Reservation", branch=branch, customer=customer, customer_name=name,
+        customer_phone=phone, no_of_pax=pax, requested_room=requested_room,
+        is_waitlist=1, status="Waiting", quoted_wait_minutes=quoted, joined_at=joined, reserved_at=joined,
+    ))
+    party.flags.ury_waitlist_action = True
+    party.insert()
+    return {"name": party.name, "status": party.status, "quoted_wait_minutes": quoted}
+
+
+def _lock_waitlist_party(name):
+    party = frappe.get_doc("URY Table Reservation", name, for_update=True)
+    # Scope before examining the party or locking a table in another outlet.
+    assert_outlet_access(party.branch)
+    if not party.is_waitlist or party.status not in _WAITLIST_OPEN:
+        frappe.throw(_("This party is no longer on the wait list."))
+    return party
+
+
+@frappe.whitelist(methods=["POST"])
+def notify_waitlist_party(reservation):
+    party = _lock_waitlist_party(reservation)
+    party.check_permission("write")
+    ensure_reservations_enabled(party.branch)
+    if party.status == "Waiting":
+        party.status = "Waitlist Notified"
+        party.notified_at = now_datetime()
+        party.flags.ury_waitlist_action = True
+        party.save()
+    return {"name": party.name, "status": party.status, "notified_at": party.notified_at}
+
+
+@frappe.whitelist(methods=["POST"])
+def seat_waitlist_party(reservation, table):
+    party = _lock_waitlist_party(reservation)
+    target = frappe.get_doc("URY Table", table, for_update=True)
+    if target.branch != party.branch:
+        frappe.throw(_("The table does not belong to this outlet."), frappe.PermissionError)
+    if target.custom_table_state == "Dirty":
+        # Translate in this endpoint so callers receive the same coded error.
+        from ury.brand import coded_message
+
+        frappe.throw(coded_message("TABLE-DIRTY-NEEDS-BUSSING", _("Mark this table clean before seating.")))
+    party.check_permission("write")
+    target.check_permission("read")
+    ensure_reservations_enabled(party.branch)
+    if (target.custom_table_state not in (None, "Available") or cint(target.occupied)
+            or cint(target.is_take_away) or open_checks_on([table])):
+        frappe.throw(_("Select an available table."))
+    if party.requested_room and party.requested_room != target.restaurant_room:
+        frappe.throw(_("Select a table in the requested room."))
+    if not _party_fits(target, party.no_of_pax):
+        frappe.throw(_("This table does not fit the party."))
+    active = check_table_reservation(table)
+    if active and active.get("is_lock_window_active"):
+        frappe.throw(_("This table is held for a reservation."))
+    party.reserved_table = table
+    party.status = "Seated"
+    party.reserved_at = now_datetime()
+    party.flags.ury_waitlist_action = True
+    party.save()
+    return {"name": party.name, "status": party.status, "reserved_table": table}

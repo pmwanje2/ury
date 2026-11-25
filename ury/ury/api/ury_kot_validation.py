@@ -59,7 +59,7 @@ def process_invoice(invoice):
 
             # Check if items in the invoice belong to production groups
             for i in posInvoice.items:
-                if cint(i.get("ury_held")) or not i.qty:
+                if cint(i.get("ury_held")) or i.get("custom_kitchen_anchor") or not i.qty:
                     continue
                 item = frappe.get_doc("Item", i.item_code)
                 if item.item_group in productionItemGroups:
@@ -118,7 +118,8 @@ def create_kot(
         kotdoc.append(
             "kot_items",
             {"item": pr.item_code, "item_name": pr.item_name, "quantity": pr.qty,
-             "comments": pr.get("comment"),
+             "comments": pr.get("comment"), "course": pr.get("custom_course"),
+             "seat_no": cint(pr.get("custom_seat_no")),
              "reservation_line_key": _line_key(pr.item_code, pr, 1) if pr.get("reservation_line_key") else None},
         )
 
