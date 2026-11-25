@@ -259,7 +259,20 @@ def reduce_order_item_qty(
 
 	# Guard against reducing a partially paid open check below already-received tender.
 	received_paid = received_tender_total(pos_invoice)
-	if received_paid > 0:
+	# Plan the surviving lines and charges once, before tender validation or mutation.
+	remaining_balance = None
+	if pos_invoice.get("custom_split_balance"):
+		from ury.ury.doctype.ury_order.ury_order import _split_balance_precisions
+		from ury.ury_pos.split_balances import allocate_split_balances, set_split_balance
+
+		removed = {item_row.name: -delta}
+		removed.update({child.name: before - after for child, before, after in child_updates})
+		remaining_balance = allocate_split_balances(
+			pos_invoice, removed, *_split_balance_precisions(pos_invoice, pos_invoice.company)
+		)[0]
+		header = remaining_balance["header"]
+		projected_total = header["rounded_total"] if pos_invoice.get("rounded_total") else header["grand_total"]
+	elif received_paid > 0:
 		rate = flt(item_row.get("rate"))
 		current_total = flt(pos_invoice.get("rounded_total") or pos_invoice.get("grand_total"))
 		if current_total <= 0:
@@ -269,13 +282,13 @@ def reduce_order_item_qty(
 			for child, child_prev_qty, child_new_qty in child_updates
 		)
 		projected_total = current_total + (delta * rate) - child_reduction_amount
-		if projected_total < received_paid - 1e-6:
-			raise QtyReductionError(
-				CODE_VOID_PARTIAL_PAYMENT,
-				_(
-					"Cannot reduce items below payments already received on this check. [{0}]"
-				).format(CODE_VOID_PARTIAL_PAYMENT),
-			)
+	if received_paid > 0 and projected_total < received_paid - 1e-6:
+		raise QtyReductionError(
+			CODE_VOID_PARTIAL_PAYMENT,
+			_(
+				"Cannot reduce items below payments already received on this check. [{0}]"
+			).format(CODE_VOID_PARTIAL_PAYMENT),
+		)
 
 	pos_profile_id = pos_invoice.pos_profile
 	kot_naming_series = pos_profile.custom_kot_naming_series
@@ -341,25 +354,6 @@ def reduce_order_item_qty(
 			fallback_privileges=fallback_privs,
 			alt_claim=b2a_compat_claim,
 		)
-
-	# A held-line cancellation removes precisely its share of the existing
-	# split bill. Keep every surviving line, fee and stock allocation frozen.
-	remaining_balance = None
-	if held and pos_invoice.get("custom_split_balance"):
-		from ury.ury.doctype.ury_order.ury_order import _split_balance_precisions
-		from ury.ury_pos.split_balances import allocate_split_balances, set_split_balance
-
-		removed = {item_row.name: -delta}
-		removed.update({child.name: before - after for child, before, after in child_updates})
-		remaining_balance = allocate_split_balances(
-			pos_invoice, removed, *_split_balance_precisions(pos_invoice, pos_invoice.company)
-		)[0]
-		header = remaining_balance["header"]
-		if received_paid > 0 and received_paid > (header.get("rounded_total") or header["grand_total"]):
-			raise QtyReductionError(
-				CODE_VOID_PARTIAL_PAYMENT,
-				_("Cannot reduce items below payments already received on this check. [{0}]").format(CODE_VOID_PARTIAL_PAYMENT),
-			)
 
 	from ury.ury.api.ury_availability import apply_count_delta
 
