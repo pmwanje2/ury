@@ -1105,6 +1105,138 @@ class TestOverrideContract(unittest.TestCase):
         self.assertEqual(cleared, {"ok": True, "user": "manager2@example.test", "has_pin": False})
         self.assertIsNone(self.store.get_auth_hash("POS Override PIN", "manager2@example.test", "pin_hash"))
 
+    def install_external_pin_hooks(self, manager=None):
+        self.hooks["pos_override_pin_verifier"] = "custom_app.pin.verify"
+        self.hooks["__attr__:custom_app.pin.verify"] = MagicMock()
+        if manager is not None:
+            self.hooks["pos_override_pin_manager"] = ["custom_app.old", "", None, "custom_app.pin.manage"]
+            self.hooks["__attr__:custom_app.pin.manage"] = manager
+
+    def test_external_pin_status_reports_enrollment_reset_and_lock(self):
+        user = "manager@example.test"
+        self.frappe.session.user = user
+        manager = MagicMock(return_value={"has_pin": 0, "must_reset": 1, "locked": 1, "secret": "2468"})
+        self.install_external_pin_hooks(manager)
+
+        self.assertEqual(self.api().my_pin_status(), {
+            "has_pin": False, "must_reset": True, "locked": True,
+            "external_verifier": True, "can_manage_here": True,
+        })
+        manager.assert_called_once_with("status", user=user)
+
+    def test_standalone_pin_status_reports_local_enrollment(self):
+        self.frappe.session.user = "manager@example.test"
+        self.enroll(self.frappe.session.user, "2468")
+        self.assertEqual(self.api().my_pin_status(), {
+            "has_pin": True, "must_reset": False, "locked": False,
+            "external_verifier": False, "can_manage_here": True,
+        })
+
+    def test_external_pin_set_checks_password_and_format_then_writes_only_to_manager(self):
+        api = self.api()
+        user = "manager@example.test"
+        self.frappe.session.user = user
+        manager = MagicMock(return_value={"ok": True})
+        self.install_external_pin_hooks(manager)
+
+        self.frappe.form_dict = {"password": "wrong", "pin": "2468"}
+        self.refused("POS-AUTH-PASSWORD", Invalid, lambda: api.set_my_pin("wrong", "2468"))
+        self.assertEqual(self.frappe.form_dict, {})
+        with self.assertRaisesRegex(Invalid, "4 to 8 digits"):
+            api.set_my_pin("secret-pass-1", "bad")
+        manager.assert_not_called()
+
+        self.assertEqual(api.set_my_pin("secret-pass-1", "2468"), {"ok": True, "has_pin": True})
+        manager.assert_called_once_with("set", user=user, pin="2468")
+        self.assertIsNone(self.store.get_auth_hash("POS Override PIN", user, "pin_hash"))
+        self.assertEqual(self.store.committed_logs[-1].outcome, "PIN Reset")
+        self.assertEqual(self.store.committed_logs[-1].approver, user)
+        self.audit.assert_called_once()
+        self.assertNotIn("2468", str(self.audit.call_args))
+
+    def test_external_pin_set_keeps_db_password_lockout(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        manager = MagicMock()
+        self.install_external_pin_hooks(manager)
+        for _ in range(4):
+            self.refused("POS-AUTH-PASSWORD", Invalid, lambda: api.set_my_pin("wrong", "2468"))
+            self.frappe.db.rollback()
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.set_my_pin("wrong", "2468"))
+        self.frappe.db.rollback()
+        self.counts.clear()
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.set_my_pin("secret-pass-1", "2468"))
+        manager.assert_not_called()
+
+    def test_external_pin_clear_enforces_outlet_permission_and_delegates(self):
+        api = self.api()
+        caller = "manager@example.test"
+        target = "manager2@example.test"
+        self.frappe.session.user = caller
+        manager = MagicMock(return_value={"ok": True})
+        self.install_external_pin_hooks(manager)
+
+        self.frappe.has_permission.return_value = False
+        with self.assertRaises(Denied):
+            api.clear_user_pin(target, "Main Till")
+        manager.assert_not_called()
+
+        self.frappe.has_permission.return_value = True
+        with patch.object(api, "_clear_override_pin") as clear_local:
+            self.assertEqual(api.clear_user_pin(target, "Main Till"), {
+                "ok": True, "has_pin": False, "must_reset": True,
+            })
+            clear_local.assert_not_called()
+        manager.assert_called_once_with("clear", user=target, caller=caller, pos_profile="Main Till")
+        self.assertEqual(self.store.committed_logs[-1].outcome, "PIN Reset")
+        self.assertEqual(self.store.committed_logs[-1].approver, target)
+
+    def test_external_pin_list_reads_status_only_for_outlet_members(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        manager = MagicMock(side_effect=lambda action, *, user: {
+            "has_pin": user == "manager2@example.test",
+            "must_reset": user == "cashier@example.test",
+            "locked": user == "manager2@example.test",
+            "secret": "2468",
+        })
+        self.install_external_pin_hooks(manager)
+        self.frappe.has_permission.return_value = False
+        with self.assertRaises(Denied):
+            api.list_pin_users("Main Till")
+        manager.assert_not_called()
+
+        self.frappe.has_permission.return_value = True
+        with patch.object(api, "_users_with_override_pin", return_value=set()) as list_local:
+            rows = {row["user"]: row for row in api.list_pin_users("Main Till")}
+            self.assertEqual(rows["manager2@example.test"], {
+                "user": "manager2@example.test", "full_name": "Moses Manager",
+                "has_pin": True, "must_reset": False, "locked": True,
+            })
+            self.assertEqual(rows["cashier@example.test"], {
+                "user": "cashier@example.test", "full_name": self.store.users["cashier@example.test"].full_name,
+                "has_pin": False, "must_reset": True, "locked": False,
+            })
+            list_local.assert_not_called()
+        self.assertNotIn("other_outlet@example.test", [call.kwargs["user"] for call in manager.call_args_list])
+        self.assertEqual(manager.call_count, len(rows))
+
+    def test_verifier_only_keeps_legacy_status_and_refuses_pin_writes(self):
+        api = self.api()
+        user = "manager@example.test"
+        self.frappe.session.user = user
+        self.install_external_pin_hooks()
+
+        for write in (
+            lambda: api.set_my_pin("secret-pass-1", "2468"),
+            lambda: api.clear_user_pin(user, "Main Till"),
+        ):
+            with self.subTest(write=write), self.assertRaisesRegex(Invalid, "cashier PIN store"):
+                write()
+        self.assertEqual(api.my_pin_status(), {
+            "has_pin": True, "external_verifier": True, "can_manage_here": False,
+        })
+
     # --- P1 #9: list_approvers scoping & outlet isolation ---
 
     def test_list_approvers_returns_names_only_excluding_requester_owner_and_ineligible(self):

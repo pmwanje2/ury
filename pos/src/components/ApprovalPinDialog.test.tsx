@@ -74,7 +74,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     const user = userEvent.setup();
     render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
 
-    await user.click(await screen.findByRole('button', { name: /clear staff pin/i }));
+    await user.click(await screen.findByRole('button', { name: /staff pins/i }));
 
     expect(await screen.findByText('Bob Supervisor')).toBeInTheDocument();
     expect(screen.getByText('Grace Cashier')).toBeInTheDocument();
@@ -101,7 +101,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
 
     const { rerender } = render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /clear staff pin/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /staff pins/i })).not.toBeInTheDocument();
     });
 
     // When built-in store is active and password is wrong, show neutral POS-AUTH-PASSWORD message
@@ -119,5 +119,60 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toMatch(/password/i);
     expect(alert.textContent).not.toMatch(/POS-AUTH-PASSWORD|URY|HUF|Kamra/i);
+  });
+  it('shows external PIN status and lets staff enrol a PIN when management is enabled', async () => {
+    vi.spyOn(call, 'get')
+      .mockResolvedValueOnce({
+        message: { has_pin: false, external_verifier: true, can_manage_here: true, must_reset: true, locked: true },
+      })
+      .mockResolvedValue({
+        message: { has_pin: true, external_verifier: true, can_manage_here: true, must_reset: false, locked: false },
+      });
+    const save = vi.spyOn(call, 'post').mockResolvedValue({ message: { ok: true, has_pin: true } });
+
+    const user = userEvent.setup();
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} />);
+
+    expect(await screen.findByText('Reset required')).toBeInTheDocument();
+    expect(screen.getByText('Locked')).toBeInTheDocument();
+    expect(screen.queryByText(/property.s cashier PIN store/)).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText(/current password/i), 'MySecretPass1!');
+    await user.type(screen.getByLabelText(/new approval pin/i), '4826');
+    await user.type(screen.getByLabelText(/confirm approval pin/i), '4826');
+    await user.click(screen.getByRole('button', { name: /save approval pin/i }));
+
+    expect(save).toHaveBeenCalledWith('ury.ury_pos.override.set_my_pin', {
+      password: 'MySecretPass1!',
+      pin: '4826',
+    });
+    expect(await screen.findByText('Approval PIN set')).toBeInTheDocument();
+    expect(screen.queryByText('Reset required')).not.toBeInTheDocument();
+    expect(screen.queryByText('Locked')).not.toBeInTheDocument();
+  });
+
+  it('shows external staff flags and updates the row after a manager clears its PIN', async () => {
+    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.override.my_pin_status') {
+        return { message: { has_pin: true, external_verifier: true, can_manage_here: true } };
+      }
+      return { message: [{ user: 'staff@example.com', full_name: 'Staff Member', has_pin: true, locked: true }] };
+    });
+    const clear = vi.spyOn(call, 'post').mockResolvedValue({
+      message: { ok: true, has_pin: false, must_reset: true },
+    });
+
+    const user = userEvent.setup();
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
+
+    await user.click(await screen.findByRole('button', { name: 'Staff PINs' }));
+    expect(await screen.findByText('Locked')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /clear pin/i }));
+
+    expect(clear).toHaveBeenCalledWith('ury.ury_pos.override.clear_user_pin', {
+      user: 'staff@example.com',
+      pos_profile: 'Main Till',
+    });
+    expect(await screen.findByText('Reset required')).toBeInTheDocument();
+    expect(screen.queryByText('Locked')).not.toBeInTheDocument();
   });
 });
