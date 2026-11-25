@@ -1380,6 +1380,10 @@ class TestSplitBillReceivedTenders(Loaded):
         super().setUp()
         self.frappe.has_permission.return_value = True
         self.frappe.generate_hash.return_value = "SPLITGRP99"
+        self.enterContext(patch(
+            "ury.ury_pos.outlet_context.get_authorized_outlets",
+            return_value=[{"pos_profile": "Lakeside Till", "branch": "Lakeside"}],
+        ))
         self.enterContext(patch.object(self.order, "getBranch", return_value="Lakeside"))
         self.enterContext(patch.object(self.order, "_enforce_order_access"))
         self.enterContext(patch.object(self.order, "_split_kots_to_move", return_value=[]))
