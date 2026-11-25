@@ -1,3 +1,4 @@
+import { coversLimit } from '@ury/core/covers'
 import { apiErrorMessage } from '../lib/api-error'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -487,7 +488,7 @@ export default function OrderPage() {
               variant="outline"
               size="icon"
               className="h-9 w-9 rounded-full"
-              disabled={isInteractionDisabled}
+              disabled={isInteractionDisabled || noOfPax >= coversLimit(posProfile, selectedOrderType)}
               aria-label="Increase pax"
             >
               +

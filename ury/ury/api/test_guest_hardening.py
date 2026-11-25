@@ -67,12 +67,12 @@ class TestGuestHardening(unittest.TestCase):
             patch.object(api.frappe, "get_doc", return_value=profile),
             patch.object(api.frappe.db, "get_value", return_value="Menu A"),
             patch.object(api, "resolve_restaurant_menu", return_value={"items": [{"item": "Tea"}]}),
+            patch.object(api, "_catalog_gate", return_value=True),
             patch.object(api, "price_items_for_invoice", return_value=[{
                 "item_code": "Tea", "item_name": "Tea", "qty": 1,
                 "comment": "", "rate": 20, "amount": 20,
             }]),
             patch.object(api, "_resolve_or_create_pos_invoice", return_value=(invoice, invoice.name)),
-            patch.object(api, "_ensure_admin_branch_mapping"),
             # version-16 adds a branch stock-policy reservation gate before pricing.
             patch.object(api, "get_branch_stock_policy",
                          return_value=SimpleNamespace(reservation_control_enabled=0)),
@@ -118,10 +118,10 @@ class TestGuestHardening(unittest.TestCase):
             patch.object(api.frappe, "get_doc", return_value=profile),
             patch.object(api.frappe.db, "get_value", return_value="Menu A"),
             patch.object(api, "resolve_restaurant_menu", return_value={"items": [{"item": "Tea"}]}),
+            patch.object(api, "_catalog_gate", return_value=True),
             patch.object(api, "price_items_for_invoice", side_effect=price),
             patch.object(api, "invoice_pricing_date", return_value=None),
             patch.object(api, "_resolve_or_create_pos_invoice", return_value=(invoice, invoice.name)),
-            patch.object(api, "_ensure_admin_branch_mapping"),
             patch.object(api, "get_branch_stock_policy",
                          return_value=SimpleNamespace(reservation_control_enabled=0)),
         ):

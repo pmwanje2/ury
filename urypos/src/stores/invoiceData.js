@@ -67,6 +67,13 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
     recentOrders: usetoggleRecentOrder(),
     notificationModal: useNotificationModal(),
   }),
+  getters: {
+    maxCovers(state) {
+      const type = state.menu.selectedOrderType || state.recentOrders.pastOrderType;
+      const limit = state.invoiceDetails.order_type_cover_limits?.[type] ?? state.invoiceDetails.max_covers;
+      return limit > 0 ? limit : undefined;
+    },
+  },
   actions: {
     async fetchInvoiceDetails() {
       try {

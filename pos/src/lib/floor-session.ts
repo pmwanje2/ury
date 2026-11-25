@@ -12,6 +12,8 @@ const SESSION_KEYS = ['posProfile', 'payment_modes', 'menuCategories', 'customer
 export interface FloorPadContext {
   paired: boolean;
   till_open: boolean;
+  min_length?: number;
+  max_length?: number;
 }
 
 interface FloorUser {

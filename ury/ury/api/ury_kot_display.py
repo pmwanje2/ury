@@ -74,7 +74,6 @@ def record_kot_served(name, creation_time, kot_doc=None):
 
 
 KOT_RECALL_WINDOW_MINUTES = 15
-KOT_RECALL_WINDOW_MIN_MINUTES = 1
 KOT_RECALL_WINDOW_MAX_MINUTES = 240
 
 
@@ -83,27 +82,30 @@ def _parse_positive_int(raw):
         return None
     try:
         value = int(float(raw))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return value if value > 0 else None
 
 
-def _kot_recall_window_minutes(branch=None, pos_profile=None):
-    """Configured recall window in minutes (1-240), defaulting to 15."""
-    raw = None
-    if isinstance(pos_profile, str) and pos_profile.strip():
-        raw = frappe.db.get_value(
-            "POS Profile", pos_profile.strip(), "custom_kds_recall_window_minutes"
-        )
-    minutes = _parse_positive_int(raw)
-    if minutes is None and isinstance(branch, str) and branch.strip():
-        raw = frappe.db.get_value(
-            "POS Profile", {"branch": branch.strip()}, "custom_kds_recall_window_minutes"
-        )
-        minutes = _parse_positive_int(raw)
-    if minutes is None:
-        return KOT_RECALL_WINDOW_MINUTES
-    return max(KOT_RECALL_WINDOW_MIN_MINUTES, min(minutes, KOT_RECALL_WINDOW_MAX_MINUTES))
+def _kot_recall_window_minutes(branch=None, pos_profile=None, *, production=None):
+    """Use the station's profile when assigned, then the ticket or outlet profile."""
+    station_profile = (
+        frappe.db.get_value("URY Production Unit", production, "pos_profile") if production else None
+    )
+    for profile in (station_profile, pos_profile):
+        if isinstance(profile, str) and profile.strip():
+            minutes = _parse_positive_int(frappe.db.get_value(
+                "POS Profile", profile.strip(), "custom_kds_recall_window_minutes"
+            ))
+            if minutes is not None:
+                return min(minutes, KOT_RECALL_WINDOW_MAX_MINUTES)
+    if isinstance(branch, str) and branch.strip():
+        minutes = _parse_positive_int(frappe.db.get_value(
+            "POS Profile", {"branch": branch.strip(), "disabled": 0}, "custom_kds_recall_window_minutes"
+        ))
+        if minutes is not None:
+            return min(minutes, KOT_RECALL_WINDOW_MAX_MINUTES)
+    return KOT_RECALL_WINDOW_MINUTES
 
 
 def is_kitchen_admin(user=None):
@@ -152,6 +154,7 @@ def recall_kot(name):
     window_minutes = _kot_recall_window_minutes(
         branch=getattr(kot_doc, "branch", None),
         pos_profile=getattr(kot_doc, "pos_profile", None),
+        production=getattr(kot_doc, "production", None),
     )
     elapsed = (get_datetime() - served_at).total_seconds()
     if not 0 <= elapsed <= window_minutes * 60:
@@ -209,7 +212,8 @@ def recent_served_kots(branch=None, production=None):
         branch=effective_branch, pos_profile=unit_pos_profile
     )
     now_dt = get_datetime()
-    cutoff = (now_dt - timedelta(minutes=window_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+    # An expo station can include tickets from profiles with longer windows.
+    cutoff = (now_dt - timedelta(minutes=KOT_RECALL_WINDOW_MAX_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
 
     filters = {
         "order_status": "Served",
@@ -224,39 +228,40 @@ def recent_served_kots(branch=None, production=None):
     if production and not is_expo:
         filters["production"] = production
 
-    rows = frappe.get_list(
-        "URY KOT",
-        fields=[
-            "name",
-            "invoice",
-            "production",
-            "restaurant_table",
-            "table_takeaway",
-            "order_no",
-            "order_status",
-            "creation",
-            "production_time",
-            "custom_guest_label",
-        ],
-        filters=filters,
-        order_by="modified desc",
-        limit_page_length=100,
-    )
+    fields = [
+        "name", "invoice", "production", "branch", "pos_profile", "restaurant_table",
+        "table_takeaway", "order_no", "order_status", "creation", "production_time",
+        "custom_guest_label",
+    ]
     eligible = []
-    for row in rows:
-        try:
-            prod_mins = float(row.get("production_time"))
-            if not isfinite(prod_mins) or prod_mins < 0:
+    windows = {}
+    offset = 0
+    while len(eligible) < 100:
+        rows = frappe.get_list(
+            "URY KOT", fields=fields, filters=filters, order_by="modified desc, name desc",
+            limit_start=offset, limit_page_length=100,
+        )
+        for row in rows:
+            try:
+                prod_mins = float(row.get("production_time"))
+                if not isfinite(prod_mins) or prod_mins < 0:
+                    continue
+                served_at = get_datetime(row.get("creation")) + timedelta(minutes=prod_mins)
+            except (TypeError, ValueError, OverflowError):
                 continue
-            served_at = get_datetime(row.get("creation")) + timedelta(minutes=prod_mins)
-            elapsed = (now_dt - served_at).total_seconds()
-            if 0 <= elapsed <= window_minutes * 60:
+            key = (row.get("branch") or effective_branch, row.get("pos_profile"), row.get("production"))
+            if key not in windows:
+                windows[key] = _kot_recall_window_minutes(key[0], key[1], production=key[2])
+            row_window = windows[key]
+            if 0 <= (now_dt - served_at).total_seconds() <= row_window * 60:
+                row["recall_window_minutes"] = row_window
                 eligible.append(row)
-        except (TypeError, ValueError, OverflowError):
-            continue
+        if len(rows) < 100:
+            break
+        offset += len(rows)
 
     return {
-        "kots": eligible,
+        "kots": eligible[:100],
         "recall_window_minutes": window_minutes,
         "server_time": frappe.utils.now(),
     }

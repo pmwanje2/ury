@@ -339,6 +339,9 @@
     "no_sale_summary": "No Sales this shift: {{count}}",
     "tips_section_title": "Tips Declaration (Direct Cash Tips)",
     "tips_section_note": "Direct cash tips are recorded for payroll and compliance reporting only and do not change expected drawer cash.",
+    "job_summary": "Labor and charged tips by job code",
+    "labor_minutes": "Labor minutes",
+    "job_code_unassigned": "Unassigned",
     "tip_server": "Server",
     "tip_charged": "Charged Tips",
     "tip_paid_from_till": "Paid from Till",
@@ -1033,6 +1036,7 @@
     "offline_notice": "Offline: the connection is unavailable. Sign in again before taking orders.",
     "title": "Staff sign-in",
     "pin_prompt": "Enter your 4-digit PIN",
+    "enter_staff_pin": "Enter your staff PIN",
     "clear": "Clear",
     "delete": "Delete digit",
     "username_fallback": "Sign in with username",
@@ -1362,6 +1366,8 @@
     "sc_summary_toggle": "View breakdown"
   },
   "timeclock": {
+    "job_code": "Job code",
+    "select_job_code": "Select a job code",
     "clock_in": "Clock In",
     "clock_out_pill": "In {{time}} · Clock Out",
     "clock_in_title": "Clock In",

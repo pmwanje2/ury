@@ -28,6 +28,13 @@ def validate(doc, method):
     validate_fx_payment_modes(doc)
     validate_offline_peer_relay_url(doc.get("custom_offline_peer_relay_url"))
     validate_service_charge_rules(doc, method)
+    validate_cover_limits(doc)
+
+
+def validate_cover_limits(doc):
+    order_types = [row.get("order_type") for row in (doc.get("custom_order_type_cover_limits") or [])]
+    if len(order_types) != len(set(order_types)):
+        frappe.throw(_("Configure one cover limit per order type."), frappe.ValidationError)
 
 
 def _validate_service_charge_account(doc, account: str | None, tips_account: str) -> None:

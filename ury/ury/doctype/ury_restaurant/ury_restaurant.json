@@ -11,6 +11,7 @@
   "image",
   "company",
   "invoice_series_prefix",
+  "dine_in_invoice_series",
   "aggregator_series_prefix",
   "column_break_4",
   "address",
@@ -28,6 +29,13 @@
   "custom_serving_periods"
  ],
  "fields": [
+  {
+   "fieldname": "dine_in_invoice_series",
+   "fieldtype": "Data",
+   "label": "Dine-In Check Number Series",
+   "description": "Optional numbering series for dine-in checks. Leave blank to use the existing invoice series. Example: MAIN-DI-.#####.",
+   "translatable": 0
+  },
   {
    "fieldname": "image",
    "fieldtype": "Attach Image",

@@ -36,6 +36,28 @@ MAX_LABEL_LENGTH = 80
 RESERVED_CHARACTERS = "|\r\n"
 
 
+# Keep the existing daily brake and never allow a weaker short-window policy.
+FLOOR_PIN_SETTINGS = {
+	"min_length": (4, 4, 12),
+	"max_length": (4, 4, 12),
+	"max_attempts": (5, 1, 5),
+	"lockout_minutes": (5, 5, 1440),
+	"session_minutes": (20, 1, 1440),
+}
+
+
+def floor_pin_policy(profile):
+	policy = {}
+	for name, (default, minimum, maximum) in FLOOR_PIN_SETTINGS.items():
+		try:
+			value = int(profile.get(f"custom_floor_pin_{name}"))
+		except (TypeError, ValueError, OverflowError):
+			value = default
+		policy[name] = max(minimum, min(maximum, value or default))
+	policy["max_length"] = max(policy["min_length"], policy["max_length"])
+	return policy
+
+
 def _key(purpose):
 	return hmac.digest(get_encryption_key().encode(), purpose.encode(), "sha256")
 
@@ -102,9 +124,15 @@ def _till_open(profile):
 
 
 def get_floor_pad():
-	"""Page context for /pos: two booleans, never the device id or label."""
+	"""Page context for /pos with optional keypad bounds."""
 	device = _device()
-	return {"paired": bool(device), "till_open": bool(device and _till_open(device[0]))}
+	context = {"paired": bool(device), "till_open": bool(device and _till_open(device[0]))}
+	if device:
+		policy = floor_pin_policy(device[0])
+		bounds = {key: policy[key] for key in ("min_length", "max_length")}
+		if bounds != {"min_length": 4, "max_length": 4}:
+			context.update(bounds)
+	return context
 
 
 @frappe.whitelist(methods=["POST"])
@@ -149,10 +177,11 @@ def _managed_profile(user=None):
 
 @frappe.whitelist(methods=["POST"])
 def issue_pin(user):
-	_managed_profile(user)
+	profile = _managed_profile(user)
+	length = floor_pin_policy(profile)["max_length"]
 	previous = frappe.db.get_value("User", user, "custom_floor_pin_hash")
 	for _ in range(20):
-		pin = f"{secrets.randbelow(10000):04d}"
+		pin = f"{secrets.randbelow(10 ** length):0{length}d}"
 		pin_hash = _digest("ury-floor-pin-v1", pin)
 		if pin_hash == previous:
 			continue
@@ -197,12 +226,18 @@ def _sign_in(pin):
 	profile, device_id, label = device
 	if not _till_open(profile):
 		_sign_in_refused("URY_FLOOR_TILL_CLOSED", "Sign in with username while the till is closed.")
-	short = LoginAttemptTracker(f"ury-floor-short:{device_id}", max_consecutive_login_attempts=4, lock_interval=300)
+	policy = floor_pin_policy(profile)
+	short = LoginAttemptTracker(
+		f"ury-floor-short:{device_id}",
+		max_consecutive_login_attempts=policy["max_attempts"] - 1,
+		lock_interval=policy["lockout_minutes"] * 60,
+	)
 	day = LoginAttemptTracker(f"ury-floor-day:{device_id}", max_consecutive_login_attempts=19, lock_interval=86400)
 	if not short.is_user_allowed() or not day.is_user_allowed():
 		_sign_in_refused("URY_FLOOR_PIN_LOCKED", "PIN sign-in is paused on this tablet.")
 	user = None
-	if isinstance(pin, str) and re.fullmatch(r"[0-9]{4}", pin):
+	if (isinstance(pin, str) and policy["min_length"] <= len(pin) <= policy["max_length"]
+			and re.fullmatch(r"[0-9]+", pin)):
 		user = frappe.db.get_value("User", {"custom_floor_pin_hash": _digest("ury-floor-pin-v1", pin), "enabled": 1}, "name")
 	if not user or not _eligible(user, profile):
 		short.add_failure_attempt()
@@ -211,6 +246,6 @@ def _sign_in(pin):
 		frappe.db.commit()  # As LoginManager.fail: retain the audit across the refusal rollback.
 		_sign_in_refused("URY_FLOOR_PIN_REFUSED", "That PIN didn't work.")
 	short.add_success_attempt()
-	frappe.local.login_manager.login_as(user, session_end=(datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat())
+	frappe.local.login_manager.login_as(user, session_end=(datetime.now(timezone.utc) + timedelta(minutes=policy["session_minutes"])).isoformat())
 	frappe.sessions.clear_sessions(user, keep_current=True)
 	return {"full_name": get_fullname(user), "csrf_token": frappe.sessions.get_csrf_token()}

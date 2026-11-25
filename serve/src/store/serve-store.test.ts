@@ -146,7 +146,7 @@ describe('serve-store draft + cart keys', () => {
     expect(validateQuantity(Number.NaN)).toBe(false)
   })
 
-  it('normalizePax / setNoOfPax coerce string API values to integers', () => {
+  it('normalizes legacy covers and applies the configured entry limit', () => {
     useServeStore.getState().setNoOfPax('2' as unknown as number)
     expect(useServeStore.getState().noOfPax).toBe(2)
     useServeStore.getState().setNoOfPax(useServeStore.getState().noOfPax + 1)
@@ -154,7 +154,7 @@ describe('serve-store draft + cart keys', () => {
     useServeStore.getState().setNoOfPax(0)
     expect(useServeStore.getState().noOfPax).toBe(1)
     useServeStore.getState().setNoOfPax(99)
-    expect(useServeStore.getState().noOfPax).toBe(50)
+    expect(useServeStore.getState().noOfPax).toBe(99)
   })
 
   it('treats qty/comment/customer/pax edits on loaded invoice as unsent draft', async () => {

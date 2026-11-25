@@ -12,6 +12,8 @@ export interface TimeclockStatus {
   clocked_in_since?: string | null;
   elapsed_minutes?: number;
   shift?: string | null;
+  job_codes?: string[];
+  job_code?: string | null;
   open_checks_count?: number;
   open_checks?: string[];
   has_open_shift?: boolean;
@@ -67,6 +69,7 @@ export async function getMyTimeclockStatus(posProfile?: string | null): Promise<
 export async function punchTimeclock(
   action: 'IN' | 'OUT',
   posProfile: string,
+  jobCode?: string,
 ): Promise<TimeclockPunchResponse> {
   try {
     const res = await call.post<{ message: TimeclockPunchResponse }>(
@@ -74,6 +77,7 @@ export async function punchTimeclock(
       {
         action,
         pos_profile: posProfile,
+        ...(jobCode ? { job_code: jobCode } : {}),
       },
     );
     return res.message;

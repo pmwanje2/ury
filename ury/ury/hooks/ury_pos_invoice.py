@@ -31,12 +31,13 @@ except ImportError:  # pragma: no cover - partial frappe stubs in unrelated unit
 
 
 def before_insert(doc, method):
-    pos_invoice_naming(doc, method)
     order_type_update(doc, method)
+    pos_invoice_naming(doc, method)
     restrict_existing_order(doc, method)
 
 
 def before_validate(doc, method=None):
+    validate_configured_covers(doc)
     prorate_return_discount(doc, method)
     enforce_authoritative_outlet_time(doc, method)
     if getattr(doc, "is_return", 0) or (callable(getattr(doc, "get", None)) and doc.get("is_return")):
@@ -44,6 +45,25 @@ def before_validate(doc, method=None):
     else:
         sync_service_charge_on_before_validate(doc)
 
+
+
+def validate_configured_covers(doc):
+    # Preview documents and non-restaurant invoices need no extra cover policy.
+    if not hasattr(doc, "get_doc_before_save") or not doc.get("order_type") or doc.get("is_return"):
+        return
+
+    from ury.ury_pos.covers import normalize_covers, parse_covers
+
+    value = doc.get("no_of_pax")
+    before = doc.get_doc_before_save()
+    if before and all(doc.get(key) == before.get(key) for key in ("order_type", "pos_profile")):
+        if parse_covers(value) == parse_covers(before.get("no_of_pax")):
+            return
+    profile = frappe.get_cached_doc("POS Profile", doc.pos_profile) if doc.get("pos_profile") else None
+    # Standard invoice creation and legacy clients can omit covers.
+    if value in (None, "") or (doc.order_type != "Dine In" and value in (0, "0")):
+        value = 1
+    doc.no_of_pax = normalize_covers(value, doc.order_type, profile)
 
 def validate(doc, method):
     validate_invoice(doc, method)
@@ -1040,6 +1060,12 @@ def pos_invoice_naming(doc, method):
         return
 
     restaurant = pos_profile.get("restaurant")
+
+    if doc.order_type == "Dine In" and not doc.get("is_return"):
+        dine_in_series = frappe.db.get_value("URY Restaurant", restaurant, "dine_in_invoice_series")
+        if dine_in_series and dine_in_series.strip():
+            doc.naming_series = dine_in_series.strip()
+            return
 
     if not doc.restaurant_table:
         prefix = frappe.db.get_value(

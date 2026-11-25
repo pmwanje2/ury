@@ -19,9 +19,9 @@
  "fields": [
   {
    "fieldname": "room_type",
-   "fieldtype": "Select",
+   "fieldtype": "Link",
    "label": "Room Type",
-   "options": "AC\nNON-AC"
+   "options": "Dining Area Type"
   },
   {
    "fieldname": "printer_settings",

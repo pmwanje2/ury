@@ -1,3 +1,4 @@
+import { coversLimit, normalizeCovers } from '@ury/core/covers'
 import { create } from 'zustand'
 import { storage, siteCurrencyCode } from '@ury/core'
 // Subpath import: keeps this pure helper independent of tests that mock the '@ury/core' barrel.
@@ -10,21 +11,9 @@ import { DEFAULT_ORDER_TYPE, DINE_IN, TAKEAWAY, type OrderType } from '../data/o
 
 const MIN_QUANTITY = 0.001
 const MAX_QUANTITY = 999
-const MIN_PAX = 1
-const MAX_PAX = 50
 
 /** draftTable sentinel for takeaway carts (no restaurant table). */
 export const TAKEAWAY_DRAFT_KEY = 'takeaway'
-
-/**
- * Coerce pax from API/UI input to a positive integer.
- * Frappe often returns `no_of_pax` as a string; `"1" + 1` becomes `"11"`.
- */
-export function normalizePax(value: unknown): number {
-  const n = Math.trunc(Number(value))
-  if (!Number.isFinite(n) || n < MIN_PAX) return MIN_PAX
-  return Math.min(MAX_PAX, n)
-}
 
 function draftKeyForCart(state: { selectedTable: string | null; selectedOrderType: OrderType }): string | null {
   if (state.selectedTable) return state.selectedTable
@@ -394,7 +383,9 @@ export const useServeStore = create<ServeState>((set, get) => ({
   setQuickFilter: (filter) => set({ quickFilter: filter }),
   setSelectedItem: (item) => set({ selectedItem: item }),
   setOrderComment: (comment) => set({ orderComment: comment }),
-  setNoOfPax: (pax) => set({ noOfPax: normalizePax(pax) }),
+  setNoOfPax: (pax) => set((state) => ({
+    noOfPax: Math.min(coversLimit(state.posProfile, state.selectedOrderType), normalizeCovers(pax)),
+  })),
   setSubmitting: (value) => set({ submitting: value }),
 
   setSelectedTable: (table, room, doNotLoadOrder = false) => {
@@ -491,7 +482,7 @@ export const useServeStore = create<ServeState>((set, get) => ({
         const selectedCustomer = order.customer
           ? { id: order.customer, name: order.customer_name, phone: order.mobile_number }
           : null
-        const noOfPax = normalizePax(order.no_of_pax)
+        const noOfPax = normalizeCovers(order.no_of_pax)
         const orderComment = order.custom_comments || ''
         set({
           tableOrder: response,
