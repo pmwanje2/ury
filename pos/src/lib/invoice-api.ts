@@ -111,6 +111,14 @@ export interface POSInvoiceItem {
   discount_amount?: number;
   max_discount?: number;
   is_disposable?: number;
+  comment?: string;
+  reservation_line_key?: string | null;
+  custom_parent_line_key?: string | null;
+  custom_line_role?: string;
+  custom_is_modifier?: number;
+  custom_modifier_prefix?: string | null;
+  custom_modifiers_json?: string | null;
+  custom_bundle_overrides_json?: string | null;
 }
 
 export interface POSInvoiceTax {

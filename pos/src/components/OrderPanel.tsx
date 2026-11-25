@@ -433,6 +433,22 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
           // a 1 -> 2 bump cancels the original KOT and re-fires a full one
           // instead of raising a +1 delta (B02b).
           reservation_line_key: item.reservationLineKey || item.uniqueId,
+          ...(item.parentLineKey ? { custom_parent_line_key: item.parentLineKey } : {}),
+          ...(item.lineRole ? { custom_line_role: item.lineRole } : {}),
+          ...(item.isModifier ? { custom_is_modifier: 1 } : {}),
+          ...(item.modifierPrefix ? { custom_modifier_prefix: item.modifierPrefix } : {}),
+          ...(item.modifierGroup ? { custom_modifier_group: item.modifierGroup } : {}),
+          ...(item.modifierOption ? { custom_modifier_option: item.modifierOption } : {}),
+          ...(item.selectedModifiers && item.selectedModifiers.length > 0
+            ? { custom_modifiers_json: JSON.stringify(item.selectedModifiers) }
+            : {}),
+          ...(item.bundleOverrides && item.bundleOverrides.length > 0
+            ? { custom_bundle_overrides_json: JSON.stringify(item.bundleOverrides) }
+            : {}),
+          ...(item.inheritParentRouting !== undefined
+            ? { custom_inherit_parent_routing: item.inheritParentRouting ? 1 : 0 }
+            : {}),
+          ...(item.hideUnpricedOnReceipt ? { custom_hide_unpriced_on_receipt: 1 } : {}),
         })),
         no_of_pax: noOfPax,
         pos_profile: posProfile.name,
@@ -549,102 +565,155 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-6">
             <HoldFireControls />
-            {activeOrders.map((item) => (
-              <div
-                key={item.uniqueId}
-                className={cn(
-                  "flex flex-col py-4 border-b border-gray-100",
-                  isInteractionDisabled && "opacity-50"
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <h3 className="font-medium text-gray-900 text-sm">{item.name}</h3>
-                      {orderId && kotState[item.item] && (
-                        <Badge
-                          size="sm"
-                          variant={KOT_BADGE[kotState[item.item]].variant}
-                          data-testid="kot-status-badge"
-                        >
-                          {t(KOT_BADGE[kotState[item.item]].label)}
-                        </Badge>
-                      )}
-                    </div>
-                    {item.selectedVariant && (
-                      <p className="text-sm text-gray-600">{item.selectedVariant.name}</p>
+            {activeOrders.map((item) => {
+              if (item.isModifier) {
+                return (
+                  <div
+                    key={item.uniqueId}
+                    data-testid={`modifier-child-${item.uniqueId}`}
+                    className={cn(
+                      'ms-4 flex items-center justify-between border-b border-s-2 border-gray-100 border-s-blue-200 bg-gray-50/70 py-2 ps-3 pe-1 text-xs',
+                      isInteractionDisabled && 'opacity-50'
                     )}
-                    {item.selectedAddons && item.selectedAddons.length > 0 && (
-                      <p className="text-sm text-gray-500">
-                        {item.selectedAddons.map(addon => addon.name).join(', ')}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-700 truncate">
+                        + {item.modifierPrefix ? `${item.modifierPrefix} ` : ''}
+                        {item.name}
                       </p>
-                    )}
-                    <p className="text-gray-600 text-sm">{formatCurrency(calculateItemTotal(item), activeCurrency)}</p>
+                      <p className="text-gray-500">
+                        {item.quantity} × {formatCurrency(item.price, activeCurrency)}
+                      </p>
+                    </div>
+                    <span className="ms-2 shrink-0 font-medium text-gray-700">
+                      {formatCurrency(calculateItemTotal(item), activeCurrency)}
+                    </span>
                   </div>
-                  
-                  <div className="flex items-center gap-2">
-                    <Button
-                      onClick={() => handleEdit(item)}
-                      variant="ghost"
-                      size="icon"
-                      className="text-blue-600 hover:text-blue-700"
-                      title={t('cart.edit_item')}
-                      disabled={isInteractionDisabled}
-                    >
-                      <Edit className="w-4 h-4" />
-                    </Button>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        onClick={() => {
-                          const newQuantity = Math.max(0, Math.round((item.quantity - 1) * 1000) / 1000);
-                          if (newQuantity <= 0) {
-                            removeFromOrder(item.uniqueId!);
-                          } else {
-                            updateQuantity(item.uniqueId!, newQuantity);
-                          }
-                        }}
-                        variant="outline"
-                        size="icon"
-                        className="w-8 h-8 rounded-full"
-                        disabled={isInteractionDisabled}
-                      >
-                        -
-                      </Button>
-                      <span className="w-6 text-center">{item.quantity}</span>
-                      {(() => {
-                        const headroom = remainingHeadroom(
-                          availabilityByItem[item.item],
-                          cartQtyForItem(activeOrders, item.item),
-                        );
-                        const atCapacity = headroom !== undefined && headroom <= 0;
-                        return (
-                          <Button
-                            onClick={() => updateQuantity(item.uniqueId!, Math.round((item.quantity + 1) * 1000) / 1000)}
-                            variant="outline"
-                            size="icon"
-                            className="w-8 h-8 rounded-full"
-                            disabled={isInteractionDisabled || atCapacity}
-                            title={atCapacity ? t('cart.insufficient_capacity') : undefined}
+                );
+              }
+
+              return (
+                <div
+                  key={item.uniqueId}
+                  className={cn(
+                    "flex flex-col py-4 border-b border-gray-100",
+                    isInteractionDisabled && "opacity-50"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="font-medium text-gray-900 text-sm">{item.name}</h3>
+                        {orderId && kotState[item.item] && (
+                          <Badge
+                            size="sm"
+                            variant={KOT_BADGE[kotState[item.item]].variant}
+                            data-testid="kot-status-badge"
                           >
-                            +
-                          </Button>
-                        );
-                      })()}
+                            {t(KOT_BADGE[kotState[item.item]].label)}
+                          </Badge>
+                        )}
+                      </div>
+                      {item.selectedVariant && (
+                        <p className="text-sm text-gray-600">{item.selectedVariant.name}</p>
+                      )}
+                      {item.selectedAddons && item.selectedAddons.length > 0 && (
+                        <p className="text-sm text-gray-500">
+                          {item.selectedAddons.map(addon => addon.name).join(', ')}
+                        </p>
+                      )}
+                      {item.selectedModifiers && item.selectedModifiers.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {item.selectedModifiers.map((mod) => (
+                            <span
+                              key={`${mod.group}-${mod.option_code}-${mod.prefix || ''}`}
+                              className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-800"
+                            >
+                              {mod.prefix ? `${mod.prefix} ` : ''}
+                              {mod.label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {item.bundleOverrides && item.bundleOverrides.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {item.bundleOverrides.map((ov) => (
+                            <span
+                              key={`${ov.group}-${ov.chosen_item}`}
+                              className="inline-flex items-center rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-800"
+                            >
+                              {ov.label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-gray-600 text-sm">{formatCurrency(calculateItemTotal(item), activeCurrency)}</p>
                     </div>
                     
-                    <Button
-                      onClick={() => removeFromOrder(item.uniqueId!)}
-                      variant="ghost"
-                      size="icon"
-                      className="text-red-500 hover:text-red-600"
-                      disabled={isInteractionDisabled}
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        onClick={() => handleEdit(item)}
+                        variant="ghost"
+                        size="icon"
+                        className="text-blue-600 hover:text-blue-700"
+                        title={item.has_modifiers || item.is_combo_meal ? t('cart.modify') : t('cart.edit_item')}
+                        disabled={isInteractionDisabled}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          onClick={() => {
+                            const newQuantity = Math.max(0, Math.round((item.quantity - 1) * 1000) / 1000);
+                            if (newQuantity <= 0) {
+                              removeFromOrder(item.uniqueId!);
+                            } else {
+                              updateQuantity(item.uniqueId!, newQuantity);
+                            }
+                          }}
+                          variant="outline"
+                          size="icon"
+                          className="w-8 h-8 rounded-full"
+                          disabled={isInteractionDisabled}
+                        >
+                          -
+                        </Button>
+                        <span className="w-6 text-center">{item.quantity}</span>
+                        {(() => {
+                          const headroom = remainingHeadroom(
+                            availabilityByItem[item.item],
+                            cartQtyForItem(activeOrders, item.item),
+                          );
+                          const atCapacity = headroom !== undefined && headroom <= 0;
+                          return (
+                            <Button
+                              onClick={() => updateQuantity(item.uniqueId!, Math.round((item.quantity + 1) * 1000) / 1000)}
+                              variant="outline"
+                              size="icon"
+                              className="w-8 h-8 rounded-full"
+                              disabled={isInteractionDisabled || atCapacity}
+                              title={atCapacity ? t('cart.insufficient_capacity') : undefined}
+                            >
+                              +
+                            </Button>
+                          );
+                        })()}
+                      </div>
+                      
+                      <Button
+                        onClick={() => removeFromOrder(item.uniqueId!)}
+                        variant="ghost"
+                        size="icon"
+                        className="text-red-500 hover:text-red-600"
+                        disabled={isInteractionDisabled}
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {activeOrders.length > 0 && (
               <Button
                 onClick={clearOrder}

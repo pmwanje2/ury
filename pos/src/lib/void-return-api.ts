@@ -13,6 +13,15 @@ export interface ReturnableCheckItem {
   remaining_qty: number;
   rate: number;
   amount: number;
+  reservation_line_key?: string | null;
+  custom_parent_line_key?: string | null;
+  custom_is_modifier?: number;
+  custom_line_role?: string | null;
+  custom_modifier_prefix?: string | null;
+  custom_modifier_group?: string | null;
+  custom_modifier_option?: string | null;
+  custom_modifiers_json?: string | null;
+  custom_bundle_overrides_json?: string | null;
 }
 
 export interface RefundPaymentEntry {

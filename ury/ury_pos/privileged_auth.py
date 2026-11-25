@@ -369,6 +369,31 @@ def _record_self_performed_log(
     user = getattr(getattr(frappe, "session", None), "user", None)
     claim_json = _canonical_json(claim)
     claim_hash = hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
+    log_reference_name = reference_name
+    ref_exists = False
+    if _is_valid_str(reference_doctype) and _is_valid_str(log_reference_name):
+        try:
+            ref_exists = bool(frappe.db.exists(reference_doctype, log_reference_name))
+        except Exception:
+            ref_exists = False
+        if (
+            not ref_exists
+            and reference_doctype == "URY Item Availability"
+            and isinstance(claim, dict)
+            and _is_valid_str(claim.get("branch"))
+            and _is_valid_str(claim.get("item_code"))
+        ):
+            try:
+                existing_name = frappe.db.get_value(
+                    "URY Item Availability",
+                    {"branch": claim["branch"], "item": claim["item_code"]},
+                    "name",
+                )
+            except Exception:
+                existing_name = None
+            if _is_valid_str(existing_name):
+                log_reference_name = existing_name
+                ref_exists = True
     doc = frappe.get_doc(
         {
             "doctype": "POS Authorisation Log",
@@ -378,7 +403,7 @@ def _record_self_performed_log(
             "pos_profile": pos_profile,
             "company": company,
             "reference_doctype": reference_doctype,
-            "reference_name": reference_name,
+            "reference_name": log_reference_name,
             "claim_values": claim_json,
             "reason": (reason or "").strip()[:500],
             "outcome": "Approved",
@@ -388,6 +413,8 @@ def _record_self_performed_log(
         }
     )
     doc.flags.pos_override_server_insert = True
+    if not ref_exists:
+        doc.flags.ignore_links = True
     doc.insert(ignore_permissions=True)
 
 

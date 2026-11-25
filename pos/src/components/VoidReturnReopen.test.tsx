@@ -111,6 +111,220 @@ describe('VoidItemDialog (sent item void & waste)', () => {
     expect((retryCall?.[1] as Record<string, unknown>)?.is_waste).toBe(1);
     expect((retryCall?.[1] as Record<string, unknown>)?.reason).toBe('WASTE-SPOILED');
   });
+
+  it('includes proportionally scaled linked child modifier values in VoidItemDialog display and ManagerApproval amount', async () => {
+    const getSpy = vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.override.list_reasons') {
+        return {
+          message: [
+            { code: 'WASTE-SPOILED', description: 'Spoiled or dropped item (waste)', requires_note: 0, applies_to: ['void_sent_item', 'reduce_sent_qty'] },
+          ],
+        };
+      }
+      if (method === 'ury.ury_pos.override.list_approvers') {
+        return { message: [{ user: 'mgr@example.com', full_name: 'Alice Manager' }] };
+      }
+      if (method === 'ury.ury_pos.override.privilege_policy') {
+        return { message: { privilege: 'reduce_sent_qty', label: 'Reduce Sent Qty', may_perform: false, requires_reason: false } };
+      }
+      return { message: [] };
+    });
+
+    vi.spyOn(call, 'post').mockImplementation(async (method: string, payload?: unknown) => {
+      const body = (payload || {}) as Record<string, unknown>;
+      if (method === 'ury.ury.api.ury_pos_invoice_qty_reduction.reduce_order_item_qty') {
+        if (!body.approval_token) {
+          throw new Error('A manager must approve this action. [POS-AUTH-REQUIRED]');
+        }
+        return {
+          message: {
+            invoice: 'POS-INV-MOD',
+            item_row_name: 'ROW-RIB',
+            item_code: 'RIBEYE',
+            previous_qty: 2,
+            new_qty: 1,
+            delta: -1,
+            cancel_kot_names: ['CNCL-KOT-10'],
+            is_waste: true,
+            waste_stock_entry: 'STE-WASTE-10',
+            approver: 'mgr@example.com',
+          },
+        };
+      }
+      if (method === 'ury.ury_pos.override.authorise') {
+        return { message: { token: 'tok-mod-1', approver: 'mgr@example.com', approver_name: 'Alice Manager', expires_in: 120 } };
+      }
+      return { message: null };
+    });
+
+    const parentItem = {
+      name: 'ROW-RIB',
+      item_code: 'RIBEYE',
+      item_name: 'Ribeye Steak',
+      qty: 2,
+      rate: 45000,
+      reservation_line_key: 'k-rib',
+      custom_is_modifier: 0,
+    };
+    const childModifier = {
+      name: 'ROW-CHZ',
+      item_code: 'EXTRA-CHEESE',
+      item_name: 'Aged Cheddar',
+      qty: 2,
+      rate: 4000,
+      custom_is_modifier: 1,
+      custom_parent_line_key: 'k-rib',
+    };
+
+    const onCompleted = vi.fn();
+    render(
+      <VoidItemDialog
+        open
+        posProfile="Till A"
+        invoiceId="POS-INV-MOD"
+        currency="UGX"
+        item={parentItem}
+        orderItems={[parentItem, childModifier]}
+        onCompleted={onCompleted}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Summary shows combined void amount 45,000 + 4,000 = UGX 49,000
+    expect(await screen.findByText(/49,000/)).toBeInTheDocument();
+
+    const select = await screen.findByLabelText(/reason/i);
+    fireEvent.change(select, { target: { value: 'WASTE-SPOILED' } });
+    fireEvent.click(screen.getByRole('button', { name: /confirm void/i }));
+
+    await screen.findByText(/Alice Manager/);
+    const approversCall = getSpy.mock.calls.find((c) => c[0] === 'ury.ury_pos.override.list_approvers');
+    expect((approversCall?.[1] as Record<string, unknown>)?.amount).toBe(49000);
+    for (const digit of ['1', '2', '3', '4']) {
+      fireEvent.click(screen.getByRole('button', { name: digit }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('ReturnCheckDialog linked child modifiers', () => {
+  it('proportionally scales linked child modifiers with parent return qty and blocks orphaning child lines', async () => {
+    const previewCalls: Array<Array<{ item_row_name: string; qty: number }>> = [];
+    vi.spyOn(call, 'get').mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'ury.ury_pos.void_return_reopen.get_returnable_check') {
+        return {
+          message: {
+            invoice: 'POS-INV-MOD-RET',
+            pos_profile: 'Till A',
+            branch: 'Branch A',
+            customer: 'Walk-in',
+            currency: 'UGX',
+            precision: 0,
+            grand_total: 98000,
+            discount_amount: 0,
+            total_taxes_and_charges: 0,
+            net_paid_amount: 98000,
+            already_refunded_amount: 0,
+            remaining_refundable_amount: 98000,
+            original_payments: [{ mode_of_payment: 'Cash', amount: 98000 }],
+            available_modes: ['Cash'],
+            is_room_charge: false,
+            room_number: null,
+            is_fiscalised: false,
+            items: [
+              {
+                item_row_name: 'ROW-RIB',
+                item_code: 'RIBEYE',
+                item_name: 'Ribeye Steak',
+                sold_qty: 2,
+                returned_qty: 0,
+                remaining_qty: 2,
+                rate: 45000,
+                amount: 90000,
+                reservation_line_key: 'k-rib',
+                custom_is_modifier: 0,
+                custom_line_role: 'Standard',
+              },
+              {
+                item_row_name: 'ROW-CHZ',
+                item_code: 'EXTRA-CHEESE',
+                item_name: 'Aged Cheddar',
+                sold_qty: 2,
+                returned_qty: 0,
+                remaining_qty: 2,
+                rate: 4000,
+                amount: 8000,
+                reservation_line_key: 'k-chz',
+                custom_parent_line_key: 'k-rib',
+                custom_is_modifier: 1,
+                custom_line_role: 'Modifier',
+                custom_modifier_prefix: 'Extra',
+              },
+            ],
+            reasons: [
+              { code: 'RET-QUALITY', description: 'Item quality complaint', requires_note: 0, applies_to: ['return'] },
+            ],
+          },
+        };
+      }
+      if (method === 'ury.ury_pos.void_return_reopen.preview_pos_return') {
+        const parsed = JSON.parse(String(params?.items || '[]')) as Array<{ item_row_name: string; qty: number }>;
+        previewCalls.push(parsed);
+        const total = parsed.reduce((acc, row) => acc + (row.item_row_name === 'ROW-RIB' ? 45000 : 4000) * row.qty, 0);
+        return {
+          message: {
+            original_invoice: 'POS-INV-MOD-RET',
+            currency: 'UGX',
+            precision: 0,
+            items: parsed.map((row) => ({
+              item_row_name: row.item_row_name,
+              item_code: row.item_row_name === 'ROW-RIB' ? 'RIBEYE' : 'EXTRA-CHEESE',
+              item_name: row.item_row_name === 'ROW-RIB' ? 'Ribeye Steak' : 'Aged Cheddar',
+              qty: row.qty,
+              rate: row.item_row_name === 'ROW-RIB' ? 45000 : 4000,
+              gross: (row.item_row_name === 'ROW-RIB' ? 45000 : 4000) * row.qty,
+            })),
+            subtotal: total,
+            discount_amount: 0,
+            tax_amount: 0,
+            refund_total: total,
+            max_cash_refundable: total,
+            unpaid_credit_reduction: 0,
+            default_refund_payments: [{ mode_of_payment: 'Cash', amount: total }],
+            refund_payments: [{ mode_of_payment: 'Cash', amount: total }],
+            is_room_charge: false,
+            is_fiscalised: false,
+          },
+        };
+      }
+      return { message: null };
+    });
+
+    render(<ReturnCheckDialog open invoiceId="POS-INV-MOD-RET" onCompleted={vi.fn()} onClose={vi.fn()} />);
+
+    const incRibeye = await screen.findByRole('button', { name: /increase.*ribeye steak/i });
+    fireEvent.click(incRibeye);
+
+    await waitFor(() => {
+      expect(previewCalls.length).toBeGreaterThan(0);
+      const last = previewCalls.at(-1);
+      expect(last).toEqual([
+        { item_row_name: 'ROW-RIB', qty: 1 },
+        { item_row_name: 'ROW-CHZ', qty: 1 },
+      ]);
+    });
+
+    // Linked child modifier cannot be decremented below its proportional minimum while parent qty=1
+    const decCheese = screen.getByRole('button', { name: /decrease.*aged cheddar/i });
+    expect(decCheese).toBeDisabled();
+
+    // Decrementing parent back to 0 also brings linked child back to 0
+    const decRibeye = screen.getByRole('button', { name: /decrease.*ribeye steak/i });
+    fireEvent.click(decRibeye);
+    expect(decRibeye).toBeDisabled();
+  });
 });
 
 describe('ReturnCheckDialog (whole/partial return, UGX rounding, room charge, EFRIS, PIN)', () => {

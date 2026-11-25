@@ -3,7 +3,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { ownedSessionKey, getSessionUser, isLinkDown, storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
 // Subpath import: keeps this pure helper independent of tests that mock the '@ury/core' barrel.
 import { resolveDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
-import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
+import {
+  getRestaurantMenu,
+  getAggregatorMenu,
+  MenuItem as APIMenuItem,
+  type BundleOverride,
+  type SelectedModifier,
+} from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile, getPosProfileOrSelection } from '../lib/pos-profile-api';
 import { getAvailableOutlets, setActiveOutlet, type AvailableOutlet } from '../lib/outlet-api';
 import { getMenuCourses } from '../lib/menu-course-api';
@@ -91,6 +97,16 @@ export interface OrderItem extends MenuItem {
    */
   invoiceItemName?: string;
   ury_held?: number;
+  parentLineKey?: string | null;
+  lineRole?: 'Standard' | 'Modifier' | 'Combo Header' | 'Combo Upcharge';
+  isModifier?: boolean;
+  modifierPrefix?: string | null;
+  modifierGroup?: string | null;
+  modifierOption?: string | null;
+  selectedModifiers?: SelectedModifier[];
+  bundleOverrides?: BundleOverride[];
+  inheritParentRouting?: boolean;
+  hideUnpricedOnReceipt?: boolean;
 }
 
 export interface PaymentMode {
@@ -220,6 +236,7 @@ interface POSStore extends POSState {
   fetchCategories: () => Promise<void>;
   fetchPaymentModes: () => Promise<void>;
   addToOrder: (item: OrderItem) => Promise<void>;
+  addConfiguredItems: (parent: OrderItem, children: OrderItem[], replaceParentUniqueId?: string) => Promise<void>;
   removeFromOrder: (uniqueId: string) => Promise<void>;
   updateQuantity: (uniqueId: string, quantity: number) => Promise<void>;
   clearOrder: () => Promise<void>;
@@ -277,10 +294,29 @@ interface POSStore extends POSState {
 }
 
 const generateUniqueId = (item: OrderItem): string => {
+  if (
+    item.isModifier ||
+    item.parentLineKey ||
+    item.lineRole === 'Combo Header' ||
+    (item.selectedModifiers && item.selectedModifiers.length > 0) ||
+    (item.bundleOverrides && item.bundleOverrides.length > 0)
+  ) {
+    return item.uniqueId || item.reservationLineKey || `${item.id}-${uuidv4()}`;
+  }
   const variantId = item.selectedVariant?.id || 'default';
   const addonIds = item.selectedAddons?.map(addon => addon.id).sort().join('-') || 'no-addons';
   return `${item.id}-${variantId}-${addonIds}`;
 };
+
+function parseJsonArray<T>(raw?: string | null): T[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 const calculateItemPrice = (item: OrderItem): number => {
   const basePrice = item.selectedVariant?.price || item.price;
@@ -552,6 +588,13 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         custom_is_open_priced: Number(item.custom_is_open_priced || 0),
         custom_allow_zero_price: Number(item.custom_allow_zero_price || 0),
         tax_rate: 0,
+        is_combo_meal: Boolean(item.is_combo_meal),
+        product_bundle: item.product_bundle || null,
+        bundle_defaults: Array.isArray(item.bundle_defaults) ? item.bundle_defaults : [],
+        has_modifiers: Boolean(item.has_modifiers),
+        has_required_modifiers: Boolean(item.has_required_modifiers),
+        prompt_on_add: Boolean(item.prompt_on_add),
+        modifier_groups: Array.isArray(item.modifier_groups) ? item.modifier_groups : [],
       }));
 
       set((state) => withMenuItems(state, menuItems));
@@ -682,9 +725,96 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     }
   },
 
+  addConfiguredItems: async (parent: OrderItem, children: OrderItem[], replaceParentUniqueId?: string) => {
+    try {
+      if (!get().validateQuantity(parent.quantity)) {
+        throw new CartError(`Quantity must be between ${MIN_QUANTITY} and ${MAX_QUANTITY}`);
+      }
+      const current = get().activeOrders;
+      let parentKey = parent.reservationLineKey || parent.uniqueId || uuidv4();
+      let parentUniqueId = parent.uniqueId || parentKey;
+      let parentInvoiceItemName = parent.invoiceItemName;
+      let oldChildren: OrderItem[] = [];
+      let baseOrders = current;
+      let insertAt = current.length;
+
+      if (replaceParentUniqueId) {
+        const oldIdx = current.findIndex((o) => o.uniqueId === replaceParentUniqueId);
+        if (oldIdx !== -1) {
+          insertAt = oldIdx;
+          const oldParent = current[oldIdx];
+          const oldKey = oldParent.reservationLineKey || oldParent.uniqueId;
+          parentKey = oldKey || parentKey;
+          parentUniqueId = oldParent.uniqueId || parentKey;
+          parentInvoiceItemName = oldParent.invoiceItemName ?? parentInvoiceItemName;
+          oldChildren = oldKey
+            ? current.filter((o) => o.uniqueId !== replaceParentUniqueId && o.parentLineKey === oldKey)
+            : [];
+          baseOrders = current.filter(
+            (o) => o.uniqueId !== replaceParentUniqueId && (!oldKey || o.parentLineKey !== oldKey)
+          );
+        }
+      }
+
+      const normalizedParent: OrderItem = {
+        ...parent,
+        uniqueId: parentUniqueId,
+        reservationLineKey: parentKey,
+        ...(parentInvoiceItemName ? { invoiceItemName: parentInvoiceItemName } : {}),
+        isModifier: false,
+      };
+      const remainingOldChildren = [...oldChildren];
+      const normalizedChildren: OrderItem[] = children.map((child, idx) => {
+        let matchedIdx = remainingOldChildren.findIndex(
+          (prev) =>
+            prev.item === child.item &&
+            (prev.modifierGroup || '') === (child.modifierGroup || '') &&
+            (prev.modifierOption || '') === (child.modifierOption || '')
+        );
+        if (matchedIdx === -1) {
+          matchedIdx = remainingOldChildren.findIndex(
+            (prev) => prev.item === child.item && (prev.lineRole || '') === (child.lineRole || '')
+          );
+        }
+        const matchedPrev = matchedIdx !== -1 ? remainingOldChildren.splice(matchedIdx, 1)[0] : undefined;
+        const childResKey =
+          matchedPrev?.reservationLineKey ||
+          child.reservationLineKey ||
+          matchedPrev?.uniqueId ||
+          child.uniqueId ||
+          `${parentKey}-m-${idx + 1}-${uuidv4().slice(0, 6)}`;
+        const childUniqueId = matchedPrev?.uniqueId || child.uniqueId || childResKey;
+        const childInvoiceItemName = matchedPrev?.invoiceItemName ?? child.invoiceItemName;
+        return {
+          ...child,
+          uniqueId: childUniqueId,
+          reservationLineKey: childResKey,
+          ...(childInvoiceItemName ? { invoiceItemName: childInvoiceItemName } : {}),
+          parentLineKey: parentKey,
+          isModifier: true,
+        };
+      });
+
+      const nextOrders = [...baseOrders];
+      nextOrders.splice(Math.min(insertAt, nextOrders.length), 0, normalizedParent, ...normalizedChildren);
+      set({ activeOrders: nextOrders });
+    } catch (error) {
+      if (error instanceof CartError) {
+        set({ error: error.message });
+      } else {
+        set({ error: 'Failed to add configured item to cart' });
+      }
+    }
+  },
+
   removeFromOrder: async (uniqueId: string) => {
     try {
-      const newOrders = get().activeOrders.filter(item => item.uniqueId !== uniqueId);
+      const current = get().activeOrders;
+      const target = current.find((item) => item.uniqueId === uniqueId);
+      const targetKey = target && !target.isModifier ? (target.reservationLineKey || target.uniqueId) : null;
+      const newOrders = current.filter(
+        (item) => item.uniqueId !== uniqueId && (!targetKey || item.parentLineKey !== targetKey)
+      );
       set({ activeOrders: newOrders });
     } catch (error) {
       set({ error: 'Failed to remove item from cart' });
@@ -697,9 +827,21 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         throw new CartError(`Quantity must be between ${MIN_QUANTITY} and ${MAX_QUANTITY}`);
       }
 
-      const newOrders = get().activeOrders.map(item =>
-        item.uniqueId === uniqueId ? { ...item, quantity } : item
-      );
+      const current = get().activeOrders;
+      const target = current.find((item) => item.uniqueId === uniqueId);
+      const targetKey = target && !target.isModifier ? (target.reservationLineKey || target.uniqueId) : null;
+      const ratio = target && target.quantity > 0 ? quantity / target.quantity : 1;
+
+      const newOrders = current.map((item) => {
+        if (item.uniqueId === uniqueId) {
+          return { ...item, quantity };
+        }
+        if (targetKey && item.parentLineKey === targetKey) {
+          const scaled = Math.max(1, Math.round(item.quantity * ratio * 1000) / 1000);
+          return { ...item, quantity: Math.min(MAX_QUANTITY, scaled) };
+        }
+        return item;
+      });
       set({ activeOrders: newOrders });
     } catch (error) {
       if (error instanceof CartError) {
@@ -920,6 +1062,16 @@ export const usePOSStore = create<POSStore>((set, get) => ({
             special_dish: 0 as 0 | 1,
             tax_rate: 0,
             comment: item.comment || '',
+            parentLineKey: item.custom_parent_line_key || null,
+            lineRole: item.custom_line_role || 'Standard',
+            isModifier: Number(item.custom_is_modifier || 0) === 1,
+            modifierPrefix: item.custom_modifier_prefix || null,
+            modifierGroup: item.custom_modifier_group || null,
+            modifierOption: item.custom_modifier_option || null,
+            selectedModifiers: parseJsonArray<SelectedModifier>(item.custom_modifiers_json),
+            bundleOverrides: parseJsonArray<BundleOverride>(item.custom_bundle_overrides_json),
+            inheritParentRouting: item.custom_inherit_parent_routing !== 0,
+            hideUnpricedOnReceipt: Number(item.custom_hide_unpriced_on_receipt || 0) === 1,
           };
           const uniqueId = item.name || generateUniqueId(orderItem as OrderItem);
           return {

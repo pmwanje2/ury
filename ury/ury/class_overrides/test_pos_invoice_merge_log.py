@@ -213,3 +213,46 @@ class TestCustomPOSInvoiceMergeLog(FrappeTestCase):
 				merge_log._resolve_consolidated_receivable_account(
 					si_bad, [frappe._dict(debit_to="Debtors - MHL", currency="USD")]
 				)
+
+	def test_process_merging_into_credit_notes_sets_consolidated_credit_note_and_return_map(self):
+		"""ERPNext v16 POSInvoiceMergeLog.update_pos_invoices expects credit_notes as {cn_name: [pos_inv_names]}
+		and requires self.consolidated_credit_note to be populated so return POS Invoices link to their credit note."""
+		orig_get_value = frappe.db.get_value
+
+		def mock_db_get_value(doctype, filters, fieldname=None, as_dict=False, **kwargs):
+			if doctype == "POS Closing Entry":
+				return {
+					"pos_profile": "Test POS Profile",
+					"period_start_date": "2026-10-21 10:00:00",
+				}
+			if doctype == "POS Profile":
+				return {
+					"custom_sales_closing_time": "23:00:00",
+					"custom_enable_opening_date": 1,
+				}
+			return orig_get_value(doctype, filters, fieldname=fieldname, as_dict=as_dict, **kwargs)
+
+		mock_credit_note = frappe._dict(
+			name="ACC-SINV-RET-2026-00001",
+			save=lambda: None,
+			submit=lambda: None,
+		)
+		ret_pos_1 = frappe._dict(name="POS-RET-0001", is_return=1)
+		ret_pos_2 = frappe._dict(name="POS-RET-0002", is_return=1)
+
+		with patch("frappe.db.get_value", side_effect=mock_db_get_value):
+			merge_log = CustomPOSInvoiceMergeLog({"doctype": "POS Invoice Merge Log"})
+			merge_log.pos_closing_entry = "POS-CLO-0001"
+			merge_log.get_new_sales_invoice = lambda: mock_credit_note
+			merge_log.merge_pos_invoice_into = lambda sinv, data: sinv
+
+			credit_notes = merge_log.process_merging_into_credit_notes(
+				{"ACC-SINV-2026-00001": [ret_pos_1, ret_pos_2]}
+			)
+
+			self.assertEqual(merge_log.consolidated_credit_note, "ACC-SINV-RET-2026-00001")
+			self.assertEqual(
+				credit_notes,
+				{"ACC-SINV-RET-2026-00001": ["POS-RET-0001", "POS-RET-0002"]},
+			)
+

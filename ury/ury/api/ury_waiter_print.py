@@ -44,7 +44,10 @@ def _aggregate_kot_items(kot_docs):
 
 	for kot in kot_docs:
 		for row in kot.kot_items:
-			key = (row.item, row.comments or "")
+			parent_key = row.get("parent_line_key") or ""
+			is_mod = 1 if row.get("is_modifier") else 0
+			mod_summary = row.get("modifier_summary") or ""
+			key = (row.item, row.comments or "", parent_key, is_mod, mod_summary)
 			if kot.type in CANCEL_KOT_TYPES:
 				if key not in cancel_items:
 					cancel_items[key] = {
@@ -54,6 +57,9 @@ def _aggregate_kot_items(kot_docs):
 					"cancelled_qty": _normalize_qty(row.cancelled_qty),
 					"comments": row.comments,
 					"course": row.course,
+					"parent_line_key": parent_key or None,
+					"is_modifier": is_mod,
+					"modifier_summary": mod_summary,
 					}
 			elif kot.type in ADD_KOT_TYPES:
 				if key not in add_items:
@@ -63,6 +69,9 @@ def _aggregate_kot_items(kot_docs):
 					"quantity": _normalize_qty(row.quantity),
 					"comments": row.comments,
 					"course": row.course,
+					"parent_line_key": parent_key or None,
+					"is_modifier": is_mod,
+					"modifier_summary": mod_summary,
 					}
 				else:
 					add_items[key]["quantity"] = _normalize_qty(

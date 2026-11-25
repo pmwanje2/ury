@@ -93,6 +93,7 @@
     "processing_order": "Traitement en cours...",
     "loading_order": "Chargement des détails de la commande...",
     "edit_item": "Modifier l'article",
+    "modify": "Personnaliser",
     "add_comment": "Ajouter un commentaire",
     "edit_comment": "Modifier le commentaire",
     "pax": "Couverts",
@@ -573,7 +574,18 @@
     "no_addons": "Aucun supplément",
     "total": "Total",
     "update_order": "Mettre à jour la commande",
-    "add_to_order": "Ajouter à la commande"
+    "add_to_order": "Ajouter à la commande",
+    "required_badge": "Obligatoire",
+    "optional_badge": "Facultatif",
+    "included_badge": "Inclus",
+    "sold_out_badge": "Épuisé",
+    "regular_prefix": "Normal",
+    "prefix_strip_label": "Préfixe du modificateur",
+    "select_required_prompt": "Complétez les choix obligatoires",
+    "combo_choices": "Choix du menu",
+    "modifiers": "Modificateurs",
+    "selection_count_required": "{{selected}}/{{min}} requis",
+    "selection_count_range": "{{selected}}/{{max}} sélectionnés"
   },
   "order_types": {
     "dine_in": "Sur place",

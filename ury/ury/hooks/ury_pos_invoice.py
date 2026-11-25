@@ -57,9 +57,18 @@ def validate(doc, method):
     validate_table_reservation_lock(doc, method)
     from ury.ury_pos.pricing_actions import validate_privileged_pricing_mutations
     validate_privileged_pricing_mutations(doc, method)
+    from ury.ury.api.ury_modifiers import validate_pos_invoice_modifiers
+
+    validate_pos_invoice_modifiers(doc, method)
+    from ury.ury.api.ury_bundle_resolver import apply_bundle_overrides_to_packed_items
+
+    apply_bundle_overrides_to_packed_items(doc)
 
 
 def before_submit(doc, method):
+    from ury.ury.api.ury_modifiers import validate_invoice_modifiers_before_submit
+
+    validate_invoice_modifiers_before_submit(doc, method)
     if int(doc.get("is_return") or 0) == 1:
         from ury.ury_pos.void_return_reopen import validate_pos_return_doc
 
@@ -167,7 +176,7 @@ def apply_disposable_items(doc, method=None):
         return
 
     pos_profile = frappe.get_cached_doc("POS Profile", doc.pos_profile)
-    is_dine_in = doc.order_type == "Dine In"
+    is_dine_in = doc.get("order_type") == "Dine In"
 
     disposables_dict = {}
 
@@ -204,7 +213,7 @@ def apply_disposable_items(doc, method=None):
             )
 
     if is_dine_in:
-        n_pax = flt(doc.no_of_pax) or 1
+        n_pax = flt(doc.get("no_of_pax")) or 1
         for table_disposable in pos_profile.get("table_disposables") or []:
             key = table_disposable.item
             qty = flt(table_disposable.qty) * n_pax
@@ -976,7 +985,11 @@ def calculate_and_set_times(doc, method=None):
     doc.arrived_time = doc.creation
 
     current_time = get_datetime(now()) or now_datetime()
+    if not isinstance(current_time, datetime):
+        current_time = now_datetime()
     creation_time = get_datetime(doc.creation) or current_time
+    if not isinstance(creation_time, datetime):
+        creation_time = current_time
 
     time_difference = current_time - creation_time
 

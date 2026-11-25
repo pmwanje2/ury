@@ -55,7 +55,7 @@ def item_price_rejected_states():
     return _states_styled(workflow, "Danger") if workflow else set()
 
 
-def price_valid_on(item_code, price_list, posting_date, release_field, released, customer=None):
+def price_valid_on(item_code, price_list, posting_date, release_field, released, customer=None, currency=None):
     """The Item Price ERPNext get_price_list_rate_for would use on posting_date, released by the workflow if any.
 
     The line UOM is the item's selling UOM (sales_uom, else stock_uom), so every caller gets the same UOM.
@@ -67,7 +67,7 @@ def price_valid_on(item_code, price_list, posting_date, release_field, released,
     with the stock UOM; so does this. Not modelled: packing units and multiplying a stock-UOM rate by the
     conversion factor (a URY menu line sells in one UOM).
     """
-    fields = ["price_list_rate", "valid_from", "valid_upto", "uom", "customer", "supplier", "batch_no"]
+    fields = ["price_list_rate", "valid_from", "valid_upto", "uom", "customer", "supplier", "batch_no", "currency"]
     if release_field:
         fields.append(release_field)
     rows = frappe.db.get_list(
@@ -78,13 +78,13 @@ def price_valid_on(item_code, price_list, posting_date, release_field, released,
     )
     stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
     uom = frappe.db.get_value("Item", item_code, "sales_uom") or stock_uom
-    found = _best_row(rows, uom, posting_date, release_field, released, customer)
+    found = _best_row(rows, uom, posting_date, release_field, released, customer, currency=currency)
     if found is None and uom != stock_uom:
-        found = _best_row(rows, stock_uom, posting_date, release_field, released, customer)
+        found = _best_row(rows, stock_uom, posting_date, release_field, released, customer, currency=currency)
     return found
 
 
-def _best_row(rows, uom, posting_date, release_field, released, customer):
+def _best_row(rows, uom, posting_date, release_field, released, customer, currency=None):
     getdate = frappe.utils.getdate
     candidates = []
     for position, row in enumerate(rows):
@@ -92,7 +92,10 @@ def _best_row(rows, uom, posting_date, release_field, released, customer):
         valid_upto = getattr(row, "valid_upto", None)
         row_uom = getattr(row, "uom", None) or ""
         row_customer = getattr(row, "customer", None)
+        row_currency = getattr(row, "currency", None)
         if row_uom not in ("", uom):
+            continue
+        if currency and row_currency and row_currency != currency:
             continue
         if getattr(row, "supplier", None) or getattr(row, "batch_no", None):
             continue

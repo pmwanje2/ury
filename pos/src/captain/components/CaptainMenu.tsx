@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { t } from '../../i18n';
 import { Search } from 'lucide-react';
 import { usePOSStore } from '../../store/pos-store';
 import { cn, Spinner } from '@ury/ui';
 import MenuCard from '../../components/MenuCard';
+import ProductDialog from '../../components/ProductDialog';
 
 interface CaptainMenuProps {
   /** From the per-table permission map (`get_table_order_context`). When
@@ -31,10 +32,12 @@ const CaptainMenu: React.FC<CaptainMenuProps> = ({ canAddItems }) => {
     categories,
     fetchMenuItems,
     addToOrder,
+    setSelectedItem,
     isOrderInteractionDisabled,
     posProfile,
     currency,
   } = usePOSStore();
+  const [configuring, setConfiguring] = useState(false);
 
   useEffect(() => {
     fetchMenuItems();
@@ -57,6 +60,11 @@ const CaptainMenu: React.FC<CaptainMenuProps> = ({ canAddItems }) => {
 
   const handleTap = (item: (typeof menuItems)[number]) => {
     if (disabled) return;
+    if (item.has_required_modifiers || item.prompt_on_add || item.is_combo_meal) {
+      setSelectedItem(item);
+      setConfiguring(true);
+      return;
+    }
     addToOrder({ ...item, quantity: 1 });
   };
 
@@ -132,6 +140,7 @@ const CaptainMenu: React.FC<CaptainMenuProps> = ({ canAddItems }) => {
           </div>
         )}
       </div>
+      {configuring && <ProductDialog onClose={() => setConfiguring(false)} />}
     </div>
   );
 };

@@ -27,7 +27,18 @@ export interface VoidItemDialogProps {
     item_name: string;
     qty: number;
     rate: number;
+    reservation_line_key?: string | null;
+    custom_is_modifier?: number;
   };
+  orderItems?: Array<{
+    name: string;
+    item_code?: string;
+    item_name?: string;
+    qty: number;
+    rate: number;
+    custom_is_modifier?: number;
+    custom_parent_line_key?: string | null;
+  }>;
   onCompleted: (result: ReduceItemWithWasteResponse) => void;
   onClose: () => void;
 }
@@ -46,6 +57,7 @@ export default function VoidItemDialog({
   invoiceId,
   currency,
   item,
+  orderItems,
   onCompleted,
   onClose,
 }: VoidItemDialogProps) {
@@ -66,6 +78,35 @@ export default function VoidItemDialog({
   const newQty = Math.max(0, item.qty - voidQty);
   const privilege: 'void_sent_item' | 'reduce_sent_qty' =
     newQty === 0 ? 'void_sent_item' : 'reduce_sent_qty';
+
+  const voidAmount = useMemo(() => {
+    let rawAmount = Number(item.rate || 0) * voidQty;
+    const parentLineKey = item.reservation_line_key;
+    if (parentLineKey && Number(item.custom_is_modifier || 0) !== 1 && orderItems?.length) {
+      for (const child of orderItems) {
+        if (
+          child.name === item.name ||
+          Number(child.custom_is_modifier || 0) !== 1 ||
+          child.custom_parent_line_key !== parentLineKey ||
+          Number(child.qty || 0) <= 0
+        ) {
+          continue;
+        }
+        const childQty = Number(child.qty || 0);
+        let childNewQty = childQty;
+        if (newQty === 0) {
+          childNewQty = 0;
+        } else if (item.qty > 0) {
+          const scaled = (childQty * newQty) / item.qty;
+          childNewQty = Math.abs(scaled - Math.round(scaled)) < 1e-6 ? Math.round(scaled) : childQty;
+        }
+        if (childNewQty < childQty) {
+          rawAmount += Number(child.rate || 0) * (childQty - childNewQty);
+        }
+      }
+    }
+    return Math.round(rawAmount * 10000) / 10000;
+  }, [item, orderItems, voidQty, newQty]);
 
   useEffect(() => {
     if (!open) return;
@@ -116,7 +157,6 @@ export default function VoidItemDialog({
     setError(null);
     const trimmedNote = note.trim();
     const delta = newQty - item.qty;
-    const voidAmount = Math.round(Number(item.rate || 0) * voidQty * 10000) / 10000;
     try {
       const result = await reduceSentItemWithWaste({
         invoiceId,
@@ -194,7 +234,7 @@ export default function VoidItemDialog({
                 <div className="font-medium text-gray-900">{item.item_name}</div>
                 <div className="text-xs text-gray-600">
                   {t('void_return.sent_qty_summary', { qty: item.qty })} ·{' '}
-                  {formatMoneyAmount(item.rate * voidQty, currency)}
+                  {formatMoneyAmount(voidAmount, currency)}
                 </div>
               </div>
               <div className="flex items-center gap-2">
