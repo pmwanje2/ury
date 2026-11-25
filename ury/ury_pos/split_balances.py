@@ -523,6 +523,15 @@ def _restore_tax_pricing(check, snapshot):
         key = detail["item"]
         amounts[key] = amounts.get(key, Decimal(0)) + _decimal(detail["amount"])
     row_names = {_billing_key(snapshot, row): row.name for row in check.items}
+    # Native Grand Total comps can leave a signed net line offset against a
+    # fixed fee. Carry its original transaction and company amounts together.
+    comp_nets = {}
+    for key, row, values in _allocated_rows(check, snapshot):
+        if (row.get("custom_is_complimentary") and not row.get("rate")
+                and (check.flags.ury_converting_grand_total_comp or not values.get("amount"))
+                and (values.get("net_amount") or values.get("base_net_amount"))):
+            comp_nets[row.name] = (flt(values.get("net_amount")), flt(values.get("base_net_amount")))
+    check.flags.ury_split_comp_nets = comp_nets
     detail_rates = _item_rates_by_tax(snapshot)
     rules = _saved_tax_pricing_rules(check, snapshot)
     for index, (saved, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
@@ -575,6 +584,7 @@ def reprice_split_discount(checks, *, precisions=None):
             doc.flags.ury_split_discount_reprice = None
             doc.flags.ury_split_tax_scopes = None
             doc.flags.ury_split_fixed_fees = None
+            doc.flags.ury_split_comp_nets = None
 
 
 def _item_rates_by_tax(snapshot):
@@ -627,7 +637,29 @@ def _consolidation_keys(checks, snapshots):
     for doc, snapshot in zip(checks, snapshots, strict=True):
         taxes = snapshot["taxes"] if snapshot else doc.get("taxes") or ()
         rates = _item_rates_by_tax(snapshot) if snapshot else {}
-        pricing = {row.name: tuple(row.get(field) for field in fields) for row in doc.items}
+        rules = list(_saved_tax_pricing_rules(doc, snapshot)) if snapshot else taxes
+        fixed_rows = [i for i, rule in enumerate(rules) if rule.get("charge_type") == "Actual"]
+        fee_amounts = {}
+        for detail in snapshot["details"] if snapshot else ():
+            if detail["tax"] in fixed_rows:
+                amounts = fee_amounts.setdefault(detail["tax"], {})
+                key = detail["item"]
+                txn, base = amounts.get(key, (0, 0))
+                amounts[key] = (txn + _decimal(detail["amount"]),
+                                base + _decimal(detail.get("base_amount", detail["amount"])))
+        pricing = {}
+        for row in doc.items:
+            quantity = _decimal(row.qty)
+            key = _billing_key(snapshot, row) if snapshot else row.name
+            # Where no breakup survives, retain a distinct source component.
+            # Otherwise equal quantities are interchangeable only at the same
+            # signed unit fee in both transaction and company currencies.
+            fees = tuple(
+                tuple(amount / quantity for amount in fee_amounts[i].get(key, (Decimal(0), Decimal(0))))
+                if i in fee_amounts and quantity else (doc.name, i)
+                for i in fixed_rows
+            )
+            pricing[row.name] = (tuple(row.get(field) for field in fields), fees)
         children = {}
         parent_pricing = {}
         for row in doc.items:
@@ -639,7 +671,6 @@ def _consolidation_keys(checks, snapshots):
             "account_head", "description", "cost_center", "custom_pos_charge_kind", "add_deduct_tax",
             "previous_charge", *_TAX_PRICING_FIELDS,
         )) for tax in taxes)
-        rules = _saved_tax_pricing_rules(doc, snapshot) if snapshot else taxes
         rounding_sources = tuple(
             tax.get("rounding_source") or f"{doc.name}/{index + 1}"
             for index, (tax, rule) in enumerate(zip(taxes, rules, strict=True))

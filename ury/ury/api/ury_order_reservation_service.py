@@ -185,6 +185,41 @@ def _audit_frozen_context(row):
 	return {}
 
 
+def rebind_merged_reservations(check, updates):
+	"""Carry a held line's existing stock binding to its new cart key."""
+	from ury.ury.api.ury_reservation_service import append_audit
+
+	replacements = {}
+	retained = set()
+	for item in check.items:
+		code = _item_code(item)
+		old = _line_key(code, item, 1)
+		ref = updates.get(item.name, {}).get("reservation_line_key")
+		if ref:
+			replacements[old] = (_line_key(code, {"reservation_line_key": ref}, 1), ref)
+		else:
+			retained.add(old)
+	# A binding shared with an already-issued row belongs to that ticket.
+	for key in retained:
+		replacements.pop(key, None)
+	if not replacements:
+		return
+	rows = frappe.qb.get_query(
+		RESERVATION_DOCTYPE, filters={"order_ref": check.name, "status": RESERVED},
+		fields=["name", "audit_log", "reservation_group", "component_item", "qty", "status"],
+		order_by="name", for_update=True,
+	).run(as_dict=True)
+	for row in rows:
+		context = _audit_frozen_context(row)
+		replacement = replacements.get(context.get("reservation_line_key"))
+		if replacement:
+			new_key, ref = replacement
+			append_audit(row, frappe.session.user, "Add Check", frozen_context={
+				**context, "reservation_line_key": new_key, "source_line_ref": ref,
+			})
+			frappe.db.set_value(RESERVATION_DOCTYPE, row.name, "audit_log", row.audit_log, update_modified=False)
+
+
 def _active_groups(order_ref, item_code, reservation_line_key=None):
 	rows = frappe.get_all(
 		RESERVATION_DOCTYPE,

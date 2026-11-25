@@ -33,6 +33,50 @@ class ScopedSplitTaxes(calculate_taxes_and_totals):
             return super()._get_tax_rate(tax, {tax.account_head: item_tax_map[key]})
         return super()._get_tax_rate(tax, item_tax_map)
 
+    def calculate_net_total(self):
+        # Apply the original comp credit on every native pricing pass, before
+        # dependent VAT and totals are calculated.
+        for item in self._items:
+            amounts = (self.doc.flags.ury_split_comp_nets or {}).get(item.name)
+            if amounts:
+                item.net_amount, item.base_net_amount = amounts
+                item.net_rate = item.net_amount / item.qty
+                item.base_net_rate = item.base_net_amount / item.qty
+                item.distributed_discount_amount = item.amount - item.net_amount
+        super().calculate_net_total()
+
+    def set_discount_amount(self):
+        net = self.doc.net_total
+        if self.doc.apply_discount_on == "Net Total":
+            self.doc.net_total -= self._comp_net_total()
+        try:
+            super().set_discount_amount()
+        finally:
+            self.doc.net_total = net
+
+    def _comp_net_total(self):
+        return sum(net for net, _ in (self.doc.flags.ury_split_comp_nets or {}).values())
+
+    def get_total_for_discount_amount(self):
+        return super().get_total_for_discount_amount() - self._comp_net_total()
+
+    def apply_discount_amount(self):
+        # Exclude already-comped credits from the per-item discount weights
+        # and the native running rounding remainder. The next tax pass sees
+        # the original credits again in calculate_net_total.
+        credits = self.doc.flags.ury_split_comp_nets or {}
+        if not credits or not self.doc.discount_amount:
+            return super().apply_discount_amount()
+        comped = [item for item in self._items if item.name in credits]
+        for item in comped:
+            item.net_amount = 0
+            item._unrounded_net_amount = None
+        try:
+            super().apply_discount_amount()
+        finally:
+            for item in comped:
+                item.net_amount = credits[item.name][0]
+
     def get_current_tax_and_net_amount(self, item, tax, item_tax_map):
         # Native ERPNext accumulates the item total in display order. At a
         # branch in the merged charge chain, finish the previous row against

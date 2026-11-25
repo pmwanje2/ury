@@ -2093,6 +2093,65 @@ def _discard_added_check(source, destination, company, split_consolidation, rese
     source.db_set("cancel_reason", _("Added to check {0}").format(destination.name))
 
 
+def _merged_kitchen_keys(checks, line_keys):
+    """Keep issued identities and separate held groups that arrive from another check."""
+    claimed = {row.get("reservation_line_key") or row.name for check in checks for row in check.items
+               if not cint(row.get("ury_held"))}
+    representatives = {}
+    updates = {}
+    for check in checks:
+        parents = defaultdict(list)
+        assigned = {}
+        for row in check.items:
+            old = row.get("reservation_line_key") or row.name
+            key = old
+            if cint(row.get("ury_held")):
+                representative = line_keys.get(row.name, row.name)
+                if representative not in representatives:
+                    if old not in assigned:
+                        assigned[old] = frappe.generate_hash(length=20) if old in claimed else old
+                    key = assigned[old]
+                    representatives[representative] = key
+                    claimed.add(key)
+                key = representatives[representative]
+                if key != old:
+                    updates[row.name] = {"reservation_line_key": key}
+            if not row.get("custom_parent_line_key"):
+                parents[old].append((row.get("fire_at"), key))
+        for row in check.items:
+            parent = row.get("custom_parent_line_key")
+            if parent and parent in parents:
+                candidates = parents[parent]
+                matches = {key for deadline, key in candidates
+                           if len(candidates) == 1 or deadline == row.get("fire_at")}
+                if len(matches) == 1 and parent not in matches:
+                    updates.setdefault(row.name, {})["custom_parent_line_key"] = matches.pop()
+    return updates
+
+
+def _scope_whole_check_comp_for_merge(check):
+    """Keep the original guest's authorized comp when another check joins."""
+    if not cint(check.get("custom_is_complimentary")) or flt(check.get("additional_discount_percentage")) != 100:
+        return
+    from ury.ury_pos.pricing_actions import _set_line_comp
+
+    from ury.ury_pos.split_balances import allocate_split_balances, set_split_balance
+
+    if not check.get("custom_split_balance"):
+        snapshot, _ = allocate_split_balances(check, {}, *_split_balance_precisions(check, check.company))
+        set_split_balance(check, snapshot, [row.name for row in check.items])
+    for row in check.items:
+        if not cint(row.get("custom_is_complimentary")):
+            _set_line_comp(row, check.get("custom_comp_type"), check.get("custom_comp_reason"),
+                           check.get("custom_comp_approver"))
+    check.flags.ury_converting_grand_total_comp = check.get("apply_discount_on") == "Grand Total"
+    try:
+        with _split_discount_pricing(check, None):
+            check.additional_discount_percentage = check.discount_amount = 0
+    finally:
+        check.flags.ury_converting_grand_total_comp = None
+
+
 def _consolidated_check_is_complimentary(checks):
     """A full-check comp can be recorded on the header or on individual lines."""
     has_comp = False
@@ -2123,8 +2182,12 @@ def consolidate_checks(destination, sources):
     its table is freed once no open check remains on it. The caller validates the checks and
     commits.
     """
-    discount_plan = _prepare_consolidated_discount(destination, sources)
     source_tenders, carried_room = _validate_and_collect_source_tenders(destination, sources)
+    checks = [destination, *sources]
+    if any(check.get("custom_split_group") or check.get("custom_split_balance") for check in checks):
+        for check in checks:
+            _scope_whole_check_comp_for_merge(check)
+    discount_plan = _prepare_consolidated_discount(destination, sources)
 
     company = destination.company or frappe.db.get_value("Branch", destination.branch, "company")
     reservations_enabled = get_branch_stock_policy(
@@ -2134,7 +2197,16 @@ def consolidate_checks(destination, sources):
     split_consolidation = dependants is not None
     destination_before = _reservation_lines(destination.items)
 
-    merged_comp = _consolidated_check_is_complimentary([destination, *sources])
+    merged_comp = _consolidated_check_is_complimentary(checks)
+    kitchen_updates = _merged_kitchen_keys(checks, line_keys) if split_consolidation else {}
+    if reservations_enabled and kitchen_updates:
+        from ury.ury.api.ury_order_reservation_service import rebind_merged_reservations
+
+        for check in checks:
+            rebind_merged_reservations(check, kitchen_updates)
+    for row in destination.items:
+        if row.name in kitchen_updates:
+            row.update(kitchen_updates[row.name])
     merge_rate_prec = currency_precision(destination)
     verified_priv_child_rates = {}
     merged_items = {line_keys[row.name]: row for row in destination.items} if split_consolidation else {}
@@ -2154,6 +2226,7 @@ def consolidate_checks(destination, sources):
                 if split_consolidation:
                     values["custom_origin_invoice_item"] = origin
                     values["reservation_line_key"] = row.get("reservation_line_key") or row.name
+                values.update(kitchen_updates.get(row.name, {}))
                 appended = destination.append("items", values)
                 if appended is None and destination.items:
                     appended = destination.items[-1]
@@ -2170,8 +2243,8 @@ def consolidate_checks(destination, sources):
             ):
                 verified_rate = flt(row.get("rate"), merge_rate_prec)
                 verified_priv_child_rates[("row_id", id(appended))] = verified_rate
-                if row.get("reservation_line_key"):
-                    verified_priv_child_rates[("rkey", str(row.get("reservation_line_key")))] = verified_rate
+                if appended.get("reservation_line_key"):
+                    verified_priv_child_rates[("rkey", str(appended.get("reservation_line_key")))] = verified_rate
 
     if split_consolidation:
         _reassign_merged_kitchen_anchors(destination, sources, dependants)
@@ -4000,7 +4073,10 @@ def fire_due_held_orders():
                     row for row in invoice.items if cint(row.get("ury_held")) and flt(row.get("qty")) > 0
                     and row.get("fire_at") and get_datetime(row.get("fire_at")) <= cutoff
                 ]
-                _release_held_rows(invoice, _held_release_group(invoice, held), kitchen_authority=True)
+                # Scheduling writes the deadline to each member of a group.
+                # A shared cart key on older checks cannot authorize firing
+                # an unscheduled modifier or a sibling with a later deadline.
+                _release_held_rows(invoice, held, kitchen_authority=True)
             frappe.db.commit()
         except Exception:
             frappe.db.rollback()

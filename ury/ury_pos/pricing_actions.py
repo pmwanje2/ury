@@ -672,6 +672,17 @@ def build_complimentary_claim(
     }
 
 
+def _set_line_comp(row, comp_type, reason, approver):
+    if not row.get("custom_original_price_list_rate"):
+        row.custom_original_price_list_rate = flt(row.get("price_list_rate") or row.get("rate"))
+    row.discount_percentage = 100.0
+    row.rate = 0.0
+    row.custom_is_complimentary = 1
+    row.custom_comp_type = comp_type
+    row.custom_comp_reason = reason
+    row.custom_comp_approver = approver
+
+
 @frappe.whitelist(methods=["POST"])
 def apply_complimentary(
     invoice: str,
@@ -761,14 +772,7 @@ def apply_complimentary(
 
     full_reason = f"{auth['reason']}: {auth['reason_note']}" if auth["reason_note"] else auth["reason"]
     if scope == "item" and target_row is not None:
-        if not target_row.get("custom_original_price_list_rate"):
-            target_row.custom_original_price_list_rate = flt(target_row.get("price_list_rate") or target_row.get("rate"))
-        target_row.discount_percentage = 100.0
-        target_row.rate = 0.0
-        target_row.custom_is_complimentary = 1
-        target_row.custom_comp_type = comp_type
-        target_row.custom_comp_reason = full_reason
-        target_row.custom_comp_approver = auth["approver"]
+        _set_line_comp(target_row, comp_type, full_reason, auth["approver"])
         if becomes_full_comp:
             doc.custom_is_complimentary = 1
             doc.custom_comp_type = comp_type
