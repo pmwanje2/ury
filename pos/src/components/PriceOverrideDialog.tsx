@@ -77,7 +77,7 @@ export default function PriceOverrideDialog({
   const [error, setError] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<{
     claim: Record<string, unknown>;
-    amount: number;
+    amount?: number;
     percent?: number;
   } | null>(null);
 
@@ -202,7 +202,7 @@ export default function PriceOverrideDialog({
               };
         setPendingApproval({
           claim: challenge?.claim ?? fallbackClaim,
-          amount: typeof challenge?.amount === 'number' ? challenge.amount : mode === 'override' ? delta : parsedRate * parsedQty,
+          amount: challenge?.amount ?? undefined,
           percent: typeof challenge?.percent === 'number' ? challenge.percent : pct,
         });
         return;

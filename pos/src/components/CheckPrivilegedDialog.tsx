@@ -84,6 +84,7 @@ export default function CheckPrivilegedDialog({
   const [error, setError] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<{
     privilege: string;
+    amount?: number;
     claim: Record<string, unknown>;
     summaryLines: string[];
   } | null>(null);
@@ -237,7 +238,12 @@ export default function CheckPrivilegedDialog({
             `${t('privileged_actions.check_ref')}: ${invoiceName}`,
           ];
         }
-        setPendingApproval({ privilege: priv, claim: challenge?.claim ?? fallbackClaim, summaryLines });
+        setPendingApproval({
+          privilege: priv,
+          amount: challenge?.amount ?? undefined,
+          claim: challenge?.claim ?? fallbackClaim,
+          summaryLines,
+        });
         return;
       }
       setError(overrideErrorMessage(err));
@@ -546,6 +552,7 @@ export default function CheckPrivilegedDialog({
           summaryLines={pendingApproval.summaryLines}
           reference={{ doctype: 'POS Invoice', name: invoiceName }}
           claim={pendingApproval.claim}
+          amount={pendingApproval.amount}
           requireReason={false}
           onApproved={(res) => {
             setPendingApproval(null);

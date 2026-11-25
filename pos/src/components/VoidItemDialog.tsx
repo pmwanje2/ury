@@ -14,6 +14,7 @@ import {
   reduceSentItemWithWaste,
   type ReduceItemWithWasteResponse,
 } from '../lib/void-return-api';
+import { extractAuthChallenge } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 export interface VoidItemDialogProps {
@@ -73,6 +74,7 @@ export default function VoidItemDialog({
     claim: Record<string, unknown>;
     newQty: number;
     amount: number;
+    approvalAmount?: number;
   } | null>(null);
 
   const newQty = Math.max(0, item.qty - voidQty);
@@ -175,6 +177,7 @@ export default function VoidItemDialog({
           privilege,
           newQty,
           amount: voidAmount,
+          approvalAmount: extractAuthChallenge(err)?.amount ?? undefined,
           claim: {
             invoice: invoiceId,
             item_row_name: item.name,
@@ -356,7 +359,7 @@ export default function VoidItemDialog({
           ]}
           reference={{ doctype: 'POS Invoice', name: invoiceId }}
           claim={pendingApproval.claim}
-          amount={pendingApproval.amount}
+          amount={pendingApproval.approvalAmount}
           requireReason={false}
           onApproved={handleApproved}
           onCancel={() => setPendingApproval(null)}

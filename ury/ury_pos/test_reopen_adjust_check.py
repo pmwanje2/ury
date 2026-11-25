@@ -136,7 +136,7 @@ class ContractOverrideStub(ModuleType):
         }
         return tok
 
-    def consume(self, token, privilege, pos_profile, reference_name, claim):
+    def consume(self, token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
         entry = self._tokens.get(token)
         if not entry or entry["consumed"]:
             self._h.frappe.throw("Approval expired or already used. [POS-AUTH-EXPIRED]", self._h.frappe.ValidationError)

@@ -52,6 +52,7 @@ from ury.ury.api.ury_kot_generate import (
 	_line_keyed_items,
 	process_items_for_cancel_kot,
 )
+from ury.ury_pos.approval_currency import company_approval_amount
 from ury.ury_pos.void_return_reopen import (
 	CODE_OUTLET_MISMATCH,
 	CODE_VOID_CLOSED_USE_RETURN,
@@ -330,7 +331,7 @@ def reduce_order_item_qty(
 			invoice_id,
 			claim,
 			approval_token=approval_token,
-			amount=voided_amount,
+			amount=company_approval_amount(pos_invoice, voided_amount, frappe),
 			doc=pos_invoice,
 			fallback_privileges=fallback_privs,
 			alt_claim=b2a_compat_claim,

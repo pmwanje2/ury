@@ -220,7 +220,7 @@ class FakeOverride:
             return True
         return False
 
-    def consume(self, token, privilege, pos_profile, reference_name, claim):
+    def consume(self, token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
         rec = self.tokens.get(token)
         if not rec or rec["used"]:
             self.h.frappe.throw("Approval token expired or already used. [POS-AUTH-EXPIRED]", ValidationError)

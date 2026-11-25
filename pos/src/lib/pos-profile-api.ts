@@ -72,6 +72,8 @@ export interface PosProfileLimited {
   room_charge_unconfigured?: boolean;
   /** Per-till maximum offline tender amount without online manager PIN approval (0 = no cap). */
   offline_tender_limit?: number;
+  approval_currency?: string;
+  approval_conversion_rate?: number | null;
   /** Mode of Payment offline eligibility flags from server configuration (never tender-name regex). */
   offline_payment_modes?: OfflinePaymentMode[];
   /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
@@ -158,6 +160,8 @@ export interface PosProfileFull {
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
   offline_tender_limit?: number;
+  approval_currency?: string;
+  approval_conversion_rate?: number | null;
   offline_payment_modes?: OfflinePaymentMode[];
   allow_rate_change?: number;
   custom_max_free_bill_prints?: number;
@@ -235,6 +239,8 @@ export interface PosProfileCombined extends PosProfileFull {
   room_charge_modes?: string[];
   room_charge_unconfigured?: boolean;
   offline_tender_limit?: number;
+  approval_currency?: string;
+  approval_conversion_rate?: number | null;
   offline_payment_modes?: OfflinePaymentMode[];
   efris_print_wait_seconds?: number;
   require_clock_in_to_order?: number;
@@ -354,6 +360,8 @@ function combinePosProfiles(
     default_payment_mode: limitedProfile.default_payment_mode ?? '',
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
+    approval_currency: limitedProfile.approval_currency,
+    approval_conversion_rate: limitedProfile.approval_conversion_rate,
     offline_tender_limit: Number(
       limitedProfile.offline_tender_limit ?? fullProfile.offline_tender_limit ?? 0,
     ),

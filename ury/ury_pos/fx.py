@@ -37,6 +37,11 @@ from frappe import _
 from frappe.utils import cint, flt
 
 from ury.brand import coded_message
+from ury.ury_pos.approval_currency import (
+    THREE_DECIMAL_CURRENCIES,
+    ZERO_DECIMAL_CURRENCIES,
+    currency_precision as _currency_precision,
+)
 
 
 def _today() -> str:
@@ -85,34 +90,8 @@ MAX_REFERENCE_PATTERN_LENGTH = 128
 MAX_REFERENCE_VALUE_LENGTH = 256
 GUEST_LABEL_MAX = 40
 
-# Standard ISO 4217 non-2dp currencies for reliable site-less / fallback precision.
-ZERO_DECIMAL_CURRENCIES = frozenset(
-    {"BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "TZS", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"}
-)
-THREE_DECIMAL_CURRENCIES = frozenset({"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"})
-
-
 def currency_precision(currency: str | None) -> int:
-    code = (currency or "").strip().upper()
-    if not code:
-        return 2
-    if code in ZERO_DECIMAL_CURRENCIES:
-        return 0
-    if code in THREE_DECIMAL_CURRENCIES:
-        return 3
-    try:
-        fraction_units = frappe.db.get_value("Currency", code, "fraction_units")
-        if fraction_units is not None:
-            fu = cint(fraction_units)
-            if fu == 1:
-                return 0
-            if fu == 1000:
-                return 3
-            if fu == 100:
-                return 2
-    except Exception:
-        pass
-    return 2
+    return _currency_precision(currency, frappe.db)
 
 
 def _base_precision(currency: str | None) -> int:

@@ -37,6 +37,11 @@ def get_datetime(val=None):
 def get_time(val=None):
 	return frappe.utils.get_time(val)
 
+from ury.ury_pos.approval_currency import (
+	company_approval_amount,
+	invoice_approval_currency,
+	profile_approval_currency,
+)
 from ury.brand import coded_message
 from ury.ury.hooks.ury_cash_movement import (
 	LEAVES_DRAWER,
@@ -128,44 +133,6 @@ def _may_perform_till_privilege(
 	return False
 
 
-def _approver_covers_amount(override_mod, approver: str, profile, code: str, amount: float) -> bool:
-	"""Verify that ``approver`` holds an active authorise rule covering server-computed ``amount``.
-
-	Blocks blind-close / claim-omitted-amount cap bypasses where ``override.authorise`` minted a
-	token without an ``amount`` key in the claim (e.g. blind over/short variance or HALO tender).
-	"""
-	if not approver or not profile or not _has_configured_rules(profile.company, code):
-		return True
-	matcher = getattr(override_mod, "_matching_authorise_rules", None) if override_mod else None
-	if callable(matcher):
-		return bool(matcher(approver, profile, code, amount=amount))
-	roles = list(frappe.get_roles(approver))
-	if not roles:
-		return False
-	rows = frappe.get_all(
-		"POS Privilege Rule",
-		filters={
-			"company": profile.company,
-			"privilege": code,
-			"role": ["in", roles],
-			"pos_profile": ["in", [profile.name, "", None]],
-		},
-		fields=["pos_profile", "role", "may_authorise", "max_amount"],
-	)
-	effective: dict[str, Any] = {}
-	for row in rows or []:
-		role = row.get("role")
-		if not role:
-			continue
-		if role not in effective or row.get("pos_profile"):
-			effective[role] = row
-	return any(
-		cint(r.get("may_authorise")) == 1
-		and (flt(r.get("max_amount")) <= 0 or flt(amount) <= flt(r.get("max_amount")) + 1e-9)
-		for r in effective.values()
-	)
-
-
 def _require_till_privilege(
 	profile,
 	privilege: str,
@@ -189,7 +156,9 @@ def _require_till_privilege(
 				coded_message("AUTH-REQUIRED", _("Manager PIN approval service is unavailable.")),
 				frappe.PermissionError,
 			)
-		approval = override_mod.consume(token, code, profile.name, reference_name, claim)
+		approval = override_mod.consume(
+			token, code, profile.name, reference_name, claim, approval_amount=amount,
+		)
 		approver = (approval.get("approver") or "").strip()
 		excluded = {(frappe.session.user or "").casefold()}
 		if excluded_approvers:
@@ -197,14 +166,6 @@ def _require_till_privilege(
 		if approver.casefold() in excluded:
 			frappe.throw(
 				coded_message("AUTH-SELF", _("You cannot approve your own request. Ask another manager.")),
-				frappe.PermissionError,
-			)
-		if amount is not None and not _approver_covers_amount(override_mod, approver, profile, code, float(amount)):
-			frappe.throw(
-				coded_message(
-					"AUTH-NOT-ELIGIBLE",
-					_("This manager's approval limit does not cover this amount. Ask a higher-level manager to approve."),
-				),
 				frappe.PermissionError,
 			)
 		return approval
@@ -644,6 +605,9 @@ def _record_cash_movement_impl(
 		"pos_opening_entry": opening.name,
 	}
 
+	posting_date = nowdate()
+	approval_currency = profile_approval_currency(profile, frappe, posting_date=posting_date)
+	approval_amount = company_approval_amount(profile, amount_val, frappe, currency_and_rate=approval_currency)
 	approval = None
 	save_as_pending_draft = False
 	if movement_type == "Paid Out":
@@ -661,7 +625,7 @@ def _record_cash_movement_impl(
 					opening.name,
 					claim,
 					token=approval_token,
-					amount=amount_val,
+					amount=approval_amount,
 					fallback_privilege="cash_movement",
 					require_second_person=True,
 				)
@@ -675,7 +639,7 @@ def _record_cash_movement_impl(
 				opening.name,
 				claim,
 				token=approval_token,
-				amount=amount_val,
+				amount=approval_amount,
 				fallback_privilege="cash_movement",
 				require_second_person=True,
 			)
@@ -686,7 +650,7 @@ def _record_cash_movement_impl(
 			opening.name,
 			claim,
 			token=approval_token,
-			amount=amount_val,
+			amount=approval_amount,
 			fallback_privilege="cash_movement",
 			allow_cashier_default=False,
 		)
@@ -697,7 +661,7 @@ def _record_cash_movement_impl(
 			opening.name,
 			claim,
 			token=approval_token,
-			amount=amount_val,
+			amount=approval_amount,
 			fallback_privilege="cash_movement",
 			allow_cashier_default=True,
 		)
@@ -706,8 +670,7 @@ def _record_cash_movement_impl(
 	counter = _counter_account(profile, movement_type, clean_target)
 	leaves = LEAVES_DRAWER[movement_type]
 
-	posting_date = nowdate()
-	company_currency = frappe.db.get_value("Company", profile.company, "default_currency") or currency
+	company_currency = approval_currency[0] or currency
 	multi_currency, je_accounts = build_movement_je_accounts(
 		drawer=drawer,
 		counter=counter,
@@ -902,7 +865,7 @@ def log_cash_pull_exception(
 		opening.name,
 		claim,
 		token=approval_token,
-		amount=expected_cash,
+		amount=_company_till_amount(profile, expected_cash),
 		fallback_privilege="cash_movement",
 		allow_cashier_default=False,
 	)
@@ -1066,6 +1029,11 @@ def get_shift_x_report(pos_profile: str, pos_opening_entry: str | None = None) -
 	}
 
 
+def _company_till_amount(profile, amount, *, posting_date=None, currency=None):
+	approval_currency = profile_approval_currency(profile, frappe, posting_date=posting_date, currency=currency)
+	return company_approval_amount(profile, amount, frappe, currency_and_rate=approval_currency)
+
+
 def _can_perform_over_short_solo(user: str, profile, opening_user: str | None, max_abs_diff: float) -> bool:
 	"""Whether ``user`` may submit an over-tolerance closing variance without a second-person PIN.
 
@@ -1086,7 +1054,7 @@ def _can_perform_over_short_solo(user: str, profile, opening_user: str | None, m
 		return True
 	if override_mod and _has_configured_rules(profile.company, "over_short_close"):
 		code = _resolve_privilege_code(override_mod, "over_short_close")
-		return bool(override_mod.may_perform(user, profile.name, code, amount=max_abs_diff))
+		return bool(override_mod.may_perform(user, profile.name, code, amount=_company_till_amount(profile, max_abs_diff)))
 
 	roles = set(frappe.get_roles(user))
 	return bool(LEGACY_MANAGER_ROLES & roles)
@@ -1131,7 +1099,14 @@ def _cash_variances_above_tolerance(doc, profile):
 			fx_prec = currency_precision(tender_curr)
 			fx_diff = flt(row.get("custom_foreign_difference"), fx_prec)
 			if abs(fx_diff) > 1e-9:
-				exceeding.append((row.mode_of_payment, diff if abs(diff) > 1e-9 else fx_diff))
+				if abs(diff) <= 1e-9:
+					foreign_expected = flt(row.get("custom_expected_foreign_amount"))
+					if foreign_expected > 0 and flt(row.get("expected_amount")) > 0:
+						rate = flt(row.get("expected_amount")) / foreign_expected
+					else:
+						rate = _resolve_exchange_rate(tender_curr, home_curr, doc.get("posting_date") or nowdate())
+					diff = fx_diff * rate
+				exceeding.append((row.mode_of_payment, diff))
 	return exceeding, tolerance, precision
 
 
@@ -1705,7 +1680,7 @@ def close_till_with_controls(
 			opening.name,
 			os_claim,
 			token=over_short_approval_token,
-			amount=max_abs_diff,
+			amount=_company_till_amount(profile, max_abs_diff, posting_date=closing.get("posting_date")),
 			require_second_person=True,
 			excluded_approvers={frappe.session.user, opening.user},
 		)
@@ -2021,7 +1996,7 @@ def force_close_till(
 			opening.name,
 			os_claim,
 			token=over_short_approval_token,
-			amount=max(abs(d) for _m, d in exceeding),
+			amount=_company_till_amount(profile, max_abs_diff, posting_date=closing.get("posting_date")),
 			require_second_person=True,
 			excluded_approvers={frappe.session.user, opening.user},
 		)
@@ -2205,13 +2180,22 @@ def over_halo_tenders_for_invoice(doc) -> list[dict[str, Any]]:
 		totals_by_mode[mode] = flt(totals_by_mode.get(mode, 0.0) + amt, precision)
 
 	exceeded = []
+	approval_currency = None
 	for mode in sorted(totals_by_mode):
 		total_amt = totals_by_mode[mode]
-		halo = flt(frappe.db.get_value("Mode of Payment", mode, "custom_halo_max_amount"), precision)
-		if halo > 0 and total_amt > halo + 1e-9:
-			clean_amt = int(total_amt) if precision == 0 else total_amt
-			clean_halo = int(halo) if precision == 0 else halo
-			exceeded.append({"mode_of_payment": mode, "amount": clean_amt, "halo": clean_halo})
+		halo = flt(frappe.db.get_value("Mode of Payment", mode, "custom_halo_max_amount"))
+		if halo <= 0:
+			continue
+		if approval_currency is None:
+			approval_currency = invoice_approval_currency(doc, frappe)
+		approval_amount = company_approval_amount(doc, total_amt, frappe, currency_and_rate=approval_currency)
+		if approval_amount > halo + 1e-9:
+			exceeded.append({
+				"mode_of_payment": mode,
+				"amount": int(total_amt) if precision == 0 else total_amt,
+				"halo": flt(halo / float(approval_currency[1]), precision),
+				"approval_amount": approval_amount,
+			})
 	return exceeded
 
 
@@ -2243,7 +2227,7 @@ def apply_halo_approval_token(doc, approval_token: str | None, reason: str | Non
 		doc.get("name") or "",
 		claim,
 		token=approval_token,
-		amount=max(r["amount"] for r in exceeded),
+		amount=max(r["approval_amount"] for r in exceeded),
 		allow_cashier_default=False,
 	)
 	if not hasattr(doc, "flags") or doc.flags is None:

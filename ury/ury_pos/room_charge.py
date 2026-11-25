@@ -288,7 +288,8 @@ def enforce_room_charge_settlement(
         }
 
     from ury.ury_pos import override
-
+    # The verifier's currency is part of the claim. The token engine checks
+    # the amount in company currency using the invoice or the verifier's FX pair.
     claim = {
         "reservation": resolved_stay,
         "room": resolved_room,

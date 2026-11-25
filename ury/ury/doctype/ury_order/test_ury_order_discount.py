@@ -378,7 +378,7 @@ def _load_modules():
     framework, utils = _make_frappe_double()
     brand_mod = _stub(
         "ury.brand",
-        coded_message=lambda key, msg="": f"[{key}] {msg}".strip(),
+        coded_message=lambda key, msg="": f"[{key if key.startswith('POS-') else 'POS-' + key}] {msg}".strip(),
     )
     class _FakeTracker:
         def __init__(self, key, max_consecutive_login_attempts=5, lock_interval=900):
@@ -3004,3 +3004,135 @@ class TestHydrogenR2Regressions(DiscountBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestForeignDiscountAmountCap(DiscountBase):
+    def setUp(self):
+        super().setUp()
+        self.set_company_fx_quote(3700)
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            discount_limits_by_role="URY Cashier: 10",
+            max_document_discount_percent=0,
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier",
+                may_perform=1, may_authorise=0, max_percent=10, max_amount=100000)
+        ]
+        get_value = self.frappe.db.get_value.side_effect
+        self.frappe.db.get_value.side_effect = (
+            lambda dt, *args, **kw: "UGX" if dt == "Company" else get_value(dt, *args, **kw)
+        )
+        self.invoice = FakePOSInvoice("CHK-FX", currency="USD", conversion_rate=3700, items=[_item("r1", "FISH", 1, 1000)])
+        self.docs[("POS Invoice", self.invoice.name)] = self.invoice
+
+    def test_rest_post_and_put_refuse_foreign_line_discount_above_cap(self):
+        for new in (True, False):
+            with self.subTest(new=new):
+                self.invoice._is_new = new
+                if not new:
+                    self.invoice._doc_before_save = FakePOSInvoice(
+                        "CHK-FX", currency="USD", conversion_rate=3700, items=[_item("r1", "FISH", 1, 1000)]
+                    )
+                self.invoice.items[0].update(discount_percentage=5, rate=950, amount=950)
+                self.invoice.calculate_taxes_and_totals()
+                self.invoice.custom_discount_reason = "Complaint"
+                with self.assertRaisesRegex(NotPermitted, "POS-AUTH-REQUIRED"):
+                    self.hook.validate_pos_discount(self.invoice)
+
+    def test_discount_options_reflect_monetary_cap_on_check(self):
+        options = self.discount.list_discount_options("Lakeside Till", self.invoice.name)
+        self.assertAlmostEqual(options["limit_percent"], 100000 / 3700000 * 100, places=4)
+
+    def test_discount_requires_manager_with_server_claim_and_company_amount(self):
+        self.frappe.local.response = {}
+        spec = self.discount.parse_discount_request(discount_percent=5, discount_reason="Complaint")
+        with self.assertRaisesRegex(NotPermitted, "POS-AUTH-REQUIRED"):
+            self.discount.apply_discount_to_invoice(self.invoice, self.profile, spec)
+        challenge = self.frappe.local.response.get("pos_auth_challenge", {})
+        self.assertEqual(challenge.get("amount"), 185000)
+        self.assertEqual(challenge["claim"]["percent"], 5)
+        self.assertIsNone(challenge["claim"]["amount"])
+
+    def set_company_fx_quote(self, rate):
+        erp_utils = ModuleType("erpnext.setup.utils")
+        erp_utils.get_exchange_rate = lambda source, target, date, args=None: rate
+        self.enterContext(patch.dict(sys.modules, {erp_utils.__name__: erp_utils}))
+
+    def test_rest_insert_rejects_client_rate_that_understates_discount(self):
+        self.set_company_fx_quote(3700)
+        self.invoice._is_new = True
+        self.invoice.conversion_rate = 1
+        self.invoice.additional_discount_percentage = 5
+        self.invoice.custom_discount_reason = "Complaint"
+        self.invoice.calculate_taxes_and_totals()
+        with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+            self.hook.validate_pos_discount(self.invoice)
+
+    def test_approved_discount_requires_fresh_approval_when_fx_changes_push_it_over_cap(self):
+        self.set_company_fx_quote(3700)
+        self.privilege_rules.append(
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager",
+                may_perform=1, may_authorise=1, max_percent=10, max_amount=100000)
+        )
+        for currency, rate in (("USD", 1000), ("UGX", 1)):
+            with self.subTest(previous_currency=currency):
+                previous = FakePOSInvoice(
+                    "CHK-FX", currency=currency, conversion_rate=rate, items=[_item("r1", "FISH", 1, 1000)]
+                )
+                for doc in (self.invoice, previous):
+                    doc.additional_discount_percentage = 5
+                    doc.custom_discount_reason = "Complaint"
+                    doc.custom_discount_approver = "manager@example.com"
+                    doc.custom_discount_approved_percent = 5
+                    doc.calculate_taxes_and_totals()
+                self.invoice._doc_before_save = previous
+                with self.assertRaisesRegex(NotPermitted, "SITEOPS-DISC-007"):
+                    self.hook.validate_pos_discount(self.invoice)
+
+    def test_undiscounted_save_verifies_the_first_and_changed_exchange_rates(self):
+        for previous in (None, FakePOSInvoice("CHK-FX", currency="USD", conversion_rate=3700)):
+            with self.subTest(is_new=previous is None):
+                self.invoice._is_new = previous is None
+                self.invoice._doc_before_save = previous
+                self.invoice.conversion_rate = 1
+                with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+                    self.hook.validate_pos_discount(self.invoice)
+
+    def test_first_discount_verifies_unchanged_legacy_exchange_rate(self):
+        self.invoice._doc_before_save = FakePOSInvoice(
+            "CHK-FX", currency="USD", conversion_rate=1, items=[_item("r1", "FISH", 1, 1000)]
+        )
+        self.invoice.conversion_rate = 1
+        self.invoice.additional_discount_percentage = 5
+        self.invoice.custom_discount_reason = "Complaint"
+        self.invoice.calculate_taxes_and_totals()
+        with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+            self.hook.validate_pos_discount(self.invoice)
+
+    def test_apply_first_discount_verifies_legacy_exchange_rate_before_authorization(self):
+        self.invoice.conversion_rate = 1
+        spec = self.discount.parse_discount_request(discount_percent=5, discount_reason="Complaint")
+        with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+            self.discount.apply_discount_to_invoice(self.invoice, self.profile, spec)
+        self.assertEqual(self.invoice.discount_amount, 0)
+
+    def test_invoice_verifies_the_selling_quote_when_buying_quote_differs(self):
+        rates = {"for_buying": 3400, "for_selling": 3700}
+
+        def get_exchange_rate(source, target, date, args=None):
+            self.assertEqual((source, target), ("USD", "UGX"))
+            return rates[args or "for_buying"]
+
+        erp_utils = ModuleType("erpnext.setup.utils")
+        erp_utils.get_exchange_rate = get_exchange_rate
+        self.invoice._is_new = True
+        self.invoice.additional_discount_percentage = 1
+        self.invoice.custom_discount_reason = "Complaint"
+        self.invoice.calculate_taxes_and_totals()
+        with patch.dict(sys.modules, {erp_utils.__name__: erp_utils}):
+            try:
+                self.hook.validate_pos_discount(self.invoice)
+            except Refused as exc:
+                self.fail(f"The valid selling quote was rejected: {exc}")
+        self.assertEqual(self.invoice.conversion_rate, rates["for_selling"])
