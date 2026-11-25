@@ -67,13 +67,20 @@ def _frappe_mariadb_column_bytes(fieldtype: str, length: int | None) -> int:
 
 
 def _extract_dict_function(path: Path, func_name: str) -> dict[str, list[dict]]:
-	"""Parse a module AST and safely evaluate the literal dict returned by `func_name`."""
+	"""Parse a module AST and safely evaluate the literal dict returned by `func_name`.
+
+	Handles both direct `return {...}` and single-argument wrapper calls such as
+	`return _merge_extra_custom_fields({...})` used by `setup_customizations.py`.
+	"""
 	tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 	for node in tree.body:
 		if isinstance(node, ast.FunctionDef) and node.name == func_name:
 			for stmt in node.body:
 				if isinstance(stmt, ast.Return) and stmt.value is not None:
-					return ast.literal_eval(stmt.value)
+					expr = stmt.value
+					if isinstance(expr, ast.Call) and len(expr.args) == 1 and isinstance(expr.args[0], ast.Dict):
+						expr = expr.args[0]
+					return ast.literal_eval(expr)
 	raise AssertionError(f"Could not locate literal return dict in {path}:{func_name}")
 
 
@@ -108,6 +115,15 @@ def _load_all_ury_pos_invoice_fields() -> dict[str, list[tuple[str, dict]]]:
 		try:
 			kds_fields = _extract_dict_function(kds_path, "get_kds_device_custom_fields")
 			_record("ury_pos/kds_device_fields.py", kds_fields.get("POS Invoice", []))
+		except AssertionError:
+			pass
+
+	# 5. timeclock_tips_fields.get_timeclock_tips_custom_fields() (if it defines POS Invoice fields)
+	tc_path = ROOT / "ury_pos" / "timeclock_tips_fields.py"
+	if tc_path.exists():
+		try:
+			tc_fields = _extract_dict_function(tc_path, "get_timeclock_tips_custom_fields")
+			_record("ury_pos/timeclock_tips_fields.py", tc_fields.get("POS Invoice", []))
 		except AssertionError:
 			pass
 

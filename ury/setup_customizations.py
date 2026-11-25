@@ -105,7 +105,6 @@ def get_custom_fields():
 				{
 					"fieldname": "mobile_number",
 					"fieldtype": "Data",
-					"length": 64,
 					"fetch_from": "customer.mobile_number",
 					"label": "Mobile Number",
 					"length": 64,
@@ -121,7 +120,6 @@ def get_custom_fields():
 				{
 					"fieldname": "order_type",
 					"fieldtype": "Select",
-					"length": 64,
 					"default": "Dine In",
 					"label": "Order Type",
 					"length": 64,
@@ -145,7 +143,6 @@ def get_custom_fields():
 				{
 					"fieldname": "no_of_pax",
 					"fieldtype": "Data",
-					"length": 64,
 					"label": "Pax",
 					"length": 64,
 					"insert_after": "column_break_rwbwf",
@@ -224,7 +221,6 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_split_group",
 					"fieldtype": "Data",
-					"length": 64,
 					"insert_after": "custom_split_from",
 					"label": "Split Group",
 					"length": 64,
@@ -259,7 +255,6 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_order_source",
 					"fieldtype": "Select",
-					"length": 64,
 					"default": "POS",
 					"options": "\nPOS\nCaptain\nQR Table\nQR Pickup\nKiosk\nTable Tablet",
 					"label": "Order Source",
@@ -339,7 +334,6 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_room_charge_stay",
 					"fieldtype": "Data",
-					"length": 64,
 					"label": "Room Charge Stay",
 					"length": 64,
 					"description": "Verified stay identifier bound to a room-charge settlement.",
