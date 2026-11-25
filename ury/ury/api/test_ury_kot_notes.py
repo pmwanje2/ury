@@ -353,8 +353,8 @@ class TestStaffKOTNotes(OrderingCases, TestCase):
         for row in self.invoice.items:
             row.get = lambda key, default=None, row=row: getattr(row, key, default)
         self.historical_tickets = {
-            "KOT-PLAIN": Row(name="KOT-PLAIN", kot_items=[Row(item="Fish", quantity=2, comments="no onions")], save=MagicMock()),
-            "KOT-HOT": Row(name="KOT-HOT", kot_items=[Row(item="Fish", quantity=1, comments="extra chilli")], save=MagicMock()),
+            "KOT-PLAIN": Row(name="KOT-PLAIN", docstatus=1, kot_items=[Row(item="Fish", quantity=2, comments="no onions")], save=MagicMock()),
+            "KOT-HOT": Row(name="KOT-HOT", docstatus=1, kot_items=[Row(item="Fish", quantity=1, comments="extra chilli")], save=MagicMock()),
         }
         self.framework.db.get_list.return_value = [Row(name=name) for name in self.historical_tickets]
 
@@ -366,7 +366,16 @@ class TestStaffKOTNotes(OrderingCases, TestCase):
         self.assertEqual(ticket.type, "Cancelled")
         self.assertEqual([(row.quantity, row.cancelled_qty, row.comments) for row in ticket.kot_items],
                          [(2, 2, "no onions"), (1, 1, "extra chilli")])
-        self.assertEqual([ticket.docstatus for ticket in self.historical_tickets.values()], [2, 2])
+        from ury.ury.api.kitchen_ticket_history import is_wholly_cancelled
+
+        self.assertEqual(ticket.naming_series, "CNCL-" + self.pos_profile.custom_kot_naming_series)
+        ticket.submit.assert_called_once_with()
+        self.framework.db.get_values.return_value = [{"original_kot": ticket.original_kot}]
+        for original in self.historical_tickets.values():
+            self.assertEqual(original.docstatus, 1)
+            original.save.assert_not_called()
+            self.assertTrue(is_wholly_cancelled(self.framework, original.name))
+        self.assertFalse(is_wholly_cancelled(self.framework, "KOT-OTHER"))
 
     def test_food_and_drink_rounds_retain_header_and_route_only_new_quantities(self):
         self.kot.resolve_production_units.side_effect = lambda item_code, **kw: ['Bar' if item_code == 'Tea' else 'Kitchen']
