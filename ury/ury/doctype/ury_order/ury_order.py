@@ -2044,12 +2044,13 @@ def _prepare_split_consolidation(destination, sources, company):
 
     checks = [destination, *sources]
     if not any(doc.get("custom_split_group") or doc.get("custom_split_balance") for doc in checks):
-        return None, None
+        return None, None, {}
     if not destination.get("custom_split_group"):
         destination.custom_split_group = next((doc.get("custom_split_group") for doc in sources
                                                if doc.get("custom_split_group")), None)
     dependants = _shared_kitchen_dependants([doc.name for doc in checks])
-    return combine_split_balances(checks, *_split_balance_precisions(destination, company)), dependants
+    balance, line_keys = combine_split_balances(checks, *_split_balance_precisions(destination, company))
+    return balance, dependants, line_keys
 
 
 def _reassign_merged_kitchen_anchors(destination, sources, dependants):
@@ -2112,25 +2113,20 @@ def consolidate_checks(destination, sources):
     reservations_enabled = get_branch_stock_policy(
         branch=destination.branch, company=company
     ).reservation_control_enabled
-    split_balance, dependants = _prepare_split_consolidation(destination, sources, company)
+    split_balance, dependants, line_keys = _prepare_split_consolidation(destination, sources, company)
     split_consolidation = dependants is not None
     destination_before = _reservation_lines(destination.items)
 
     merge_rate_prec = currency_precision(destination)
     verified_priv_child_rates = {}
-    items_by_origin = {
-        row.get("custom_origin_invoice_item") or row.name: row for row in destination.items
-    } if split_consolidation else {}
+    merged_items = {line_keys[row.name]: row for row in destination.items} if split_consolidation else {}
+    billing_keys = [line_keys[row.name] for row in destination.items] if split_balance else []
     for source in sources:
         for row in source.items:
             origin = row.get("custom_origin_invoice_item") or row.name
-            appended = items_by_origin.get(origin)
+            key = line_keys.get(row.name)
+            appended = merged_items.get(key)
             if appended is not None:
-                if (appended.item_code != row.item_code
-                        or flt(appended.get("conversion_factor")) != flt(row.get("conversion_factor"))):
-                    frappe.throw(coded_message(
-                        "SPLIT-ALLOCATION-LOCKED", _("This split check contains conflicting item quantities."),
-                    ))
                 appended.qty = float(Decimal(str(appended.qty)) + Decimal(str(row.qty)))
                 appended.custom_kitchen_anchor = (
                     appended.get("custom_kitchen_anchor") or row.get("custom_kitchen_anchor")
@@ -2144,7 +2140,8 @@ def consolidate_checks(destination, sources):
                 if appended is None and destination.items:
                     appended = destination.items[-1]
                 if split_consolidation and appended is not None:
-                    items_by_origin[origin] = appended
+                    merged_items[key] = appended
+                    billing_keys.append(key)
             if (
                 appended is not None
                 and cint(row.get("custom_is_modifier")) == 1
@@ -2163,9 +2160,7 @@ def consolidate_checks(destination, sources):
         if split_balance:
             from ury.ury_pos.split_balances import set_split_balance
 
-            set_split_balance(destination, split_balance, [
-                row.get("custom_origin_invoice_item") or row.name for row in destination.items
-            ])
+            set_split_balance(destination, split_balance, billing_keys)
         ensure_share_quantity_precision(destination)
 
     if discount_plan is not None:

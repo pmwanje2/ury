@@ -1,6 +1,7 @@
 """Conserve the already-priced check through split, payment and consolidation."""
 
 import json
+from collections import Counter
 from contextlib import contextmanager
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -116,7 +117,7 @@ def _tax_detail_allocations(
         if fixed_fees is None:
             txn_weights = _fixed_tax_weights(item_names, source_rows, txn_tax)
         else:
-            txn_weights = [_decimal(fixed_fees.get(source_rows[name].get("custom_origin_invoice_item") or name))
+            txn_weights = [_decimal(fixed_fees.get(name))
                            for name in item_names]
     elif charge_type == "On Item Quantity":
         txn_weights = [_decimal(source_rows[name].get("qty")) * _decimal(detail.get("rate"))
@@ -240,6 +241,11 @@ def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_
     child["taxes"].append({**labels, **rule, **right})
 
 
+def _billing_key(snapshot, row):
+    return (snapshot.get("billing_rows", {}).get(row.name)
+            or row.get("custom_origin_invoice_item") or row.name)
+
+
 def _allocated_tax_details(saved, taxes, source_rows):
     """Use exact transaction shares from a prior split when splitting again."""
     if not saved:
@@ -254,7 +260,7 @@ def _allocated_tax_details(saved, taxes, source_rows):
     if len(prior_taxes) != len(current_taxes):
         return {}
     tax_map = dict(zip(prior_taxes, current_taxes, strict=True))
-    row_map = {row.get("custom_origin_invoice_item") or row.name: row.name for row in source_rows.values()}
+    row_map = {_billing_key(saved, row): row.name for row in source_rows.values()}
     details = {}
     for detail in saved["details"]:
         key = row_map.get(detail["item"])
@@ -319,8 +325,16 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
     ) if saved else iter(())
     exchange_rate = _decimal(check.get("conversion_rate")) or Decimal(1)
     prior_rows = {}
-    running = {name: _net(row) for name, row in rows_by_name.items()}
+    net_amounts = {name: _net(row) for name, row in rows_by_name.items()}
     for index, tax in enumerate(taxes):
+        prior_tax, prior_rule = {}, {}
+        if tax.get("custom_pos_charge_kind") != "Charged Tip":
+            prior_tax, prior_rule = next(saved_rules, ({}, {}))
+        predecessor = prior_tax.get("previous_charge")
+        if repricing:
+            predecessor = tax.get("previous_charge")
+        parent = index if predecessor is None else predecessor
+        running = prior_rows[parent]["total"] if parent else net_amounts
         details = saved_details.get(tax.get("name"))
         if details is None:
             prior = prior_rows.get(cint(tax.get("row_id")), {})
@@ -347,14 +361,15 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
         rule = _tax_pricing_rule(tax)
         rates = (check.flags.ury_split_tax_scopes or {}).get(id(tax)) if repricing else None
         if tax.get("custom_pos_charge_kind") != "Charged Tip":
-            prior_tax, prior_rule = next(saved_rules, ({}, {}))
             if _matching_tax_account(tax, prior_tax):
                 rule = prior_rule or rule
                 rates = prior_tax.get("item_rates", rates)
+        if predecessor is not None:
+            rule["previous_charge"] = predecessor
         if rates is not None:
             rule["item_rates"] = {
-                name: rates[origin] for name, row in rows_by_name.items()
-                if (origin := row.get("custom_origin_invoice_item") or name) in rates
+                name: rates[key] for name, row in rows_by_name.items()
+                if (key := _billing_key(saved, row) if saved else name) in rates
             }
         _partition_tax(tax, index, details, ratios_by_name, field_ratios, currency_places, base_places,
                        source, child, rule)
@@ -412,8 +427,21 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
 
 def set_split_balance(doc, snapshot, row_names):
     """Register allocations for a document that was produced by the split server."""
-    origins = {key: row.get("custom_origin_invoice_item") or row.name
-               for row, key in zip(doc.items, row_names, strict=True)}
+    # A kitchen origin may now represent several separately priced lines.
+    origin_counts = Counter(row.get("custom_origin_invoice_item") or row.name for row in doc.items)
+    bindings = []
+    origins = {}
+    for row, key in zip(doc.items, row_names, strict=True):
+        origin = row.get("custom_origin_invoice_item") or row.name
+        if origin_counts[origin] > 1:
+            if not row.name:
+                row.set_new_name()
+            origin = row.name
+            bindings.append((row, origin))
+        origins[key] = origin
+    doc.flags.ury_split_billing_rows = bindings
+    if bindings:
+        snapshot["billing_rows"] = {row.name: key for row, key in bindings}
     snapshot["items"] = {
         origins[key]: dict(snapshot["items"][key],
             qty=row.qty, item_code=row.get("item_code"), conversion_factor=row.get("conversion_factor"))
@@ -437,6 +465,10 @@ def get_saved_split_balance(doc):
     flags = getattr(doc, "flags", None)
     working = getattr(flags, "ury_split_balance", None)
     if getattr(flags, "ury_split_balance_owner", None) is _SERVER_BALANCE:
+        # Insert can rename children of a newly split check. Record their
+        # persisted names before the server serializes the allocation.
+        if bindings := getattr(flags, "ury_split_billing_rows", None):
+            working["billing_rows"] = {row.name: key for row, key in bindings}
         return working
     # Load the server copy even when a client omits or alters the hidden field.
     if doc.is_new():
@@ -478,6 +510,7 @@ def _restore_tax_pricing(check, snapshot):
         amounts = fee_amounts.setdefault(detail["tax"], {})
         key = detail["item"]
         amounts[key] = amounts.get(key, Decimal(0)) + _decimal(detail["amount"])
+    row_names = {_billing_key(snapshot, row): row.name for row in check.items}
     detail_rates = _item_rates_by_tax(snapshot)
     rules = _saved_tax_pricing_rules(check, snapshot)
     for index, (saved, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
@@ -487,15 +520,15 @@ def _restore_tax_pricing(check, snapshot):
         values = native.as_dict() if native and _matching_tax_account(native, saved) else {}
         rates = saved.get("item_rates", detail_rates.get(index))
         if rule.get("charge_type") in _ITEM_RATE_CHARGES and rates is not None:
-            scopes[len(tax_rows)] = rates
+            scopes[len(tax_rows)] = {row_names[k]: v for k, v in rates.items() if k in row_names}
         elif rule.get("charge_type") == "Actual" and index in fee_amounts:
             sign = -1 if saved.get("add_deduct_tax") == "Deduct" else 1
             shares = fee_amounts[index]
             total = _decimal(saved.get("tax_amount"))
             if sum(shares.values()) == sign * total:
                 position = len(tax_rows)
-                fixed_fees[position] = (float(total), {key: float(sign * value) for key, value in shares.items()})
-                scopes[position] = detail_rates[index]
+                fixed_fees[position] = (float(total), {row_names[k]: float(sign * v) for k, v in shares.items()})
+                scopes[position] = {row_names[k]: v for k, v in detail_rates[index].items()}
         tax_rows.append({
             **values, **saved,
             "charge_type": "Actual", "row_id": None, "included_in_print_rate": 0, "dont_recompute_tax": 0,
@@ -562,15 +595,70 @@ def _original_fee_details(index, tax, items, applicable, currency_places, base_p
     return details
 
 
+def _consolidation_keys(checks, snapshots):
+    """Pick one representative child name per interchangeable billable line."""
+    representatives, keys, units = {}, {}, {}
+    fields = (
+        "uom", "warehouse", "cost_center",
+        "rate", "price_list_rate", "base_price_list_rate", "discount_percentage", "discount_amount",
+        "margin_type", "margin_rate_or_amount", "ignore_pricing_rule", "pricing_rules", "is_free_item",
+        "custom_is_comp", "custom_is_complimentary", "custom_comp_reason", "custom_comp_type",
+        "custom_comp_approver", "custom_price_overridden", "custom_price_override_reason",
+        "custom_price_override_approver", "custom_original_price_list_rate", "custom_is_open_item",
+        "custom_open_item_reference", "item_tax_template", "item_tax_rate", "custom_efris_tax_category",
+        "custom_tax_exempt", "custom_parent_line_key", "custom_line_role", "custom_is_modifier",
+        "custom_modifier_prefix", "custom_modifier_group", "custom_modifier_option",
+        "custom_modifiers_json", "custom_bundle_overrides_json", "custom_inherit_parent_routing",
+        "custom_hide_unpriced_on_receipt", "custom_seat_no", "custom_course", "comment",
+    )
+    for doc, snapshot in zip(checks, snapshots, strict=True):
+        taxes = snapshot["taxes"] if snapshot else doc.get("taxes") or ()
+        rates = _item_rates_by_tax(snapshot) if snapshot else {}
+        pricing = {row.name: tuple(row.get(field) for field in fields) for row in doc.items}
+        children = {}
+        parent_pricing = {}
+        for row in doc.items:
+            if parent := row.get("custom_parent_line_key"):
+                children.setdefault(parent, []).append(row)
+            else:
+                parent_pricing[row.get("reservation_line_key") or row.name] = pricing[row.name]
+        chain = tuple(tuple(tax.get(field) for field in (
+            "account_head", "description", "cost_center", "custom_pos_charge_kind", "add_deduct_tax",
+            "previous_charge", *_TAX_PRICING_FIELDS,
+        )) for tax in taxes)
+        for row in doc.items:
+            origin = row.get("custom_origin_invoice_item") or row.name
+            unit = row.get("item_code"), _decimal(row.get("conversion_factor"))
+            if units.setdefault(origin, unit) != unit:
+                frappe.throw(coded_message(
+                    "SPLIT-ALLOCATION-LOCKED", _("This split check contains conflicting item quantities."),
+                ))
+            key = _billing_key(snapshot, row) if snapshot else row.name
+            scope = tuple((tax.get("item_rates") or rates.get(i, {})).get(key)
+                          for i, tax in enumerate(taxes))
+            quantity = _decimal(row.qty)
+            modifiers = tuple(
+                (child.item_code, pricing[child.name], _decimal(child.qty) / quantity if quantity else child.qty)
+                for child in children.get(row.get("reservation_line_key") or row.name, ())
+            )
+            signature = (origin, pricing[row.name], parent_pricing.get(row.get("custom_parent_line_key")),
+                         modifiers, chain, scope)
+            representative = representatives.setdefault(signature, row.name)
+            # Existing destination rows already have independent allocations.
+            keys[row.name] = row.name if doc is checks[0] else representative
+    return keys
+
+
 def combine_split_balances(checks, currency_places, base_places):
     """Sum the saved charges, including the item and tax identities on each check."""
     saved = [get_saved_split_balance(doc) if doc.get("custom_split_balance") else None for doc in checks]
+    line_keys = _consolidation_keys(checks, saved)
     if not any(saved):
-        return None
+        return None, line_keys
 
     destination = checks[0]
     combined = {"items": {}, "taxes": [], "details": [], "header": {}}
-    taxes_by_account, details_by_row = {}, {}
+    taxes_by_chain, details_by_row = {}, {}
 
     def add_amounts(merged, values, fields):
         for field in fields:
@@ -585,7 +673,6 @@ def combine_split_balances(checks, currency_places, base_places):
                 "SPLIT-ALLOCATION-CURRENCY", _("Split checks must have matching currencies and exchange rates."),
             ))
 
-        origins = {row.name: row.get("custom_origin_invoice_item") or row.name for row in doc.items}
         has_saved = snapshot is not None
         if has_saved:
             rows = _allocated_rows(doc, snapshot)
@@ -593,8 +680,10 @@ def combine_split_balances(checks, currency_places, base_places):
             snapshot, _ = allocate_split_balances(doc, {}, currency_places, base_places)
             rows = ((row.name, row, snapshot["items"][row.name])
                     for row in doc.items if row.name in snapshot["items"])
-        for _, row, values in rows:
-            add_amounts(combined["items"].setdefault(origins[row.name], {}), values, LINE_AMOUNTS)
+        merged_keys = {}
+        for key, row, values in rows:
+            merged_keys[key] = line_keys[row.name]
+            add_amounts(combined["items"].setdefault(line_keys[row.name], {}), values, LINE_AMOUNTS)
         add_amounts(combined["header"], snapshot["header"], HEADER_AMOUNTS)
 
         detail_rates = _item_rates_by_tax(snapshot)
@@ -604,20 +693,24 @@ def combine_split_balances(checks, currency_places, base_places):
         for index, (tax, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
             labels = {key: val for key, val in tax.items() if key not in TAX_AMOUNTS and key != "item_rates"}
             labels.update(rule)
+            # The preceding row identifies the complete ordered prefix, even
+            # for an Actual fee that a later cumulative charge references.
+            predecessor = tax.get("previous_charge", index)
+            labels["previous_charge"] = tax_indexes[predecessor - 1] + 1 if predecessor else 0
             previous_index = cint(labels.get("row_id")) - 1
             if labels.get("charge_type") in _PREVIOUS_TAX and previous_index in tax_indexes:
                 labels["row_id"] = tax_indexes[previous_index] + 1
             identity = tuple(sorted(labels.items()))
-            if identity not in taxes_by_account:
-                taxes_by_account[identity] = len(combined["taxes"])
+            if identity not in taxes_by_chain:
+                taxes_by_chain[identity] = len(combined["taxes"])
                 combined["taxes"].append(labels)
-            target_index = tax_indexes[index] = taxes_by_account[identity]
+            target_index = tax_indexes[index] = taxes_by_chain[identity]
             target = combined["taxes"][target_index]
             add_amounts(target, tax, TAX_AMOUNTS)
             if rule.get("charge_type") == "Actual" and index not in detail_rates:
                 applicable = []
                 for row in doc.items:
-                    key = origins[row.name] if has_saved else row.name
+                    key = _billing_key(snapshot, row) if has_saved else row.name
                     rates = json.loads(row.get("item_tax_rate") or "{}")
                     if key in snapshot["items"] and rates.get(tax.get("account_head")) != "N/A":
                         applicable.append(key)
@@ -630,11 +723,11 @@ def combine_split_balances(checks, currency_places, base_places):
                     # Older snapshots without a breakup still belong to their original check.
                     rates = dict.fromkeys(snapshot["items"], rule["rate"])
                 target.setdefault("item_rates", {}).update({
-                    key if has_saved else origins[key]: rate for key, rate in rates.items()
+                    merged_keys[key]: rate for key, rate in rates.items()
                     if key in snapshot["items"]
                 })
         for detail in details:
-            key = detail["item"] if has_saved else origins[detail["item"]]
+            key = merged_keys[detail["item"]]
             index = tax_indexes[detail["tax"]]
             identity = (key, index, detail["rate"])
             if identity not in details_by_row:
@@ -645,14 +738,14 @@ def combine_split_balances(checks, currency_places, base_places):
                 "base_amount": detail.get("base_amount", detail.get("amount")),
                 "base_taxable_amount": detail.get("base_taxable_amount", detail.get("taxable_amount")),
             }, DETAIL_AMOUNTS)
-    return combined
+    return combined, line_keys
 
 
 def _allocated_rows(doc, snapshot):
     expected = snapshot["items"]
     seen = set()
     for row in doc.get("items") or ():
-        key = row.get("custom_origin_invoice_item") or row.name
+        key = _billing_key(snapshot, row)
         values = expected.get(key)
         if values is None and cint(row.get("is_disposable")) and not flt(row.get("amount")):
             continue

@@ -18,10 +18,9 @@ class ScopedSplitTaxes(calculate_taxes_and_totals):
         self.native_item_maps = [(item, item.item_tax_rate) for item in self.doc.items]
         for item, native in self.native_item_maps:
             rates = json.loads(native)
-            origin = item.get("custom_origin_invoice_item") or item.name
             for tax in self.doc.taxes:
                 if id(tax) in scopes:
-                    rates[self.scope_key(tax)] = scopes[id(tax)].get(origin, NOT_APPLICABLE_TAX)
+                    rates[self.scope_key(tax)] = scopes[id(tax)].get(item.name, NOT_APPLICABLE_TAX)
             item.item_tax_rate = json.dumps(rates)
 
     @staticmethod
@@ -35,13 +34,22 @@ class ScopedSplitTaxes(calculate_taxes_and_totals):
         return super()._get_tax_rate(tax, item_tax_map)
 
     def get_current_tax_and_net_amount(self, item, tax, item_tax_map):
+        # Native ERPNext accumulates the item total in display order. At a
+        # branch in the merged charge chain, finish the previous row against
+        # its own predecessor before any dependent tax reads that total.
+        if tax.idx > 1:
+            previous = self.doc.taxes[tax.idx - 2]
+            parent = previous.get("previous_charge")
+            if parent is not None and parent != previous.idx - 1:
+                base = self.doc.taxes[parent - 1].grand_total_for_current_item if parent else item.net_amount
+                charge = self.get_tax_amount_if_for_valuation_or_deduction(previous.tax_amount_for_current_item, previous)
+                previous.grand_total_for_current_item = base + charge
         shares = fixed_fee_shares(self.doc, tax)
         if shares is None:
             return super().get_current_tax_and_net_amount(item, tax, item_tax_map)
-        key = item.get("custom_origin_invoice_item") or item.name
-        if key not in shares:
+        if item.name not in shares:
             return 0, 0
-        fee = shares[key]
+        fee = shares[item.name]
         if not tax.get("dont_recompute_tax"):
             self.set_item_wise_tax(item, tax, self._get_tax_rate(tax, item_tax_map), fee, item.net_amount)
         return item.net_amount, fee
