@@ -609,4 +609,151 @@ describe('POS-PR-7: Header status strip, MenuCard daypart/promo, OrderPanel & Pa
     expect(footer).not.toHaveTextContent('UGX 2000');
     expect(footer).toHaveTextContent('UGX 1600');
   });
+
+  it('OrderPanel forwards stable row identity (name & reservation_line_key) and renders #152 override/open/comp totals when editing an existing draft', async () => {
+    mockPosState.value = {
+      ...mockPosState.value,
+      isUpdatingOrder: true,
+      orderId: 'KHH00022',
+      selectedOrderType: 'Take Away',
+      selectedTable: null,
+      noOfPax: 1,
+      activeOrders: [
+        {
+          id: 'KH-BURGER-18',
+          item: 'KH-BURGER-18',
+          name: 'Classic Beef Burger',
+          price: 12500,
+          quantity: 1,
+          uniqueId: 'row-ov',
+          invoiceItemName: 'row-ov',
+          reservationLineKey: 'rk-ov',
+        },
+        {
+          id: 'KH-BURGER-SPICY-18',
+          item: 'KH-BURGER-SPICY-18',
+          name: 'Spicy Beef Burger',
+          price: 16000,
+          quantity: 1,
+          uniqueId: 'row-prle',
+          invoiceItemName: 'row-prle',
+          reservationLineKey: 'rk-prle',
+        },
+        {
+          id: 'KH-OPEN-ITEM',
+          item: 'KH-OPEN-ITEM',
+          name: 'Chef Special Open - Chef Special R4',
+          price: 14000,
+          quantity: 1,
+          uniqueId: 'row-open',
+          invoiceItemName: 'row-open',
+          reservationLineKey: 'row-open',
+        },
+        {
+          id: 'KH-WATER',
+          item: 'KH-WATER',
+          name: 'Still Mineral Water',
+          price: 0,
+          quantity: 1,
+          uniqueId: 'row-comp',
+          invoiceItemName: 'row-comp',
+          reservationLineKey: 'rk-comp',
+        },
+        {
+          id: 'KH-BURGER-18',
+          item: 'KH-BURGER-18',
+          name: 'Classic Beef Burger',
+          price: 20000,
+          quantity: 1,
+          uniqueId: 'new-line-1',
+          reservationLineKey: 'new-line-1',
+        },
+      ],
+    };
+
+    mockCallPost.mockResolvedValueOnce({
+      message: {
+        net_total: 58500,
+        discount_amount: 0,
+        tax_rows: [{ description: 'VAT 18%', rate: 18, tax_amount: 10530 }],
+        total_taxes_and_charges: 10530,
+        grand_total: 69030,
+        rounded_total: 69030,
+        item_taxes: [
+          { item_code: 'KH-BURGER-18', rate: 12500, net_amount: 12500 },
+          { item_code: 'KH-BURGER-SPICY-18', rate: 16000, net_amount: 16000 },
+          { item_code: 'KH-OPEN-ITEM', rate: 14000, net_amount: 14000 },
+          { item_code: 'KH-WATER', rate: 0, net_amount: 0 },
+          { item_code: 'KH-BURGER-18', rate: 16000, net_amount: 16000 },
+        ],
+        efris_warnings: [],
+      },
+    });
+
+    render(<OrderPanel />);
+
+    await waitFor(
+      () => {
+        expect(mockCallPost).toHaveBeenCalledWith(
+          'ury.ury_pos.api.preview_order_totals',
+          expect.objectContaining({
+            invoice_name: 'KHH00022',
+            pos_profile: 'Main Till',
+            order_type: 'Take Away',
+          }),
+        );
+      },
+      { timeout: 1000 },
+    );
+
+    const previewCall = mockCallPost.mock.calls.find(
+      ([method]) => method === 'ury.ury_pos.api.preview_order_totals',
+    );
+    expect(previewCall).toBeTruthy();
+    const sentItems = (previewCall![1] as { items: Array<Record<string, unknown>> }).items;
+    expect(sentItems).toHaveLength(5);
+    expect(sentItems[0]).toMatchObject({
+      name: 'row-ov',
+      reservation_line_key: 'rk-ov',
+      item: 'KH-BURGER-18',
+      qty: 1,
+      rate: 12500,
+    });
+    expect(sentItems[2]).toMatchObject({
+      name: 'row-open',
+      reservation_line_key: 'row-open',
+      item: 'KH-OPEN-ITEM',
+      qty: 1,
+      rate: 14000,
+    });
+    expect(sentItems[3]).toMatchObject({
+      name: 'row-comp',
+      reservation_line_key: 'rk-comp',
+      item: 'KH-WATER',
+      qty: 1,
+      rate: 0,
+    });
+    expect(sentItems[4]).toMatchObject({
+      reservation_line_key: 'new-line-1',
+      item: 'KH-BURGER-18',
+      qty: 1,
+    });
+    expect(sentItems[4]).not.toHaveProperty('name');
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('order-tax-preview-footer')).toHaveTextContent('UGX 69030');
+      },
+      { timeout: 1000 },
+    );
+
+    const panel = screen.getByTestId('order-panel');
+    expect(panel).toHaveTextContent('UGX 12500');
+    expect(panel).toHaveTextContent('UGX 14000');
+    expect(panel).toHaveTextContent('UGX 0');
+    const footer = screen.getByTestId('order-tax-preview-footer');
+    expect(footer).toHaveTextContent('UGX 58500');
+    expect(footer).toHaveTextContent('UGX 10530');
+    expect(footer).toHaveTextContent('UGX 69030');
+  });
 });

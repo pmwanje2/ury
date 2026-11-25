@@ -2604,6 +2604,486 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
         self.assertEqual(comp_doc["items"][0].get("custom_is_complimentary"), 1)
         self.assertEqual(comp_doc["items"][0].get("discount_percentage"), 100.0)
 
+    def test_preview_order_totals_with_items_and_invoice_name_preserves_152_overrides_open_comp_and_delivery(self):
+        """R5 BLOCKER-R4-1 RED: preview_order_totals called with BOTH invoice_name AND non-empty items
+        (OrderPanel edit / table re-open path) must preserve #152 overridden rates, open-item rates &
+        names, complimentary zeroing, and Delivery order-type pricing for matched saved rows, while
+        pricing newly added unsaved cart lines via daypart/menu + PRLE rules.
+        """
+        frappe_mock, utils = _make_frappe_env()
+        frappe_mock.session = SimpleNamespace(user="cashier_a@example.com")
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        frappe_mock.has_permission = MagicMock(return_value=True)
+        frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+            "Rest A"
+            if dt == "URY Restaurant"
+            else (
+                "Main Branch A"
+                if dt == "POS Profile" and field == "branch"
+                else (
+                    "Classic Beef Burger"
+                    if dt == "Item" and flt == "KH-BURGER-18"
+                    else (
+                        "Spicy Beef Burger"
+                        if dt == "Item" and flt == "KH-BURGER-SPICY-18"
+                        else ("Chef Special Open" if dt == "Item" and flt == "KH-OPEN-ITEM" else None)
+                    )
+                )
+            )
+        )
+        frappe_mock.get_all.return_value = []
+
+        price_book = {
+            ("KH-BURGER-18", "Kampala Menu"): 20000.0,
+            ("KH-BURGER-SPICY-18", "Kampala Menu"): 20000.0,
+            ("KH-OPEN-ITEM", "Kampala Menu"): 15000.0,
+            ("KH-BURGER-18", "KHH Delivery Menu"): 22000.0,
+            ("KH-BURGER-SPICY-18", "KHH Delivery Menu"): 22000.0,
+            ("KH-OPEN-ITEM", "KHH Delivery Menu"): 15000.0,
+        }
+
+        def _fake_price_valid_on(code, pl, *_a, **_k):
+            rate = price_book.get((code, pl))
+            return Row(price_list_rate=rate) if rate is not None else None
+
+        class _EditPrlePreviewInvoice(FakeInvoice):
+            def precision(self, _f=None):
+                return 0
+
+            def set_missing_values(self, for_validate=False):
+                super().set_missing_values(for_validate=for_validate)
+                if _cint(self.get("ignore_pricing_rule")) == 1:
+                    return
+                self["pricing_rules"] = []
+                for idx, r in enumerate(self.get("items") or [], start=1):
+                    r.setdefault("name", f"PREVIEW-EDIT-ROW-{idx}")
+                    if r.get("item_code") in ("KH-BURGER-18", "KH-BURGER-SPICY-18"):
+                        plr = float(r.get("price_list_rate") or 0)
+                        r["discount_percentage"] = 20.0
+                        r["discount_amount"] = round(plr * 0.20, 0)
+                        r["rate"] = round(plr * 0.80, 0)
+                        r["pricing_rules"] = '["PRLE-0008"]'
+                        self["pricing_rules"].append(
+                            Row(pricing_rule="PRLE-0008", item_code=r["item_code"], child_docname=r["name"])
+                        )
+
+            def calculate_taxes_and_totals(self):
+                prec = self.precision("grand_total")
+                net = 0.0
+                for r in self.get("items") or []:
+                    plr = float(r.get("price_list_rate") or 0)
+                    disc_pct = float(r.get("discount_percentage") or 0)
+                    if disc_pct > 0:
+                        eff_rate = round(plr * (1.0 - disc_pct / 100.0), prec)
+                    else:
+                        eff_rate = round(float(r.get("rate") or 0), prec)
+                    r["rate"] = eff_rate
+                    r["amount"] = round(eff_rate * float(r.get("qty") or 0), prec)
+                    r["net_amount"] = r["amount"]
+                    net += r["net_amount"]
+                self["total"] = round(net, prec)
+                self["net_total"] = round(net, prec)
+                tax_total = 0.0
+                for t in self.get("taxes") or []:
+                    t["tax_amount"] = round(net * float(t.get("rate") or 0) / 100.0, prec)
+                    tax_total += t["tax_amount"]
+                self["total_taxes_and_charges"] = round(tax_total, prec)
+                self["grand_total"] = round(net + tax_total, prec)
+                self["rounded_total"] = self["grand_total"]
+                self["rounding_adjustment"] = 0.0
+
+        def _fake_apply_order_type_tax(doc, _profile, customer_doc=None, posting_date=None):
+            if doc.get("order_type") == "Delivery":
+                doc.tax_category = "TC Delivery - KHH"
+                doc.taxes_and_charges = "STC Delivery 10% - KHH - KHH"
+                doc["taxes"] = [
+                    Row(
+                        charge_type="On Net Total",
+                        account_head="VAT 10% Output - KHH",
+                        description="Delivery Levy 10%",
+                        rate=10.0,
+                        tax_amount=0.0,
+                        custom_pos_charge_kind="",
+                    )
+                ]
+            else:
+                doc.tax_category = "TC Take Away - KHH"
+                doc.taxes_and_charges = "STC Take Away 18% - KHH - KHH"
+                doc["taxes"] = [
+                    Row(
+                        charge_type="On Net Total",
+                        account_head="VAT 18% Output - KHH",
+                        description="VAT 18%",
+                        rate=18.0,
+                        tax_amount=0.0,
+                        custom_pos_charge_kind="",
+                    )
+                ]
+
+        profile = Row(
+            name="POS Profile A",
+            company="Kampala House Hospitality",
+            currency="UGX",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            selling_price_list="Kampala Menu",
+            cost_center="Main - KHH",
+            warehouse="Stores - KHH",
+            applicable_for_users=[Row(user="cashier_a@example.com")],
+            customer_groups=[],
+        )
+
+        # Draft 1: Take Away #152 override (12,500) + PRLE sibling (16,000) + Open Item (14,000) = 42,500 / 50,150
+        orig_takeaway = Row(
+            name="KHH00022",
+            branch="Main Branch A",
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk-in Guest - KHH",
+            no_of_pax=1,
+            custom_serving_period="Happy Hour",
+            custom_transaction_local_time="08:51:00",
+            custom_transaction_weekday="Wed",
+            selling_price_list="Kampala Menu",
+            custom_is_complimentary=0,
+            items=[
+                Row(
+                    name="row-ov",
+                    reservation_line_key="rk-ov",
+                    item_code="KH-BURGER-18",
+                    item_name="Classic Beef Burger",
+                    qty=1.0,
+                    price_list_rate=12500.0,
+                    base_price_list_rate=12500.0,
+                    rate=12500.0,
+                    base_rate=12500.0,
+                    discount_percentage=0.0,
+                    discount_amount=0.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=1,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=0,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+                Row(
+                    name="row-prle",
+                    reservation_line_key="rk-prle",
+                    item_code="KH-BURGER-SPICY-18",
+                    item_name="Spicy Beef Burger",
+                    qty=1.0,
+                    price_list_rate=20000.0,
+                    base_price_list_rate=20000.0,
+                    rate=16000.0,
+                    base_rate=16000.0,
+                    discount_percentage=20.0,
+                    discount_amount=4000.0,
+                    pricing_rules='["PRLE-0008"]',
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=0,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+                Row(
+                    name="row-open",
+                    reservation_line_key="",
+                    item_code="KH-OPEN-ITEM",
+                    item_name="Chef Special Open - Chef Special R4",
+                    qty=1.0,
+                    price_list_rate=14000.0,
+                    base_price_list_rate=14000.0,
+                    rate=14000.0,
+                    base_rate=14000.0,
+                    discount_percentage=0.0,
+                    discount_amount=0.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=1,
+                    custom_is_complimentary=0,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+            ],
+        )
+
+        # Draft 2: Item-scope complimentary (0 / 0)
+        orig_comp = Row(
+            name="KHH00019",
+            branch="Main Branch A",
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk-in Guest - KHH",
+            no_of_pax=1,
+            custom_serving_period="Happy Hour",
+            custom_transaction_local_time="08:51:00",
+            custom_transaction_weekday="Wed",
+            selling_price_list="Kampala Menu",
+            custom_is_complimentary=1,
+            items=[
+                Row(
+                    name="row-comp",
+                    reservation_line_key="rk-comp",
+                    item_code="KH-BURGER-18",
+                    item_name="Classic Beef Burger",
+                    qty=1.0,
+                    price_list_rate=20000.0,
+                    base_price_list_rate=20000.0,
+                    rate=0.0,
+                    base_rate=0.0,
+                    discount_percentage=100.0,
+                    discount_amount=20000.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=1,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+            ],
+        )
+
+        # Draft 3: Delivery #152 check on KHH Delivery Menu (12,500 + 17,600 + 14,000 = 44,100 / 48,510)
+        orig_delivery = Row(
+            name="KHH00023",
+            branch="Main Branch A",
+            pos_profile="POS Profile A",
+            order_type="Delivery",
+            customer="Walk-in Guest - KHH",
+            no_of_pax=1,
+            custom_serving_period="Happy Hour",
+            custom_transaction_local_time="08:51:00",
+            custom_transaction_weekday="Wed",
+            selling_price_list="KHH Delivery Menu",
+            custom_is_complimentary=0,
+            items=[
+                Row(
+                    name="row-d-ov",
+                    reservation_line_key="rk-d-ov",
+                    item_code="KH-BURGER-18",
+                    item_name="Classic Beef Burger",
+                    qty=1.0,
+                    price_list_rate=12500.0,
+                    base_price_list_rate=12500.0,
+                    rate=12500.0,
+                    base_rate=12500.0,
+                    discount_percentage=0.0,
+                    discount_amount=0.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=1,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=0,
+                ),
+                Row(
+                    name="row-d-prle",
+                    reservation_line_key="rk-d-prle",
+                    item_code="KH-BURGER-SPICY-18",
+                    item_name="Spicy Beef Burger",
+                    qty=1.0,
+                    price_list_rate=22000.0,
+                    base_price_list_rate=22000.0,
+                    rate=17600.0,
+                    base_rate=17600.0,
+                    discount_percentage=20.0,
+                    discount_amount=4400.0,
+                    pricing_rules='["PRLE-0008"]',
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=0,
+                ),
+                Row(
+                    name="row-d-open",
+                    reservation_line_key="",
+                    item_code="KH-OPEN-ITEM",
+                    item_name="Chef Special Delivery",
+                    qty=1.0,
+                    price_list_rate=14000.0,
+                    base_price_list_rate=14000.0,
+                    rate=14000.0,
+                    base_rate=14000.0,
+                    discount_percentage=0.0,
+                    discount_amount=0.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=1,
+                    custom_is_complimentary=0,
+                ),
+            ],
+        )
+
+        invoices = {
+            "KHH00022": orig_takeaway,
+            "KHH00019": orig_comp,
+            "KHH00023": orig_delivery,
+        }
+        created_docs = []
+
+        def _new_doc(_dt):
+            d = _EditPrlePreviewInvoice()
+            created_docs.append(d)
+            return d
+
+        frappe_mock.new_doc = MagicMock(side_effect=_new_doc)
+        frappe_mock.get_doc = MagicMock(
+            side_effect=lambda dt, name=None: invoices[name] if dt == "POS Invoice" else profile
+        )
+
+        def _fake_resolve_menu(branch, restaurant=None, table=None, room=None, order_type=None, customer=None, local_dt=None):
+            return {
+                "price_list": "KHH Delivery Menu" if order_type == "Delivery" else "Kampala Menu",
+                "serving_period": "Happy Hour",
+            }
+
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury.api.item_price": _stub(
+                "ury.ury.api.item_price",
+                item_price_release_states=MagicMock(return_value=(None, None)),
+                price_valid_on=MagicMock(side_effect=_fake_price_valid_on),
+            ),
+            "ury.ury_pos.dayparts": _stub(
+                "ury.ury_pos.dayparts",
+                resolve_menu_and_price_list=MagicMock(side_effect=_fake_resolve_menu),
+                stamp_invoice_outlet_time=MagicMock(
+                    return_value={"local_dt": datetime(2026, 11, 25, 8, 51, 0), "local_time": "08:51:00"}
+                ),
+            ),
+            "ury.ury_pos.default_customer": _stub(
+                "ury.ury_pos.default_customer",
+                resolve_default_customer=MagicMock(return_value="Walk-in Guest - KHH"),
+                get_default_customer_config=MagicMock(return_value={}),
+            ),
+            "ury.ury_pos.tax_determination": _stub(
+                "ury.ury_pos.tax_determination",
+                apply_order_type_tax=MagicMock(side_effect=_fake_apply_order_type_tax),
+                validate_efris_readiness=MagicMock(return_value=[]),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                sync_service_charge=MagicMock(),
+            ),
+        }
+
+        with patch.dict(sys.modules, modules):
+            api_mod = _load_module("ury.ury_pos.api", URY_PKG / "ury_pos/api.py")
+            with (
+                patch.object(api_mod, "_authorize_pos_profile_access", MagicMock()),
+                patch.object(
+                    api_mod,
+                    "_authorize_customer_for_pos_profile",
+                    MagicMock(return_value=Row(name="Walk-in Guest - KHH")),
+                ),
+            ):
+                # 1. OrderPanel edit payload WITH name + reservation_line_key on KHH00022
+                res_edit_keyed = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Take Away",
+                    invoice_name="KHH00022",
+                    items=[
+                        {"name": "row-ov", "reservation_line_key": "rk-ov", "item": "KH-BURGER-18", "qty": 1, "rate": 12500},
+                        {"name": "row-prle", "reservation_line_key": "rk-prle", "item": "KH-BURGER-SPICY-18", "qty": 1, "rate": 16000},
+                        {"name": "row-open", "reservation_line_key": "row-open", "item": "KH-OPEN-ITEM", "qty": 1, "rate": 14000},
+                    ],
+                )
+                # 2. Legacy/HTTP payload WITHOUT name/reservation_line_key on KHH00022
+                res_edit_unkeyed = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Take Away",
+                    invoice_name="KHH00022",
+                    items=[
+                        {"item": "KH-BURGER-18", "qty": 1, "rate": 12500},
+                        {"item": "KH-BURGER-SPICY-18", "qty": 1, "rate": 16000},
+                        {"item": "KH-OPEN-ITEM", "qty": 1, "rate": 14000},
+                    ],
+                )
+                # 3. Edit qty on overridden row (1 -> 2) + add a NEW unsaved KH-BURGER-18 line
+                res_edit_qty_and_new = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Take Away",
+                    invoice_name="KHH00022",
+                    items=[
+                        {"name": "row-ov", "reservation_line_key": "rk-ov", "item": "KH-BURGER-18", "qty": 2, "rate": 12500},
+                        {"name": "row-prle", "reservation_line_key": "rk-prle", "item": "KH-BURGER-SPICY-18", "qty": 1, "rate": 16000},
+                        {"name": "row-open", "reservation_line_key": "row-open", "item": "KH-OPEN-ITEM", "qty": 1, "rate": 14000},
+                        {"reservation_line_key": "new-line-1", "item": "KH-BURGER-18", "qty": 1, "rate": 20000},
+                    ],
+                )
+                # 4. Complimentary draft with non-empty items
+                res_comp_items = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Take Away",
+                    invoice_name="KHH00019",
+                    items=[
+                        {"name": "row-comp", "reservation_line_key": "rk-comp", "item": "KH-BURGER-18", "qty": 1, "rate": 0},
+                    ],
+                )
+                # 5. Delivery draft KHH00023 with non-empty items
+                res_delivery_items = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Delivery",
+                    invoice_name="KHH00023",
+                    items=[
+                        {"name": "row-d-ov", "reservation_line_key": "rk-d-ov", "item": "KH-BURGER-18", "qty": 1, "rate": 12500},
+                        {"name": "row-d-prle", "reservation_line_key": "rk-d-prle", "item": "KH-BURGER-SPICY-18", "qty": 1, "rate": 17600},
+                        {"name": "row-d-open", "reservation_line_key": "row-d-open", "item": "KH-OPEN-ITEM", "qty": 1, "rate": 14000},
+                    ],
+                )
+                # 6. Order-type switch while editing KHH00022 (Take Away -> Delivery)
+                res_switch_delivery = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Delivery",
+                    invoice_name="KHH00022",
+                    items=[
+                        {"name": "row-ov", "reservation_line_key": "rk-ov", "item": "KH-BURGER-18", "qty": 1, "rate": 12500},
+                        {"name": "row-prle", "reservation_line_key": "rk-prle", "item": "KH-BURGER-SPICY-18", "qty": 1, "rate": 16000},
+                        {"name": "row-open", "reservation_line_key": "row-open", "item": "KH-OPEN-ITEM", "qty": 1, "rate": 14000},
+                    ],
+                )
+
+        # 1. Keyed edit parity (exact DB 42,500 / 50,150, NOT 47,000 / 55,460)
+        self.assertEqual(res_edit_keyed["net_total"], 42500.0)
+        self.assertEqual(res_edit_keyed["grand_total"], 50150.0)
+        self.assertEqual([r["rate"] for r in res_edit_keyed["item_taxes"]], [12500.0, 16000.0, 14000.0])
+        self.assertEqual(created_docs[0]["items"][2].get("item_name"), "Chef Special Open - Chef Special R4")
+
+        # 2. Unkeyed edit parity
+        self.assertEqual(res_edit_unkeyed["net_total"], 42500.0)
+        self.assertEqual(res_edit_unkeyed["grand_total"], 50150.0)
+        self.assertEqual([r["rate"] for r in res_edit_unkeyed["item_taxes"]], [12500.0, 16000.0, 14000.0])
+
+        # 3. Qty bump on overridden line (12,500 x 2 = 25,000) + brand-new unsaved same item_code priced via PRLE (16,000)
+        self.assertEqual(res_edit_qty_and_new["net_total"], 71000.0)
+        self.assertEqual(res_edit_qty_and_new["grand_total"], 83780.0)
+        self.assertEqual([r["rate"] for r in res_edit_qty_and_new["item_taxes"]], [12500.0, 16000.0, 14000.0, 16000.0])
+        self.assertEqual(
+            [r["net_amount"] for r in res_edit_qty_and_new["item_taxes"]],
+            [25000.0, 16000.0, 14000.0, 16000.0],
+        )
+
+        # 4. Complimentary draft stays 0 / 0 with non-empty items (NOT 16,000 / 18,880)
+        self.assertEqual(res_comp_items["net_total"], 0.0)
+        self.assertEqual(res_comp_items["grand_total"], 0.0)
+        self.assertEqual(res_comp_items["item_taxes"][0]["rate"], 0.0)
+
+        # 5. Delivery draft stays 44,100 / 48,510 with non-empty items (NOT 50,200 / 55,220)
+        self.assertEqual(res_delivery_items["net_total"], 44100.0)
+        self.assertEqual(res_delivery_items["grand_total"], 48510.0)
+        self.assertEqual([r["rate"] for r in res_delivery_items["item_taxes"]], [12500.0, 17600.0, 14000.0])
+
+        # 6. Order-type switch Take Away -> Delivery preserves #152 override (12,500) & open (14,000), reprices standard sibling (17,600)
+        self.assertEqual(res_switch_delivery["net_total"], 44100.0)
+        self.assertEqual(res_switch_delivery["grand_total"], 48510.0)
+        self.assertEqual([r["rate"] for r in res_switch_delivery["item_taxes"]], [12500.0, 17600.0, 14000.0])
+
 
 if __name__ == "__main__":
     unittest.main()
