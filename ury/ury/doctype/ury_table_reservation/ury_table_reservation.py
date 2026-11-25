@@ -13,6 +13,19 @@ SYSTEM_TRANSITIONS = frozenset({("Confirmed", "No Show"), ("Seated", "Completed"
 
 
 class URYTableReservation(Document):
+    def before_insert(self):
+        from ury.ury.api.table_reservation import lock_reservation_tables
+
+        lock_reservation_tables([self.reserved_table])
+
+    def _save(self, *args, **kwargs):
+        if not self.is_new():
+            from ury.ury.api.table_reservation import lock_reservation_tables
+
+            previous_table = frappe.db.get_value(self.doctype, self.name, "reserved_table")
+            lock_reservation_tables([previous_table, self.reserved_table])
+        return super()._save(*args, **kwargs)
+
     def validate(self):
         from ury.ury.api.table_reservation import ensure_reservations_enabled
 
@@ -24,6 +37,9 @@ class URYTableReservation(Document):
         if before and bool(before.get("is_waitlist")) != bool(self.get("is_waitlist")):
             frappe.throw(_("The reservation type cannot be changed."))
         if self.get("is_waitlist"):
+            from ury.ury.api.table_reservation import validate_waitlist_phone
+
+            self.customer_phone = validate_waitlist_phone(self.customer_phone)
             if self.requested_room and frappe.db.get_value("URY Room", self.requested_room, "branch") != self.branch:
                 frappe.throw(_("The requested room does not belong to this outlet."))
             if not self.flags.get("ury_waitlist_action") and (
@@ -157,13 +173,15 @@ class URYTableReservation(Document):
             self.validate_unseat()
 
     def validate_table_is_free_to_seat(self):
-        from ury.ury.api.table_reservation import open_checks_on
+        from ury.ury.api.table_reservation import lock_reservation_tables, open_checks_on
 
-        if open_checks_on([self.reserved_table]):
+        lock_reservation_tables([self.reserved_table])
+        if open_checks_on([self.reserved_table], for_update=True):
             frappe.throw(_("Table {0} has an open check. Seat the party at a free table.").format(self.reserved_table))
-        if frappe.db.exists("URY Table Reservation", {
+        seated = frappe.db.get_value("URY Table Reservation", {
             "reserved_table": self.reserved_table, "status": "Seated", "name": ["!=", self.name],
-        }):
+        }, "name", for_update=True)
+        if isinstance(seated, str) and seated:
             frappe.throw(_("Another party is already seated at table {0}.").format(self.reserved_table))
 
     def validate_unseat(self):

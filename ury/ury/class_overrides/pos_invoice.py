@@ -304,15 +304,26 @@ class CustomPOSInvoice(POSInvoice):
 			self.selling_price_list = preserved_pl
 		return res
 
+	def set_qty_as_per_stock_uom(self):
+		from ury.ury_pos.split_balances import get_saved_split_balance, restore_split_stock
+
+		super().set_qty_as_per_stock_uom()
+		restore_split_stock(self, get_saved_split_balance(self))
+
 	def calculate_taxes_and_totals(self):
 		from ury.ury.hooks.ury_pos_tender import calculate_taxes_and_totals_excluding_tip
 		from ury.ury_pos.pricing_actions import calculate_taxes_and_totals_for_service_charge
 
+		from ury.ury_pos.split_balances import get_saved_split_balance, restore_split_balance
+
 		base_calculate = super().calculate_taxes_and_totals
-		return calculate_taxes_and_totals_for_service_charge(
+		snapshot = get_saved_split_balance(self)
+		result = calculate_taxes_and_totals_for_service_charge(
 			self,
 			lambda: calculate_taxes_and_totals_excluding_tip(self, base_calculate),
 		)
+		restore_split_balance(self, snapshot)
+		return result
 
 	def before_print(self, settings=None):
 		from ury.ury.doctype.ury_order.ury_order import check_split_target_access

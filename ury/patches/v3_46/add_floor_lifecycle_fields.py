@@ -3,6 +3,10 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 def execute():
     create_custom_fields({
+        "POS Invoice": [
+            dict(fieldname="custom_split_balance", label="Split Balance", fieldtype="Long Text",
+                 insert_after="custom_split_group", read_only=1, hidden=1, no_copy=1),
+        ],
         "POS Invoice Item": [
             dict(fieldname="custom_seat_no", label="Seat Number", fieldtype="Int",
                  insert_after="custom_course", default="0", non_negative=1),

@@ -5,6 +5,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_datetime
 
+from ury.brand import coded_message
+
 from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
 from ury.ury.api.ury_kot_routing import resolve_production_units
 from ury.ury.api.ury_production_context import resolve_production_context
@@ -81,6 +83,7 @@ def create_order_items(items):
             # computed one (see _line_keyed_items below) so it survives the
             # trip through KOT item creation instead of being dropped.
             "reservation_line_key": item.get("reservation_line_key"),
+            "raw_line_key": item.get("raw_line_key"),
             "custom_parent_line_key": item.get("custom_parent_line_key") or None,
             "custom_course": item.get("custom_course"),
             "custom_seat_no": cint(item.get("custom_seat_no")),
@@ -209,8 +212,17 @@ def create_kot_doc(
         # (_resolve_or_create_pos_invoice not setting invoice.branch).
         menu = frappe.db.get_value("URY Restaurant", {"branch": pos_invoice.branch}, "active_menu")
 
+    stored_courses = {
+        (row.get("item_code"), row.get("reservation_line_key") or row.get("name")): row.get("custom_course")
+        for row in pos_invoice.get("items") or []
+    }
     for item in items:
-        course = resolve_line_course(item, item["item_code"], menu)
+        default_course = frappe.db.get_value("URY Menu Item", {"item": item["item_code"], "parent": menu}, "course")
+        course = item.get("custom_course")
+        if not course:
+            course = default_course
+        elif course != default_course and course != stored_courses.get((item["item_code"], item.get("raw_line_key"))):
+            course = resolve_line_course(item, item["item_code"], menu)
         kot_doc.append(
             "kot_items",
             {
@@ -871,6 +883,14 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
 
     for key, cur in current_lines.items():
         prev = previous_lines.get(key)
+        if prev and cur.get("raw_line_key") and (
+            (cur.get("custom_course") and cur.get("custom_course") != prev.get("custom_course"))
+            or cur.get("custom_seat_no") != prev.get("custom_seat_no")
+        ):
+            frappe.throw(coded_message(
+                "KOT-PLACEMENT-LOCKED",
+                _("Seat and course cannot be changed after an item has been sent to the kitchen."),
+            ))
         prev_qty = flt(prev["qty"]) if prev and prev["comments"] == cur["comments"] else 0
         # Round to the site precision so float subtraction residue (for
         # example 0.30000000000000004 - 0.3) is not read as a quantity change.

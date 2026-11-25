@@ -794,35 +794,59 @@ def _guest_label(value):
 
 
 def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None):
-    """Move a ticket only when all of its issued quantities move together."""
-    by_key = {}
-    by_code = defaultdict(list)
+    """Move connected tickets only when all their reserved lines move together."""
+    by_key = defaultdict(dict)
+    moving_dishes = set()
     for item in source.items:
-        by_code[item.item_code].append(item.name)
         for key in (item.get("reservation_line_key") or item.name, _line_key(item.item_code, item, 1)):
-            by_key[key] = item
+            by_key[key][item.name] = item
+        if move_map.get(item.name, 0) and not cint(item.get("ury_held")):
+            moving_dishes.add(item.item_code)
 
-    movable = []
+    candidates = {}
+    retained = set()
     for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
         rows = frappe.get_all(
             "URY KOT Items", filters={"parent": ticket, "parenttype": "URY KOT"},
             fields=["reservation_line_key", "item", "quantity"],
         )
-        matches = [(by_key.get(row.reservation_line_key), row) for row in rows]
-        if matches and all(
-            line and not line.get("custom_kitchen_anchor")
-            and move_map.get(line.name, 0) == line.qty
-            and (row.get("quantity") is None or abs(flt(row.quantity)) <= line.qty)
-            for line, row in matches
-        ):
-            movable.append(ticket)
-        elif anchored is not None:
-            for line, row in matches:
-                if line:
-                    anchored.add(line.name)
-                else:
-                    anchored.update(by_code[row.item])
-    return movable
+        line_qty = defaultdict(Decimal)
+        whole = bool(rows)
+        for row in rows:
+            matches = [
+                item for item in by_key.get(row.get("reservation_line_key"), {}).values()
+                if not row.get("item") or item.item_code == row.get("item")
+            ]
+            if len(matches) != 1:
+                if reservations_enabled and (row.get("item") in moving_dishes
+                        or any(move_map.get(item.name, 0) for item in matches)):
+                    frappe.throw(coded_message(
+                        "SPLIT-RESERVED-KOT",
+                        _("The released kitchen line cannot be matched to its stock reservation."),
+                    ))
+                whole = False
+                continue
+            line = matches[0]
+            line_qty[line.name] += abs(Decimal(str(row.get("quantity") or 0)))
+            quantity = Decimal(str(line.qty))
+            if (line.get("custom_kitchen_anchor") or Decimal(str(move_map.get(line.name, 0))) != quantity
+                    or line_qty[line.name] > quantity):
+                whole = False
+        lines = set(line_qty)
+        if whole:
+            candidates[ticket] = lines
+        else:
+            retained.update(lines)
+
+    # A line may have been sent in several rounds and can appear on more
+    # than one ticket. Propagate the anchor across the entire component.
+    if reservations_enabled:
+        while blocked := [ticket for ticket, lines in candidates.items() if lines & retained]:
+            for ticket in blocked:
+                retained.update(candidates.pop(ticket))
+    if anchored is not None:
+        anchored.update(retained)
+    return list(candidates)
 
 
 def _has_manual_line_discount(rows):
@@ -864,15 +888,17 @@ def _load_check_for_split(source_invoice):
         frappe.throw(_("Only draft invoices can be split."))
     _pa_assert_not_efris_fiscalised(source)
 
-    split_profile_name = source.get("pos_profile")
-    if _pa_is_valid_str(split_profile_name):
-        raw_clock_in_req = frappe.db.get_value(
-            "POS Profile", split_profile_name, "custom_require_clock_in_to_order"
-        )
-        if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
-            from ury.ury_pos import timeclock
+    from ury.ury_pos.outlet_context import assert_outlet_access
 
-            timeclock.enforce_clock_in_for_profile_name(split_profile_name, user=frappe.session.user)
+    split_profile_name = source.get("pos_profile")
+    assert_outlet_access(split_profile_name)
+    raw_clock_in_req = frappe.db.get_value(
+        "POS Profile", split_profile_name, "custom_require_clock_in_to_order"
+    )
+    if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile_name(split_profile_name, user=frappe.session.user)
 
     return source
 
@@ -1034,13 +1060,19 @@ def split_bill(
     return _apply_check_split(source, move_map, company, customer, guest_label, approval, items_to_move)
 
 
+def _check_split_kitchen_plan(source, move_map, company):
+    reservations_enabled = get_branch_stock_policy(branch=source.branch, company=company).reservation_control_enabled
+    anchored = set()
+    movable = _split_kots_to_move(source, move_map, reservations_enabled, anchored=anchored)
+    return reservations_enabled, movable, anchored
+
+
 def _apply_check_split(
     source, move_map, company, customer=None, guest_label=None, approval=None, items_to_move=None,
+    *, kitchen_plan=None,
 ):
-    reservations_enabled = get_branch_stock_policy(branch=source.branch, company=company).reservation_control_enabled
-    anchored_items = set()
-    movable_kots = _split_kots_to_move(
-        source, move_map, reservations_enabled, anchored=anchored_items,
+    reservations_enabled, movable_kots, anchored_items = (
+        kitchen_plan if kitchen_plan is not None else _check_split_kitchen_plan(source, move_map, company)
     )
     anchored_origins = {
         item.get("custom_origin_invoice_item") or item.name for item in source.items
@@ -1054,6 +1086,19 @@ def _apply_check_split(
         if origin in anchored_origins or 0 < moved < item.qty:
             item.custom_origin_invoice_item = origin
     split_root = source.get("custom_split_from") or source.name
+
+    from ury.ury_pos.split_balances import allocate_split_balances, set_split_balance
+
+    # Freeze balances only on priced documents. Older unpriced drafts still
+    # use native pricing when no previous calculation is available.
+    balances = None
+    if source.get("grand_total") is not None:
+        currency_places = 2 if source.get("currency") == "USD" else currency_precision(source)
+        base_currency = source.get("company_currency") or (
+            frappe.db.get_value("Company", company, "default_currency") if company else None
+        )
+        base_places = currency_precision(currency=base_currency) if base_currency else currency_places
+        balances = allocate_split_balances(source, move_map, currency_places, base_places)
 
     new_invoice = frappe.new_doc("POS Invoice")
     header_fields = [
@@ -1153,6 +1198,7 @@ def _apply_check_split(
         }
 
     items_to_remove = []
+    source_names, child_names = [], []
     linked_parent_keys = {row.get("custom_parent_line_key") for row in source.items if row.get("custom_parent_line_key")}
     for item in source.items:
         move_qty = move_map.get(item.name, 0)
@@ -1162,8 +1208,11 @@ def _apply_check_split(
         )
         if is_priv_row and move_qty < item.qty:
             source_priv_snapshots.append((item, _priv_rate_snapshot(item)))
+        if move_qty < item.qty:
+            source_names.append(item.name)
         if move_qty <= 0:
             continue
+        child_names.append(item.name)
         copied_qty = item.qty if move_qty >= item.qty else move_qty
         fields = _copy_invoice_item_fields(item, copied_qty)
         if not fields["reservation_line_key"] and item.name in linked_parent_keys:
@@ -1185,6 +1234,9 @@ def _apply_check_split(
 
     for item in items_to_remove:
         source.remove(item)
+    if balances:
+        set_split_balance(source, balances[0], source_names)
+        set_split_balance(new_invoice, balances[1], child_names)
 
     # Carry bill-level discount & audit metadata cleanly across the split halves.
     has_header_discount = orig_pct > 0 or orig_flat > 0
@@ -1570,7 +1622,7 @@ def _apply_check_split(
 
 
 
-def assert_no_shared_kitchen_void(invoice):
+def assert_no_shared_kitchen_void(invoice, method=None):
     """A payment share cannot void a physical ticket or release its stock."""
     if not invoice.get("custom_split_group"):
         return
@@ -1735,9 +1787,12 @@ def split_check_multi(source_invoice, splits=None, mode="manual", split_count=No
         company = _authorize_check_split(
             source, plans, approval_token, reason, reason_note, action="split_check_multi",
         )
+        # Resolve every ticket against the intact check. A shared ticket can
+        # still contain a line already moved by an earlier sibling.
+        kitchen_plans = [_check_split_kitchen_plan(source, plan, company) for plan in plans]
         names = []
-        for plan in plans:
-            result = _apply_check_split(source, plan, company)
+        for plan, kitchen_plan in zip(plans, kitchen_plans, strict=True):
+            result = _apply_check_split(source, plan, company, kitchen_plan=kitchen_plan)
             names.append(result["new_invoice"])
         return {"source_invoice": source.name, "new_invoices": names}
     except Exception:
@@ -4557,9 +4612,20 @@ def sync_order(
                 for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
                     if prev_row.get(tax_field) is not None:
                         item_dict[tax_field] = prev_row.get(tax_field)
+    prior_placements = defaultdict(set)
+    for row in past_item:
+        if not row.get("reservation_line_key"):
+            prior_placements[(row.get("item_code"), row.get("comments") or "", cint(row.get("custom_seat_no")))].add(
+                row.get("custom_course")
+            )
     for src, priced in zip(items, priced_items, strict=True):
-        if priced.get("custom_course"):
-            src["custom_course"] = priced["custom_course"]
+        previous = previous_rows.get(src.get("name")) or previous_by_key.get(src.get("reservation_line_key"))
+        if previous and not src.get("custom_course") and previous.get("custom_course"):
+            src["custom_course"] = priced["custom_course"] = previous.get("custom_course")
+        if not src.get("custom_course") and not src.get("reservation_line_key"):
+            matches = prior_placements[(src.get("item"), src.get("comment") or "", cint(src.get("custom_seat_no")))]
+            if len(matches) == 1:
+                src["custom_course"] = next(iter(matches))
     if not append:
         _assert_shared_kitchen_lines_unchanged(past_item, items)
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
@@ -4871,6 +4937,9 @@ def pos_opening_check():
 @frappe.whitelist()
 def table_transfer(table, newTable, invoice, approval_token=None, reason=None, reason_note=None):
     from ury.ury_pos.floor_actions import assert_table_free_for_transfer
+    from ury.ury.api.table_lifecycle import assert_table_seatable, update_tables_after_transfer
+    from ury.ury.api.table_reservation import lock_reservation_tables
+
     _is_valid_str = _pa_is_valid_str
     assert_not_efris_fiscalised = _pa_assert_not_efris_fiscalised
     assert_not_offline_replay = _pa_assert_not_offline_replay
@@ -4879,7 +4948,8 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
 
     assert_not_offline_replay()
 
-    # Lock invoice and tables in deterministic sorted order to prevent concurrent transfer races.
+    # Use the host stand's table-first lock order before locking the invoice.
+    lock_reservation_tables([table, newTable])
     pos_invoice = frappe.get_doc("POS Invoice", invoice, for_update=True)
     locked_tables = {
         t: frappe.get_doc("URY Table", t, for_update=True)
@@ -4928,6 +4998,7 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         frappe.throw(_("Table transfer between different branches is restricted."))
 
     # Check destination occupancy BEFORE consuming any manager PIN token (refused even with PIN!).
+    assert_table_seatable(new_table.name, new_table.branch)
     assert_table_free_for_transfer(new_table, exclude_invoice=pos_invoice.name)
 
     raw_company = getattr(pos_invoice, "company", None) or getattr(pos_profile_doc, "company", None)
@@ -4962,7 +5033,7 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         transfer_seated_reservation,
         validate_seated_reservation_transfer,
     )
-    active_res = check_table_reservation(new_table.name)
+    active_res = check_table_reservation(new_table.name, for_update=True)
     if active_res and active_res.get("is_lock_window_active") and active_res.get("status") == "Confirmed":
         res_time_raw = active_res.get("reserved_at")
         formatted_res_time = ""
@@ -4980,22 +5051,6 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
 
     validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
 
-    frappe.db.set_value(
-        "URY Table",
-        new_table.name,
-        {"occupied": 1, "latest_invoice_time": pos_invoice.creation},
-    )
-    other_open_on_old = frappe.db.exists(
-        "POS Invoice",
-        {"restaurant_table": old_table_name, "docstatus": 0, "name": ["!=", pos_invoice.name]},
-    )
-    if not other_open_on_old:
-        frappe.db.set_value(
-            "URY Table",
-            current_table.name,
-            {"occupied": 0, "latest_invoice_time": None},
-        )
-
     pos_invoice.restaurant_table = new_table.name
     pos_invoice.custom_restaurant_room = new_table.restaurant_room
     _sync_service_charge(pos_invoice, pos_profile_doc)
@@ -5011,6 +5066,7 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
             pos_invoice.flags.ury_privileged_action_verified = prev_priv_verified
 
     transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
+    update_tables_after_transfer(old_table_name, new_table.name, pos_invoice)
 
     # Do not swallow KOT-transfer failures: a raise here aborts the request
     # (and its transaction) so the table/invoice changes above are rolled

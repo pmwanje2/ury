@@ -119,6 +119,8 @@ export function WaitList({ branch, rooms, onSeated }: {
             && party.no_of_pax >= (table.minimum_seating || 1)
             && (!table.no_of_seats || party.no_of_pax <= table.no_of_seats));
           const selected = seatChoice[party.name];
+          const phone = party.customer_phone.replace(/[().\s-]/g, '');
+          const dialable = /^\+?[0-9]+$/.test(phone);
           const minutes = party.elapsed_minutes + Math.max(0, Math.floor((now - loadedAt) / 60000));
           return (
             <li key={party.name} className="grid min-w-0 gap-2 rounded-lg border border-border p-3">
@@ -127,7 +129,9 @@ export function WaitList({ branch, rooms, onSeated }: {
                 <Badge variant="outline">{t(party.status === 'Waiting' ? 'floor.waiting' : 'floor.notified')}</Badge>
               </div>
               <p className="flex flex-wrap items-center gap-2 text-sm">
-                <a className="inline-flex min-h-11 items-center underline" href={`tel:${party.customer_phone}`}>{party.customer_phone}</a>
+                {dialable
+                  ? <a className="inline-flex min-h-11 items-center underline" href={`tel:${phone}`}>{party.customer_phone}</a>
+                  : <span>{party.customer_phone}</span>}
                 <Badge variant="outline">{t('floor.elapsed', { minutes })}</Badge>
                 <span>{t('floor.quoted_badge', { minutes: party.quoted_wait_minutes })}</span>
               </p>

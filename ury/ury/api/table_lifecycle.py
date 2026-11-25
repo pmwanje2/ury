@@ -95,6 +95,25 @@ def update_table_after_check(tables, branch, *, printed=False, exclude_invoice=N
     return True
 
 
+def update_tables_after_transfer(source, destination, invoice):
+    from ury.ury.api.table_reservation import current_floor_rows, open_checks_on as find_checks
+
+    policy = table_policy(invoice.branch)
+    hold = policy.get("custom_table_release_trigger") == ON_SETTLEMENT
+    state = "Check Printed" if hold and cint(invoice.get("invoice_printed")) else "Seated"
+    set_table_state(destination, state, since=invoice.creation)
+
+    siblings = find_checks([source], for_update=True)
+    if siblings:
+        state = "Check Printed" if hold and any(cint(row.get("invoice_printed")) for row in siblings) else "Seated"
+    elif current_floor_rows("URY Table Reservation",
+            {"reserved_table": source, "status": "Seated"}, fields=["name"], for_update=True):
+        state = "Seated"
+    else:
+        state = "Dirty" if cint(policy.get("custom_enable_bussing_state")) else "Available"
+    set_table_state(source, state)
+
+
 def on_check_closed(doc, method=None):
     table = doc.get("restaurant_table")
     if table:

@@ -237,6 +237,10 @@ permission_query_conditions = {
 # ---------------
 # Override standard doctype classes
 
+extend_doctype_class = {
+    "Sales Invoice": ["ury.ury_pos.split_balances.ConsolidatedSplitStock"],
+}
+
 override_doctype_class = {
 	"POS Invoice Merge Log": "ury.ury.class_overrides.pos_invoice_merge_log.CustomPOSInvoiceMergeLog",
 	"Network Printer Settings": "ury.ury.printing.custom_network_printer_settings.CustomNetworkPrinterSettings",
@@ -306,6 +310,7 @@ doc_events = {
             "ury.ury.api.table_lifecycle.on_check_closed",
         ],
         "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
+        "before_discard": "ury.ury.doctype.ury_order.ury_order.assert_no_shared_kitchen_void",
         "on_discard": [
             "ury.ury.api.table_reservation.release_reservation_check_binding",
             "ury.ury.api.table_lifecycle.on_check_closed",

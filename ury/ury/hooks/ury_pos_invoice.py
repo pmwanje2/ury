@@ -1,6 +1,7 @@
 import frappe
 from datetime import datetime
 from frappe.utils import now_datetime, get_time, now, flt, getdate, get_first_day, get_last_day, get_datetime
+from ury.brand import coded_message
 from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
 from ury.ury.doctype.staff_discount_policy.staff_discount_policy import get_applicable_policy
 
@@ -123,6 +124,10 @@ def validate_payment_references_and_fx(doc, method=None, require_mandatory=False
 
 
 def on_trash(doc, method):
+    from ury.ury.doctype.ury_order.ury_order import assert_no_shared_kitchen_void
+
+    if method == "on_trash":
+        assert_no_shared_kitchen_void(doc)
     table_status_delete(doc, method)
 
 
@@ -473,6 +478,20 @@ def validate_invoice(doc, method):
         and not getattr(frappe.flags, "in_patch", False)
         and not getattr(frappe.flags, "in_migrate", False)
     ):
+        sent_rows = {
+            _line_identity(item): item for item in (before_doc.get("items") or [])
+            if not int(item.get("ury_held") or 0) and not int(item.get("is_disposable") or 0) and flt(item.get("qty")) > 0
+        }
+        for item in doc.get("items") or []:
+            old = sent_rows.get(_line_identity(item))
+            if old and (
+                int(old.get("custom_seat_no") or 0) != int(item.get("custom_seat_no") or 0)
+                or (old.get("custom_course") and old.get("custom_course") != item.get("custom_course"))
+            ):
+                frappe.throw(coded_message(
+                    "KOT-PLACEMENT-LOCKED",
+                    frappe._("Seat and course cannot be changed after an item has been sent to the kitchen."),
+                ))
         orig_company = before_doc.get("company")
         orig_pos_profile = before_doc.get("pos_profile")
         orig_branch = before_doc.get("branch")
@@ -632,6 +651,9 @@ def before_cancel(doc, method=None):
         is_fiscalised_invoice,
     )
 
+    from ury.ury.doctype.ury_order.ury_order import assert_no_shared_kitchen_void
+
+    assert_no_shared_kitchen_void(doc)
     if is_fiscalised_invoice(doc):
         frappe.throw(
             frappe._(
