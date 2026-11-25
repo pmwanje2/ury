@@ -15,6 +15,7 @@
   "disposition",
   "comments",
   "course",
+  "seat_no",
   "serve_priority",
   "indicate_course",
   "reservation_line_key",
@@ -71,6 +72,12 @@
    "fieldtype": "Link",
    "label": "Course",
    "options": "URY Menu Course",
+   "read_only": 1
+  },
+  {
+   "fieldname": "seat_no",
+   "fieldtype": "Int",
+   "label": "Seat",
    "read_only": 1
   },
   {

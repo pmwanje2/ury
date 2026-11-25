@@ -319,7 +319,7 @@ export class OfflineOutbox {
   async capture(order: OfflineOrder, total: number, clientId?: string,
     reserved?: { clientOrderId: string; roundId: string }): Promise<OfflineEntry> {
     this.allowed(order.order_type);
-    if (order.items.some(item => item.ury_held)) throw Object.assign(new Error(t('hold_fire.offline')), { code: 'URY_HOLD_OFFLINE' });
+    if (order.items.some(item => item.ury_held)) throw Object.assign(new Error(t('hold_fire.offline')), { code: 'HOLD_OFFLINE' });
     if (order.invoice || order.last_invoice) throw new Error('Rounds on online orders are refused offline.');
     if (order.pos_profile !== this.options.profile.name) throw new Error('Offline order belongs to another profile.');
     if (!order.items.length || order.items.some((item) => !Number.isFinite(item.qty) || item.qty <= 0)) throw new Error('Offline rounds require positive quantities; reductions are refused.');

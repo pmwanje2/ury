@@ -1520,6 +1520,8 @@ def getPosProfileFull(pos_profile):
         "enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
+        "default_fire_delay_minutes": cint(profile.get("default_fire_delay_minutes")) or 10,
+        "fire_time_zone": frappe.utils.get_system_timezone(),
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
         "custom_offline_peer_relay_url": profile.get("custom_offline_peer_relay_url") or "",
         "custom_offline_collision_policy": profile.get("custom_offline_collision_policy") or "Auto Split Check",

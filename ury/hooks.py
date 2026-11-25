@@ -436,6 +436,7 @@ scheduler_events = {
     "cron":{
 		"* * * * *":[
 			"ury.ury.api.ury_kot_validation.kotValidationThread",
+			"ury.ury.doctype.ury_order.ury_order.fire_due_held_orders",
 			"ury.ury.api.ury_fulfilment_posting_service.recover_pending_posting_intents",
 			"ury.ury.api.reservation_scheduler.process_reservation_no_shows",
 			"ury.ury.printing.print_job_poller.poll_active_print_jobs",

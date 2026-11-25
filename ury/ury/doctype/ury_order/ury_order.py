@@ -4,7 +4,7 @@
 import hashlib
 import json
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -42,6 +42,7 @@ from ury.ury_pos.discount import (
 )
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
+from ury.ury.api.ury_production_validation import DIRECT_RETAIL
 from ury.ury.api.ury_order_reservation_service import (
     _line_key,
     _line_ref,
@@ -701,6 +702,8 @@ def _copy_invoice_item_fields(item_row, qty):
         comment=item_row.get("comment"),
         custom_course=item_row.get("custom_course"),
         ury_held=cint(item_row.get("ury_held")),
+        fire_at=item_row.get("fire_at"),
+        fire_confirmation_pending=cint(item_row.get("fire_confirmation_pending")),
         cost_center=item_row.cost_center,
         uom=item_row.uom,
         conversion_factor=item_row.conversion_factor,
@@ -3313,6 +3316,11 @@ def _offline_capture_time(captured_at, pos_profile, billing_user=True):
 
 def _kitchen_snapshot(items):
     """Keep stable cart identities; legacy unkeyed rounds compare dish/note totals."""
+    items = list(items)
+    parents = {
+        item.get("reservation_line_key") or item.get("name"): item
+        for item in items if not item.get("custom_parent_line_key")
+    }
     rows = []
     legacy = {}
     for item in items:
@@ -3320,15 +3328,21 @@ def _kitchen_snapshot(items):
             continue
         code = item.get("item") or item.get("item_code")
         note = item.get("comment") or item.get("comments") or ""
+        parent_key = item.get("custom_parent_line_key")
+        context = parents.get(parent_key, item) if parent_key else item
+        course = context.get("custom_course")
+        seat = context.get("custom_seat_no") or context.get("seat_no")
         key = item.get("reservation_line_key")
-        if not key and (code, note) in legacy:
-            legacy[code, note]["qty"] += flt(item.get("qty"))
+        if not key and (code, note, course, seat) in legacy:
+            legacy[code, note, course, seat]["qty"] += flt(item.get("qty"))
             continue
         row = dict(
             item_code=code,
             item_name=item.get("item_name"),
             qty=flt(item.get("qty")),
             comments=note,
+            custom_course=course,
+            custom_seat_no=seat,
             custom_parent_line_key=item.get("custom_parent_line_key") or None,
             custom_line_role=item.get("custom_line_role") or "Standard",
             custom_is_modifier=cint(item.get("custom_is_modifier")),
@@ -3340,7 +3354,7 @@ def _kitchen_snapshot(items):
         if key:
             row["reservation_line_key"] = key
         else:
-            legacy[code, note] = row
+            legacy[code, note, course, seat] = row
         rows.append(row)
     return rows
 
@@ -3357,26 +3371,37 @@ def _lock_hold_order(invoice, preserve_resolved=False):
             setattr(invoice, field, value)
 
 
-@frappe.whitelist()
-def fire_items(invoice, line=None, course=None, last_modified_time=None):
-    """Fire persisted held rows, never client-supplied quantities/prices/courses."""
+def _staff_held_order(invoice, *, scheduling=False):
     invoice = frappe.get_doc("POS Invoice", invoice)
-    _lock_hold_order(invoice)
+    if scheduling:
+        # A locking read through Frappe keeps the schedule transaction on
+        # the same invoice row as every fire path.
+        frappe.db.get_value("POS Invoice", invoice.name, "name", for_update=True)
+        invoice.flags.for_update = True
+        invoice.reload()
+    else:
+        _lock_hold_order(invoice)
     if not frappe.has_permission("POS Invoice", "write", doc=invoice):
         frappe.throw(_("Not permitted to modify this order"), frappe.PermissionError)
     branch = getBranch()
-    if branch and invoice.branch != branch:
+    if not branch or invoice.branch != branch:
         frappe.throw(_("Not permitted outside your active branch"), frappe.PermissionError)
     _enforce_order_access(invoice, require_modify=True)
     profile = frappe.get_doc("POS Profile", invoice.pos_profile)
     if not cint(getattr(profile, "ury_enable_hold_fire", 0)):
-        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
+        frappe.throw(coded_message("HOLD-DISABLED", _("Hold and fire is disabled for this outlet.")))
+    if profile.get("branch") != invoice.branch:
+        frappe.throw(_("Not permitted outside your active branch"), frappe.PermissionError)
     if invoice.docstatus != 0:
         frappe.throw(_("This order is no longer open."))
     if invoice.order_type == "Dine In" and _has_role(
         frappe.get_roles(), profile.role_restricted_for_table_order
     ):
         frappe.throw(_("You are not permitted to take Dine In table orders."), frappe.PermissionError)
+    return invoice, profile
+
+
+def _selected_held_rows(invoice, line, course):
     if bool(line) == bool(course):
         frappe.throw(_("Select exactly one line or course to fire."))
     selected = [row for row in invoice.items if row.name == line] if line else [
@@ -3384,20 +3409,241 @@ def fire_items(invoice, line=None, course=None, last_modified_time=None):
     ]
     if not selected:
         frappe.throw(_("The selected line or course is not on this order."))
-    held = [row for row in selected if cint(row.get("ury_held"))]
-    if not held:
-        return invoice.as_dict()  # retry: nothing is resent, even with an old version
+    return _held_release_group(invoice, selected)
+
+
+def _held_release_group(invoice, selected):
+    """A parent and its persisted kitchen modifiers release as one group."""
+    selected_keys = {row.get("reservation_line_key") or row.name for row in selected}
+    parents = {row.get("custom_parent_line_key") for row in selected if row.get("custom_parent_line_key")}
+    group_keys = selected_keys | parents
+    return [
+        row for row in invoice.items
+        if cint(row.get("ury_held")) and flt(row.get("qty")) > 0
+        and ((row.get("reservation_line_key") or row.name) in group_keys
+             or row.get("custom_parent_line_key") in group_keys)
+    ]
+
+
+def _check_held_version(invoice, last_modified_time):
     if last_modified_time and str(invoice.modified) != str(last_modified_time):
-        frappe.throw(_("Order has been modified. Reload before firing."))
-    previous = _kitchen_snapshot(invoice.items)
+        frappe.throw(_("Order has been modified. Reload the order and try again."))
+
+
+def _publish_held_updates(invoice, modified_before, rows):
+    frappe.publish_realtime(
+        "held_kitchen_items_updated",
+        {
+            "invoice": invoice.name,
+            "previous_modified": str(modified_before),
+            "modified": str(invoice.modified),
+            "items": [
+                {"name": row.name, "reservation_line_key": row.get("reservation_line_key"),
+                 "ury_held": row.get("ury_held"), "fire_at": row.get("fire_at"),
+                 "fire_confirmation_pending": cint(row.get("fire_confirmation_pending"))}
+                for row in rows
+            ],
+        },
+        room=f"doc:POS Invoice/{invoice.name}",
+        after_commit=True,
+    )
+
+
+def _release_held_rows(invoice, held, *, kitchen_authority=False):
+    if not held:
+        return
+    modified_before = invoice.modified
     for row in held:
         row.ury_held = 0
+        row.fire_at = None
+        row.fire_confirmation_pending = 0
+    invoice.save(ignore_permissions=kitchen_authority)
+    # The locked selection is already the positive kitchen delta. Re-diffing
+    # the entire cart could move a legacy same-dish quantity between seats.
+    # A failure rolls back the release flags and ticket writes together.
+    kot_execute(
+        invoice.name, invoice.customer, invoice.restaurant_table, _kitchen_snapshot(held),
+        [], invoice.custom_comments, ignore_permissions=kitchen_authority, require_routing=True,
+    )
+    _publish_held_updates(invoice, modified_before, held)
+
+
+@frappe.whitelist(methods=["POST"])
+def fire_items(invoice, line=None, course=None, last_modified_time=None):
+    """Fire persisted held rows, with idempotent retries after release."""
+    invoice, _profile = _staff_held_order(invoice)
+    held = _selected_held_rows(invoice, line, course)
+    previous_modified = str(invoice.modified)
+    if held:
+        _check_held_version(invoice, last_modified_time)
+        _release_held_rows(invoice, held)
+    response = invoice.as_dict()
+    response["held_update_previous_modified"] = previous_modified
+    return response
+
+
+@frappe.whitelist(methods=["POST"])
+def schedule_held_items(invoice, line=None, course=None, delay_minutes=None, fire_at=None,
+                        last_modified_time=None):
+    invoice, profile = _staff_held_order(invoice, scheduling=True)
+    held = _selected_held_rows(invoice, line, course)
+    # Legacy callers can set an initial timer. Once one exists, only a
+    # current check version authorizes replacing it. Retries without that
+    # version return the existing deadline, even for a relative delay.
+    if not held or (not last_modified_time and any(row.get("fire_at") for row in held)):
+        response = invoice.as_dict()
+        response["held_update_previous_modified"] = str(invoice.modified)
+        return response
+    _check_held_version(invoice, last_modified_time)
+    if delay_minutes is not None and fire_at is not None:
+        frappe.throw(_("Specify either a delay or a fire time."))
+    now = now_datetime()
+    try:
+        if fire_at is not None:
+            if not isinstance(fire_at, str) or not fire_at.strip():
+                raise ValueError
+            deadline = datetime.fromisoformat(fire_at)
+            if deadline.tzinfo:
+                deadline = deadline.astimezone(ZoneInfo(get_system_timezone())).replace(tzinfo=None)
+            if deadline < now.replace(microsecond=0):
+                raise ValueError
+        else:
+            delay = int(str(delay_minutes)) if delay_minutes is not None else (
+                cint(profile.get("default_fire_delay_minutes")) or 10
+            )
+            if delay < 1:
+                raise ValueError
+            deadline = now + timedelta(minutes=delay)
+    except (TypeError, ValueError, OverflowError):
+        frappe.throw(_("Choose a valid fire time or a positive delay in whole minutes."))
+    modified_before = invoice.modified
+    for row in held:
+        row.fire_at = deadline
+        row.fire_confirmation_pending = 0
     invoice.save()
-    # Do not swallow failure: the native request transaction must roll back
-    # both the held flags and any partial KOT writes together.
-    kot_execute(invoice.name, invoice.customer, invoice.restaurant_table,
-                _kitchen_snapshot(invoice.items), previous, invoice.custom_comments)
-    return invoice.as_dict()
+    _publish_held_updates(invoice, modified_before, held)
+    response = invoice.as_dict()
+    response["held_update_previous_modified"] = str(modified_before)
+    return response
+
+
+def fire_due_held_orders():
+    """Scheduler entry point. Process each check in an independent transaction."""
+    cutoff = now_datetime()
+    due = frappe.db.sql(
+        """
+        SELECT item.parent
+        FROM `tabPOS Invoice Item` item
+        JOIN `tabPOS Invoice` invoice ON invoice.name = item.parent
+        WHERE item.ury_held = 1 AND item.qty > 0 AND item.fire_at <= %s
+          AND invoice.docstatus = 0
+        GROUP BY item.parent
+        ORDER BY MIN(item.fire_at), item.parent
+        """,
+        (cutoff,),
+    )
+    # Close the read transaction before acquiring locks for individual checks.
+    frappe.db.rollback()
+    for (name,) in due:
+        try:
+            invoice = frappe.get_doc("POS Invoice", name)
+            _lock_hold_order(invoice)
+            profile = frappe.get_doc("POS Profile", invoice.pos_profile)
+            if invoice.docstatus == 0 and profile.get("branch") == invoice.branch and cint(
+                profile.get("ury_enable_hold_fire")
+            ):
+                held = [
+                    row for row in invoice.items if cint(row.get("ury_held")) and flt(row.get("qty")) > 0
+                    and row.get("fire_at") and get_datetime(row.get("fire_at")) <= cutoff
+                ]
+                _release_held_rows(invoice, _held_release_group(invoice, held), kitchen_authority=True)
+            frappe.db.commit()
+        except Exception:
+            frappe.db.rollback()
+            frappe.log_error(title="Timed kitchen release failed", message=frappe.get_traceback())
+
+
+def _fire_next_held_course(invoice, bumped_tickets):
+    """Advance at most one course after a complete earlier course is bumped.
+
+    KDS callers lock the invoice before changing any ticket status.
+    """
+    profile = frappe.get_doc("POS Profile", invoice.pos_profile)
+    if (invoice.docstatus != 0 or profile.get("branch") != invoice.branch
+            or not cint(profile.get("ury_enable_hold_fire"))
+            or not cint(profile.get("auto_fire_next_course_on_bump"))):
+        return
+    held = [
+        row for row in invoice.items
+        if cint(row.get("ury_held")) and flt(row.get("qty")) > 0
+        and not row.get("custom_parent_line_key") and row.get("custom_course")
+    ]
+    if not held or not bumped_tickets:
+        return
+    from ury.ury.api.ury_kot_display import _get_kot_cancellation_state
+
+    tickets = frappe.db.sql(
+        """
+        SELECT kot.name, kot.order_status, item.course,
+               (kot.docstatus = 1 AND item.quantity > IFNULL(item.cancelled_qty, 0)) AS has_remaining_qty
+        FROM `tabURY KOT` kot
+        JOIN `tabURY KOT Items` item ON item.parent = kot.name
+        WHERE kot.invoice = %s AND kot.docstatus IN (1, 2)
+          AND IFNULL(kot.type, '') NOT IN ('Cancelled', 'Partially cancelled')
+        FOR UPDATE
+        """,
+        (invoice.name,),
+        as_dict=True,
+    )
+    course_items = [
+        row for row in invoice.items
+        if flt(row.get("qty")) > 0 and not row.get("custom_parent_line_key") and row.get("custom_course")
+    ]
+    ticket_courses = {row["course"] for row in tickets if row["course"]}
+    courses = ticket_courses | {row.get("custom_course") for row in course_items}
+    priorities = {
+        row["name"]: cint(row["custom_serving_priority"]) for row in frappe.get_all(
+            "URY Menu Course", filters={"name": ["in", sorted(courses)]},
+            fields=["name", "custom_serving_priority"],
+        )
+    }
+    ranked = {course: priority for course, priority in priorities.items() if priority > 0}
+    held_courses = {row.get("custom_course") for row in held} & ranked.keys()
+    if not held_courses:
+        return
+    course = min(held_courses, key=lambda course: (ranked[course], course))
+    earlier = [row for row in tickets if 0 < ranked.get(row["course"], 0) < ranked[course]]
+    if not any(row["name"] in bumped_tickets for row in earlier):
+        return
+    cancelled, pending = _get_kot_cancellation_state(invoice.branch, invoice=invoice.name)
+    if any(
+        row["name"] in pending
+        or (row["order_status"] != "Served" and row["name"] not in cancelled and row.get("has_remaining_qty", True))
+        for row in earlier
+    ):
+        return
+
+    # A sent earlier course with no ticket history cannot be considered
+    # served. Direct retail can legitimately have no kitchen ticket.
+    for row in course_items:
+        name = row.get("custom_course")
+        if name not in ticket_courses and 0 < ranked.get(name, 0) < ranked[course]:
+            context = resolve_production_context(row.get("item_code"), invoice.branch, company=invoice.company)
+            if not context or context.production_policy != DIRECT_RETAIL:
+                return
+    group = _selected_held_rows(invoice, None, course)
+    # An explicit schedule takes precedence over the course bump.
+    if any(row.get("fire_at") for row in group):
+        return
+    if cint(profile.get("require_course_fire_confirmation")):
+        if any(not cint(row.get("fire_confirmation_pending")) for row in group):
+            modified_before = invoice.modified
+            for row in group:
+                row.fire_confirmation_pending = 1
+            invoice.save(ignore_permissions=True)
+            _publish_held_updates(invoice, modified_before, group)
+    else:
+        _release_held_rows(invoice, group, kitchen_authority=True)
 
 
 @frappe.whitelist()
@@ -3731,11 +3977,23 @@ def sync_order(
     items = [{**item, "comment": item.get("comment") or item.get("comments") or ""} for item in items]
 
     _normalize_current_line_keys(items)
+    parent_holds = {
+        row.get("reservation_line_key"): cint(row.get("ury_held"))
+        for row in past_item if row.get("reservation_line_key") and not row.get("custom_parent_line_key")
+    }
+    for row in items:
+        old_row = previous_rows.get(row.get("name"))
+        key = row.get("reservation_line_key") or (old_row and old_row.get("reservation_line_key"))
+        if key and not row.get("custom_parent_line_key"):
+            parent_holds[key] = cint(row.get("ury_held"))
+    for row in items:
+        if row.get("custom_parent_line_key") in parent_holds:
+            row["ury_held"] = parent_holds[row["custom_parent_line_key"]]
     has_held = any(cint(item.get("ury_held")) for item in items)
     if has_held and not hold_enabled:
-        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
+        frappe.throw(coded_message("HOLD-DISABLED", _("Hold and fire is disabled for this outlet.")))
     if has_held and (captured_at is not None or cint(offline_printed)):
-        frappe.throw(_("URY_HOLD_OFFLINE: Hold and fire requires an online connection."))
+        frappe.throw(coded_message("HOLD-OFFLINE", _("Hold and fire requires an online connection.")))
     seen_line_names = set()
     seen_keys = {row["reservation_line_key"] for row in past_item if row.get("reservation_line_key")} if append else set()
     for item in items:
@@ -4330,6 +4588,10 @@ def sync_order(
             if old_row.get("custom_is_open_item") and old_row.get("item_name"):
                 item_dict["item_name"] = old_row.get("item_name")
         item_dict["ury_held"] = cint(source.get("ury_held"))
+        if old_row and cint(old_row.get("ury_held")):
+            for field in ("fire_at", "fire_confirmation_pending", "custom_course", "custom_seat_no"):
+                if old_row.get(field) is not None:
+                    item_dict[field] = old_row.get(field)
         invoice.append("items", item_dict)
 
     # G42: Apply SAP MWST / Simphony order-type tax determination before service charge, expected_total & save

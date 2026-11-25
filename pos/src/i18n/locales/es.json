@@ -1,4 +1,22 @@
 {
+  "hold_fire": {
+    "action": "la retención y el envío a cocina",
+    "title": "Retención y envío a cocina",
+    "held": "En espera",
+    "hold": "Dejar en espera para cocina",
+    "fire_now": "Enviar ahora",
+    "schedule_course": "Programar la salida del tiempo",
+    "schedule_line": "Programar envío",
+    "delay": "Demora del envío",
+    "minutes": "+{{minutes}} min",
+    "countdown": "Se envía en {{time}}",
+    "due": "Listo para enviar",
+    "confirmation_pending": "Pendiente de confirmación en expedición",
+    "save_first": "Guarda el pedido antes de programar o enviar los platos en espera.",
+    "offline": "Se necesita conexión para retener o enviar platos.",
+    "reload": "Cambió el horario de envío. Vuelve a cargar el pedido para ver su estado.",
+    "failed": "No se pudo actualizar el envío a cocina. Vuelve a cargar el pedido e inténtalo de nuevo."
+  },
   "common": {
     "loading": "Cargando...",
     "cancel": "Cancelar",

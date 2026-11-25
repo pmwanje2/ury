@@ -658,7 +658,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
       ) : (
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-6">
-            <HoldFireControls />
+            <HoldFireControls disabled={isInteractionDisabled || isSubmitting} />
             {activeOrders.map((item, idx) => {
               const baseLineTotal = calculateItemTotal(item);
               const lineTotal = effectiveItemLineTotal(item, idx);
@@ -705,7 +705,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <h3 className="font-medium text-gray-900 text-sm">{item.name}</h3>
-                        {orderId && kotState[item.item] && (
+                        {!item.ury_held && orderId && kotState[item.item] && (
                           <Badge
                             size="sm"
                             variant={KOT_BADGE[kotState[item.item]].variant}
@@ -819,6 +819,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                       </Button>
                     </div>
                   </div>
+                  <HoldFireControls lineId={item.uniqueId} disabled={isInteractionDisabled || isSubmitting} />
                 </div>
               );
             })}

@@ -59,12 +59,12 @@ test('adding another of the same dish never merges it into an unsaved held line'
   expect(rows[0].uniqueId).toBe(uniqueId);
 });
 
-// Render the real control with the real store. No server/site/table is contacted.
-test('held/sent controls are default-off and hidden offline; fire preserves unsaved cart edits', async () => {
+// Render the in-row control with the real cart store.
+test('cart-row hold controls are default-off and hidden offline; fire preserves unsaved cart edits', async () => {
   const modules = import.meta.glob('../src/components/*Controls.tsx');
   const load = modules['../src/components/HoldFireControls.tsx'];
   expect(load, 'native hold/fire controls are missing').toBeDefined();
-  const controls = await load() as { HoldFireControls: import('react').ComponentType };
+  const controls = await load() as { HoldFireControls: import('react').ComponentType<{ lineId: string }> };
   const host = document.createElement('div'); document.body.append(host);
   const root: Root = createRoot(host);
   const rows = [
@@ -73,17 +73,18 @@ test('held/sent controls are default-off and hidden offline; fire preserves unsa
   ];
   usePOSStore.setState({ activeOrders: rows as never, orderId: 'INV-1', lastModifiedTime: 'v1' });
   vi.mocked(call.post).mockResolvedValue({ message: { name: 'INV-1', modified: 'v2', items: [{ name: 'held', ury_held: 0 }] } });
-  const render = async () => { await act(async () => root.render(<controls.HoldFireControls />)); };
+  const render = async () => { await act(async () => root.render(<controls.HoldFireControls lineId="held" />)); };
   try {
     await render();
     expect(host.textContent).toContain('Held');
-    const fire = [...host.querySelectorAll('button')].find(b => b.textContent === 'Fire line');
+    const fire = [...host.querySelectorAll('button')].find(b => b.textContent === 'Fire now');
     expect(fire).toBeDefined();
     await act(async () => fire!.click());
     expect(usePOSStore.getState().activeOrders.map(row => row.quantity)).toEqual([3, 2]);
     expect(usePOSStore.getState().activeOrders[0].ury_held).toBe(0);
     expect(usePOSStore.getState().lastModifiedTime).toBe('v2');
-    expect(host.textContent).toContain('Sent');
+    expect(host.textContent).not.toContain('Held');
+    expect(host.querySelector('button')).toBeNull();
     await act(async () => { usePOSStore.setState({ posProfile: { name: 'POS A' } as never }); }); await render();
     expect(host.textContent).toBe('');
     await act(async () => { usePOSStore.setState({ posProfile: { name: 'POS A', ury_enable_hold_fire: 1 } as never }); });

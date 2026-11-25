@@ -15,6 +15,7 @@ import type {
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile, getPosProfileOrSelection } from '../lib/pos-profile-api';
 import { getAvailableOutlets, setActiveOutlet, type AvailableOutlet } from '../lib/outlet-api';
 import { getMenuCourses } from '../lib/menu-course-api';
+import { t } from '../i18n';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
@@ -103,6 +104,8 @@ export interface OrderItem extends MenuItem {
    */
   invoiceItemName?: string;
   ury_held?: number;
+  fireAt?: string | null;
+  fireConfirmationPending?: boolean;
   parentLineKey?: string | null;
   lineRole?: 'Standard' | 'Modifier' | 'Combo Header' | 'Combo Upcharge';
   isModifier?: boolean;
@@ -125,6 +128,11 @@ export interface Category {
   name: string;
   label: string;
   icon?: string;
+}
+
+function offlineMenuReadFailed(error: unknown, profile: PosProfileCombined | null): boolean {
+  return !!profile && offlineCaptureEnabled(profile) && isLinkDown(error)
+    && cachedOfflineProfile(getSessionUser())?.name === profile.name;
 }
 
 function categoriesFromItems(items: MenuItem[]): Category[] {
@@ -194,6 +202,7 @@ interface POSState {
   cartId: string | null;
   loading: boolean;
   menuLoading: boolean;
+  menuUnavailableOffline: boolean;
   orderLoading: boolean;
   profileLoading: boolean;
   error: string | null;
@@ -207,6 +216,7 @@ interface POSState {
   isUpdatingOrder: boolean;
   orderId: string | null;
   originalSentItems: Array<{
+    invoice_item_name?: string;
     item_code: string;
     item_name: string;
     reservation_line_key: string;
@@ -350,6 +360,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   cartId: null,
   loading: false,
   menuLoading: false,
+  menuUnavailableOffline: false,
   orderLoading: false,
   profileLoading: false,
   error: null,
@@ -585,7 +596,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     if (!posProfile?.restaurant) return;
 
     try {
-      set({ menuLoading: true, error: null });
+      set({ menuLoading: true, menuUnavailableOffline: false, error: null });
       const payload = Object.prototype.hasOwnProperty.call(menuApi, 'getRestaurantMenuWithMeta')
         ? await menuApi.getRestaurantMenuWithMeta(
             posProfile.name,
@@ -636,6 +647,10 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         activePriceList: payload.price_list ?? null,
       }));
     } catch (error) {
+      if (offlineMenuReadFailed(error, posProfile)) {
+        set({ menuUnavailableOffline: true });
+        return;
+      }
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);
     } finally {
@@ -645,7 +660,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   fetchAggregatorMenu: async (aggregator: string) => {
     try {
-      set({ menuLoading: true, error: null });
+      set({ menuLoading: true, menuUnavailableOffline: false, error: null });
       const items = await menuApi.getAggregatorMenu(aggregator);
       
       const menuItems: MenuItem[] = items.map((item: any) => ({
@@ -674,7 +689,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       try {
         courses = await getMenuCourses();
       } catch (error) {
-        if (cached) return;
+        // The category rail can already derive courses from available menu items.
+        if (cached || offlineMenuReadFailed(error, get().posProfile)) return;
         throw error;
       }
       sessionStorage.setItem('menuCategories', JSON.stringify(courses));
@@ -771,6 +787,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       let parentKey = parent.reservationLineKey || parent.uniqueId || uuidv4();
       let parentUniqueId = parent.uniqueId || parentKey;
       let parentInvoiceItemName = parent.invoiceItemName;
+      let heldState = {
+        ury_held: parent.ury_held,
+        fireAt: parent.fireAt,
+        fireConfirmationPending: parent.fireConfirmationPending,
+      };
       let oldChildren: OrderItem[] = [];
       let baseOrders = current;
       let insertAt = current.length;
@@ -784,6 +805,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           parentKey = oldKey || parentKey;
           parentUniqueId = oldParent.uniqueId || parentKey;
           parentInvoiceItemName = oldParent.invoiceItemName ?? parentInvoiceItemName;
+          heldState = {
+            ury_held: oldParent.ury_held,
+            fireAt: oldParent.fireAt,
+            fireConfirmationPending: oldParent.fireConfirmationPending,
+          };
           oldChildren = oldKey
             ? current.filter((o) => o.uniqueId !== replaceParentUniqueId && o.parentLineKey === oldKey)
             : [];
@@ -795,6 +821,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
       const normalizedParent: OrderItem = {
         ...parent,
+        ...heldState,
         uniqueId: parentUniqueId,
         reservationLineKey: parentKey,
         ...(parentInvoiceItemName ? { invoiceItemName: parentInvoiceItemName } : {}),
@@ -824,6 +851,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         const childInvoiceItemName = matchedPrev?.invoiceItemName ?? child.invoiceItemName;
         return {
           ...child,
+          ...heldState,
           uniqueId: childUniqueId,
           reservationLineKey: childResKey,
           ...(childInvoiceItemName ? { invoiceItemName: childInvoiceItemName } : {}),
@@ -897,9 +925,16 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   setItemHeld: (uniqueId, held) => {
-    if (navigator.onLine === false || !get().posProfile?.ury_enable_hold_fire) throw new Error('URY_HOLD_OFFLINE');
-    set({ activeOrders: get().activeOrders.map(item => item.uniqueId === uniqueId && !item.invoiceItemName
-      ? { ...item, ury_held: held ? 1 : 0 } : item) });
+    if (navigator.onLine === false || !get().posProfile?.ury_enable_hold_fire) throw new Error(t('hold_fire.offline'));
+    const items = get().activeOrders;
+    const target = items.find(item => item.uniqueId === uniqueId);
+    if (!target || target.invoiceItemName || target.parentLineKey) return;
+    const key = target.reservationLineKey || uniqueId;
+    set({ activeOrders: items.map(item =>
+      !item.invoiceItemName && (item === target || item.parentLineKey === key)
+        ? { ...item, ury_held: held ? 1 : 0 }
+        : item
+    ) });
   },
 
   clearOrder: async () => {
@@ -1095,6 +1130,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
             course: item.custom_course || '',
             invoiceItemName: item.name,
             ury_held: item.ury_held || 0,
+            fireAt: item.fire_at,
+            fireConfirmationPending: !!item.fire_confirmation_pending,
             description: item.description || '',
             special_dish: 0 as 0 | 1,
             tax_rate: 0,
@@ -1142,6 +1179,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           isUpdatingOrder: true,
           orderId: order.name,
           originalSentItems: order.items.map((item) => ({
+            invoice_item_name: item.name,
             item_code: item.item_code,
             item_name: item.item_name,
             reservation_line_key: item.reservation_line_key || '',
