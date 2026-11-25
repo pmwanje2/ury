@@ -89,6 +89,50 @@ except ImportError:  # pragma: no cover - site-less test stubs without full frap
 from frappe import cache
 
 
+def _load_ury_pos_submodule(name: str):
+    import importlib.util
+    import pathlib
+    import sys
+
+    fqn = f"ury.ury_pos.{name}"
+    existing = sys.modules.get(fqn)
+    if existing is not None:
+        return existing
+    try:
+        pkg = __import__("ury.ury_pos", fromlist=[name])
+        mod = getattr(pkg, name, None)
+        if mod is not None:
+            return mod
+    except ImportError:
+        pass
+    sub_path = pathlib.Path(__file__).resolve().parents[3] / "ury_pos" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(fqn, sub_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load {fqn} from {sub_path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[fqn] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _dayparts_mod():
+    import sys
+
+    dayparts = _load_ury_pos_submodule("dayparts")
+    if "frappe" not in sys.modules or getattr(dayparts, "frappe", None) is None:
+        dayparts.frappe = frappe
+    return dayparts
+
+
+def _tax_mod():
+    import sys
+
+    tax_determination = _load_ury_pos_submodule("tax_determination")
+    if "frappe" not in sys.modules or getattr(tax_determination, "frappe", None) is None:
+        tax_determination.frappe = frappe
+    return tax_determination
+
+
 class URYOrder(Document):
     pass
 
@@ -1937,13 +1981,28 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             else:
                 invoice.order_type= "Dine In"
 
-        invoice.taxes_and_charges = frappe.db.get_value(
-            "URY Restaurant", restaurant, "default_tax_template"
-        )
+        if (not invoice_name or not invoice.get("taxes_and_charges")) and cint(invoice.get("custom_tax_exempt")) != 1:
+            invoice.taxes_and_charges = frappe.db.get_value(
+                "URY Restaurant", restaurant, "default_tax_template"
+            )
 
-        invoice.selling_price_list = frappe.db.get_value(
-            "Price List", dict(restaurant_menu=menu_name, enabled=1)
-        )
+        if not (invoice_name and invoice.get("custom_serving_period") and invoice.get("selling_price_list")):
+            dp = _dayparts_mod()
+
+            if dp.get_serving_periods(restaurant):
+                resolved = dp.resolve_menu_and_price_list(
+                    branch,
+                    restaurant=restaurant,
+                    table=table,
+                    order_type=invoice.order_type,
+                )
+                invoice.selling_price_list = resolved.get("price_list") or frappe.db.get_value(
+                    "Price List", dict(restaurant_menu=menu_name, enabled=1)
+                )
+            else:
+                invoice.selling_price_list = frappe.db.get_value(
+                    "Price List", dict(restaurant_menu=menu_name, enabled=1)
+                )
 
         if not getattr(invoice, "customer", None) or invoice.customer == "Guest":
             from ury.ury.api.table_reservation import (
@@ -2002,12 +2061,26 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
 
         menu = get_menu_name(order_type, branch=branch)
 
-        if (order_type == "Aggregators" and frappe.db.get_value("Branch", branch, "custom_no_taxes") == 0) or order_type != "Aggregators":
-            invoice.taxes_and_charges = frappe.db.get_value("URY Restaurant", restaurant, "default_tax_template")
+        if (not invoice_name or not invoice.get("taxes_and_charges")) and cint(invoice.get("custom_tax_exempt")) != 1:
+            if (order_type == "Aggregators" and frappe.db.get_value("Branch", branch, "custom_no_taxes") == 0) or order_type != "Aggregators":
+                invoice.taxes_and_charges = frappe.db.get_value("URY Restaurant", restaurant, "default_tax_template")
 
-        invoice.selling_price_list = frappe.db.get_value(
-            "Price List", dict(restaurant_menu=menu, enabled=1)
-        )
+        if not (invoice_name and invoice.get("custom_serving_period") and invoice.get("selling_price_list")):
+            dp = _dayparts_mod()
+
+            if restaurant and order_type != "Aggregators" and dp.get_serving_periods(restaurant):
+                resolved = dp.resolve_menu_and_price_list(
+                    branch,
+                    restaurant=restaurant,
+                    order_type=order_type,
+                )
+                invoice.selling_price_list = resolved.get("price_list") or frappe.db.get_value(
+                    "Price List", dict(restaurant_menu=menu, enabled=1)
+                )
+            else:
+                invoice.selling_price_list = frappe.db.get_value(
+                    "Price List", dict(restaurant_menu=menu, enabled=1)
+                )
 
         if invoice_name and invoice.restaurant_table:
             _reconcile_invoice_merged_tables(invoice, persist=True)
@@ -2051,13 +2124,16 @@ def _department_warehouse_for_item(item_code, branch, company):
 
 
 def invoice_pricing_date(invoice):
-    """The pricing date of an invoice: its posting date.
+    """The pricing date of an invoice: its posting date or verified offline capture date.
 
     ERPNext resets posting_date to today on validate unless set_posting_time
-    is on, so an open till invoice prices on today.
+    is on, so an open till invoice prices on today; offline replays price on
+    their verified capture date without needing set_posting_time=1.
     """
     if cint(getattr(invoice, "set_posting_time", 0)) and getattr(invoice, "posting_date", None):
         return frappe.utils.getdate(invoice.posting_date)
+    if getattr(invoice, "ury_offline_captured_at", None):
+        return frappe.utils.getdate(invoice.ury_offline_captured_at)
     return frappe.utils.getdate()
 
 
@@ -2408,11 +2484,25 @@ def _require_open_cashier_session(
         frappe.throw(_("POS is closed. Please open a POS entry before taking orders."))
 
 
-def _resolve_menu_for_sync(branch, table=None, room=None, order_type=None):
-    """Authoritative menu for sync validation (room-wise / order-type-wise)."""
+def _resolve_menu_for_sync(branch, table=None, room=None, order_type=None, local_dt=None):
+    """Authoritative menu for sync validation (room-wise / serving-period / order-type-wise)."""
     restaurant = frappe.db.get_value("URY Restaurant", {"branch": branch}, "name")
     if not restaurant:
         return None
+
+    dp = _dayparts_mod()
+
+    if dp.get_serving_periods(restaurant):
+        resolved = dp.resolve_menu_and_price_list(
+            branch,
+            restaurant=restaurant,
+            table=table,
+            room=room,
+            order_type=order_type,
+            local_dt=local_dt,
+        )
+        if resolved.get("menu"):
+            return resolved["menu"]
 
     if table:
         _branch, menu, _restaurant = get_restaurant_and_menu_name(table)
@@ -2454,13 +2544,16 @@ def _validate_sync_items_against_menu(
     table=None,
     room=None,
     order_type=None,
+    local_dt=None,
+    active_period=None,
     validated_modifier_keys=None,
 ):
-    """Reject newly added disabled / off-menu lines; keep historic + aggregators.
+    """Reject newly added disabled / off-menu / out-of-daypart lines; keep historic + aggregators.
 
     Aggregator flows price from Aggregator Settings (not restaurant menu).
-    Historic item codes already on the invoice may stay even if later disabled
-    or removed from the menu so captains can still update notes/qty of sent lines.
+    Historic item codes already on the invoice may stay even if later disabled,
+    removed from the menu, or outside their daypart window so captains can still
+    update notes/qty of sent lines.
     Server-validated modifier / combo upcharge lines are checked for Item.disabled
     but are not required to appear as standalone dishes on URY Menu.
     """
@@ -2497,25 +2590,38 @@ def _validate_sync_items_against_menu(
                 )
         return
 
-    menu = _resolve_menu_for_sync(branch, table=table, room=room, order_type=order_type)
+    menu = _resolve_menu_for_sync(
+        branch, table=table, room=room, order_type=order_type, local_dt=local_dt
+    )
     if not menu:
         frappe.throw(_("Please set an active menu for this restaurant."))
 
     menu_rows = frappe.get_all(
         "URY Menu Item",
         filters={"parent": menu, "item": ["in", new_codes], "disabled": 0},
-        fields=["item"],
+        fields=["item", "custom_available_from", "custom_available_to", "custom_serving_period"],
     )
-    allowed = {row.item for row in menu_rows}
+    rows_by_code = {row.item: row for row in menu_rows}
+
+    dp_mod = _dayparts_mod()
 
     for code in new_codes:
-        if code not in allowed:
+        if code not in rows_by_code:
             frappe.throw(
                 _("Item {0} is not available on the menu.").format(code)
             )
         if frappe.db.get_value("Item", code, "disabled"):
             frappe.throw(
                 _("Item {0} is disabled and cannot be added to the order.").format(code)
+            )
+        dp = dp_mod.evaluate_item_daypart(
+            rows_by_code[code], active_period=active_period, local_dt=local_dt, branch=branch
+        )
+        if dp.get("unavailable_daypart"):
+            frappe.throw(
+                _("Item {0} is outside its serving window ({1}).").format(
+                    code, dp.get("daypart_label") or _("unavailable now")
+                )
             )
 
 
@@ -3849,9 +3955,12 @@ def sync_order(
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile, billing_user=billing_user)
         invoice.ury_offline_captured_at = captured
-        invoice.set_posting_time = 1
+        invoice.set_posting_time = 0
         invoice.posting_date = captured.date()
         invoice.posting_time = captured.time()
+        if getattr(invoice, "flags", None) is not None:
+            invoice.flags.ury_trusted_offline_capture = True
+            invoice.flags._ury_offline_posting_dt = captured
 
     customer = _order_customer(invoice, posprofile, order_type, customer)
     if not customer:
@@ -4015,14 +4124,44 @@ def sync_order(
 
     if invoice.restaurant_table:
         _reconcile_invoice_merged_tables(invoice)
-    
-    if order_type == "Aggregators":
+
+    dp_mod = _dayparts_mod()
+    tx_mod = _tax_mod()
+
+    stamp_meta = dp_mod.stamp_invoice_outlet_time(
+        invoice,
+        at=invoice.get("ury_offline_captured_at") if captured_at is not None else None,
+    )
+    resolved_menu_meta = dp_mod.resolve_menu_and_price_list(
+        invoice.branch,
+        restaurant=invoice.get("restaurant"),
+        table=table or invoice.restaurant_table,
+        room=opening_room or room,
+        order_type=effective_order_type,
+        customer=customer,
+        local_dt=stamp_meta["local_dt"],
+    )
+    current_period_price_list = resolved_menu_meta.get("price_list")
+
+    if effective_order_type == "Aggregators":
         price_list = frappe.db.get_value("Aggregator Settings",{"customer": customer, "parent": invoice.branch, "parenttype": "Branch"},"price_list",)
         
         if not price_list:
             frappe.throw(f"Price list for customer {customer} in branch {invoice.branch} not found in Aggregator Settings.")
     else:
-        price_list = invoice.selling_price_list
+        if not invoice.name or not past_item:
+            if resolved_menu_meta.get("source") == "serving_period" and current_period_price_list:
+                price_list = current_period_price_list
+                invoice.selling_price_list = price_list
+            else:
+                price_list = invoice.selling_price_list or current_period_price_list
+                if price_list and not invoice.selling_price_list:
+                    invoice.selling_price_list = price_list
+        else:
+            price_list = invoice.selling_price_list or current_period_price_list
+    if getattr(invoice, "flags", None) is not None:
+        invoice.flags.ury_authoritative_price_list = price_list
+        invoice.flags.ury_trusted_server_pricing = True
 
     # dummy payment
     if invoice.invoice_created == 0:
@@ -4032,7 +4171,17 @@ def sync_order(
         )
         invoice.invoice_created = 1
 
-    menu = _resolve_menu_for_sync(invoice.branch, table=table or invoice.restaurant_table, room=opening_room or room, order_type=effective_order_type) or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
+    menu = (
+        resolved_menu_meta.get("menu")
+        or _resolve_menu_for_sync(
+            invoice.branch,
+            table=table or invoice.restaurant_table,
+            room=opening_room or room,
+            order_type=effective_order_type,
+            local_dt=stamp_meta["local_dt"],
+        )
+        or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
+    )
     _sync_order_company = invoice.company or getattr(posprofile, "company", None) or frappe.db.get_value("Branch", invoice.branch, "company")
 
     # Validate G3 modifiers & G4 combo choices and resolve authoritative 0/2/3dp server prices.
@@ -4066,7 +4215,7 @@ def sync_order(
         currency_precision=rate_precision,
     )
 
-    # Reject newly-added lines that are disabled or off the active menu
+    # Reject newly-added lines that are disabled, off-menu, or outside daypart window
     # before pricing runs; historic lines already on the invoice are exempt
     # (see _validate_sync_items_against_menu docstring).
     _validate_sync_items_against_menu(
@@ -4076,17 +4225,57 @@ def sync_order(
         table=table,
         room=opening_room or room,
         order_type=effective_order_type,
+        local_dt=stamp_meta["local_dt"],
+        active_period=resolved_menu_meta.get("serving_period"),
         validated_modifier_keys=set(modifier_price_overrides.keys()),
     )
     from ury.ury.api.ury_availability import apply_count_delta
 
     apply_count_delta(invoice.branch, past_item, past_item + items if append else items, invoice=invoice)
 
-    priced_items = price_items_for_invoice(
-        items, price_list, pos_profile, invoice.branch, menu, posting_date=invoice_pricing_date(invoice),
-        customer=invoice.customer, price_overrides=modifier_price_overrides,
+    previous_by_key = {
+        row.get("reservation_line_key"): row
+        for row in (invoice.items or [])
+        if row.get("reservation_line_key")
+    }
+    period_crossed = (
+        bool(invoice.name and past_item)
+        and effective_order_type != "Aggregators"
+        and bool(current_period_price_list and invoice.selling_price_list)
+        and current_period_price_list != invoice.selling_price_list
     )
 
+    if period_crossed:
+        # Open-check rate stability (G40): keep already-added lines at their original
+        # period rates; price newly added lines at the active period's price list.
+        priced_items = []
+        pricing_dt = invoice_pricing_date(invoice)
+        for src in items:
+            prev_row = previous_rows.get(src.get("name")) or previous_by_key.get(src.get("reservation_line_key"))
+            target_pl = price_list if prev_row is not None else current_period_price_list
+            priced_one = price_items_for_invoice(
+                [src], target_pl, pos_profile, invoice.branch, menu, posting_date=pricing_dt,
+                customer=invoice.customer, price_overrides=modifier_price_overrides,
+            )[0]
+            if prev_row is not None:
+                priced_one["rate"] = prev_row.get("rate")
+                priced_one["price_list_rate"] = prev_row.get("price_list_rate") or prev_row.get("rate")
+                priced_one["base_price_list_rate"] = prev_row.get("base_price_list_rate") or prev_row.get("rate")
+                for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
+                    if prev_row.get(tax_field) is not None:
+                        priced_one[tax_field] = prev_row.get(tax_field)
+            priced_items.append(priced_one)
+    else:
+        priced_items = price_items_for_invoice(
+            items, price_list, pos_profile, invoice.branch, menu, posting_date=invoice_pricing_date(invoice),
+            customer=invoice.customer, price_overrides=modifier_price_overrides,
+        )
+        for src, item_dict in zip(items, priced_items, strict=True):
+            prev_row = previous_rows.get(src.get("name")) or previous_by_key.get(src.get("reservation_line_key"))
+            if prev_row is not None:
+                for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
+                    if prev_row.get(tax_field) is not None:
+                        item_dict[tax_field] = prev_row.get(tax_field)
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
         reconcile_order_reservations(
             order_ref=_ensure_invoice_reservation_ref(invoice),
@@ -4137,6 +4326,8 @@ def sync_order(
         item_dict["ury_held"] = cint(source.get("ury_held"))
         invoice.append("items", item_dict)
 
+    # G42: Apply SAP MWST / Simphony order-type tax determination before service charge, expected_total & save
+    tx_mod.apply_order_type_tax(invoice, posprofile, customer_doc=customerdoc)
     _sync_service_charge(invoice, posprofile)
 
     if expected_total is not None:
@@ -5828,6 +6019,8 @@ def make_invoice(
     
     invoice.company = pos_prof.company
     invoice.currency = pos_prof.currency
+    tx_mod = _tax_mod()
+    tx_mod.apply_order_type_tax(invoice, pos_prof)
 
     # The cashier's tip (cash, or charged on a card or room-charge tender):
     # its Tips Payable line is on the bill before the totals the tenders are
@@ -6130,9 +6323,11 @@ def make_invoice(
     else:
         lock_open_shift_for_settlement(pos_profile)
 
+    tx_mod.validate_efris_readiness(invoice, throw=True)
     if target:
         # Saving the primary runs on_update, which saves a separate copy of the partner.
         target.reload()
+        tx_mod.validate_efris_readiness(target, throw=True)
     prev_rc_flag = getattr(frappe.flags, "kamra_room_charge_override", None)
     if rc_outcome and rc_outcome.get("override_approver"):
         frappe.flags.kamra_room_charge_override = {
@@ -6273,7 +6468,11 @@ def submit_order_invoice(
         _frappe=frappe,
     )
     target = frappe.get_doc('POS Invoice', doc.custom_merged_pos_invoice, for_update=True) if doc.custom_merged_pos_invoice else None
+    tx_mod = _tax_mod()
+
+    tx_mod.validate_efris_readiness(doc, throw=True)
     if target:
+        tx_mod.validate_efris_readiness(target, throw=True)
         doc.flags.ignore_payment_sync = True
     prev_rc_flag = getattr(frappe.flags, "kamra_room_charge_override", None)
     if rc_outcome and rc_outcome.get("override_approver"):
@@ -6297,6 +6496,300 @@ def submit_order_invoice(
     finally:
         frappe.flags.kamra_room_charge_override = prev_rc_flag
     return {"name": doc.name, "status": "Submitted"}
+
+
+@frappe.whitelist()
+def change_order_type(
+    invoice,
+    order_type,
+    table=None,
+    room=None,
+    no_of_pax=None,
+    approval_token=None,
+    reason=None,
+):
+    """Switch order_type on a draft POS Invoice, re-evaluating Tax Category, Tax Rule,
+    taxes_and_charges, and non-exempt item taxes while logging the transition."""
+    order_type = (order_type or "").strip()
+    valid_order_types = {"Dine In", "Take Away", "Delivery", "Phone In", "Aggregators"}
+    if order_type not in valid_order_types:
+        frappe.throw(_("Invalid order type: {0}.").format(order_type), frappe.ValidationError)
+
+    inv = frappe.get_doc("POS Invoice", invoice)
+    if not frappe.has_permission("POS Invoice", "write", doc=inv):
+        frappe.throw(_("Not permitted to modify this order."), frappe.PermissionError)
+    if int(inv.get("docstatus") or 0) != 0:
+        frappe.throw(_("Only draft orders can change order type."), frappe.ValidationError)
+
+    user_roles = frappe.get_roles()
+    is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
+    user_branch = None
+    if not is_super:
+        user_branch = getBranch()
+        if inv.get("branch") and user_branch and inv.branch != user_branch:
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+
+    flags = _enforce_order_access(inv, pos_profile_name=inv.get("pos_profile"), require_modify=True)
+    pos_prof = frappe.get_doc("POS Profile", inv.pos_profile)
+    if not (
+        cint(pos_prof.get("custom_edit_order_type")) == 1
+        or flags.get("has_elevated_access")
+        or is_super
+    ):
+        frappe.throw(
+            _("Changing order type is disabled for this POS Profile."),
+            frappe.PermissionError,
+        )
+
+    if order_type == "Dine In" and _has_role(user_roles, pos_prof.get("role_restricted_for_table_order")):
+        frappe.throw(
+            _("You are not permitted to take Dine In table orders."),
+            frappe.PermissionError,
+        )
+
+    old_order_type = inv.get("order_type") or ""
+    old_tax_category = inv.get("tax_category") or ""
+    old_template = inv.get("taxes_and_charges") or ""
+    old_table = inv.get("restaurant_table")
+    old_merged = inv.get("custom_merged_tables")
+    old_price_list = (inv.get("selling_price_list") or "").strip()
+    old_period = (inv.get("custom_serving_period") or "").strip()
+
+    # Validate any requested table for branch ownership, room access, occupancy, and reservation lock
+    table_info = None
+    if table:
+        raw_table_info = frappe.db.get_value(
+            "URY Table",
+            table,
+            ["name", "branch", "restaurant_room", "occupied"],
+            as_dict=True,
+        )
+        if not isinstance(raw_table_info, dict) or not raw_table_info.get("branch"):
+            frappe.throw(_("Table not found."), frappe.PermissionError)
+        table_info = raw_table_info
+        table_branch = table_info.get("branch")
+        table_room = table_info.get("restaurant_room")
+
+        if inv.get("branch") and table_branch != inv.get("branch"):
+            frappe.throw(
+                _("Not permitted to assign a table outside this order's branch."),
+                frappe.PermissionError,
+            )
+        if not is_super and user_branch and table_branch != user_branch:
+            frappe.throw(
+                _("Not permitted to take orders for a table outside your active branch."),
+                frappe.PermissionError,
+            )
+
+        if table_room and not (
+            flags.get("has_elevated_access") or flags.get("has_billing_access") or is_super
+        ):
+            assigned_rooms = {row.get("name") for row in getRoom()}
+            if None not in assigned_rooms and table_room not in assigned_rooms:
+                frappe.throw(
+                    _("Not permitted to take orders for a table outside your assigned room."),
+                    frappe.PermissionError,
+                )
+
+        if table != old_table:
+            if cint(table_info.get("occupied")) == 1 or frappe.db.exists(
+                "POS Invoice",
+                {"restaurant_table": table, "docstatus": 0, "name": ["!=", inv.name]},
+            ):
+                frappe.throw(
+                    _("Table {0} is already occupied.").format(table),
+                    frappe.ValidationError,
+                )
+
+            if order_type == "Dine In":
+                from ury.ury.api.table_reservation import check_table_reservation, parse_to_datetime
+
+                active_res = check_table_reservation(table)
+                if (
+                    active_res
+                    and active_res.get("is_lock_window_active")
+                    and active_res.get("status") == "Confirmed"
+                ):
+                    res_time_raw = active_res.get("reserved_at")
+                    formatted_res_time = ""
+                    if res_time_raw:
+                        try:
+                            res_dt = parse_to_datetime(res_time_raw)
+                            formatted_res_time = res_dt.strftime("%I:%M %p").lstrip("0")
+                        except Exception:
+                            formatted_res_time = str(res_time_raw)
+                    frappe.throw(
+                        _("Table {0} is reserved for {1}. Please choose another table.").format(
+                            table, formatted_res_time
+                        ),
+                        frappe.ValidationError,
+                    )
+
+    inv.order_type = order_type
+    if order_type == "Dine In":
+        if table:
+            inv.restaurant_table = table
+        if room is not None:
+            inv.custom_restaurant_room = room
+        elif table_info is not None:
+            inv.custom_restaurant_room = table_info.get("restaurant_room")
+        if no_of_pax is not None:
+            inv.no_of_pax = _validate_dine_in_pax(no_of_pax, order_type)
+    else:
+        inv.restaurant_table = table or None
+        inv.custom_merged_tables = None
+        if room is not None:
+            inv.custom_restaurant_room = room
+        elif table_info is not None:
+            inv.custom_restaurant_room = table_info.get("restaurant_room")
+        else:
+            inv.custom_restaurant_room = None
+
+    # Re-resolve selling_price_list and item pricing for the new order type while preserving
+    # open-check Serving Period locks when the stamped period still governs the new order type.
+    dp_mod = _dayparts_mod()
+    resolved_menu = dp_mod.resolve_menu_and_price_list(
+        inv.get("branch"),
+        restaurant=inv.get("restaurant"),
+        table=inv.get("restaurant_table"),
+        room=inv.get("custom_restaurant_room"),
+        order_type=order_type,
+        customer=inv.get("customer"),
+        at=inv.get("ury_offline_captured_at"),
+        cashier=True,
+    )
+    keep_period_lock = False
+    if (
+        old_period
+        and old_price_list
+        and order_type != "Aggregators"
+        and resolved_menu.get("source") != "room"
+        and dp_mod.serving_period_applies_to_order_type(inv.get("restaurant"), old_period, order_type)
+    ):
+        if old_price_list in dp_mod.allowed_price_lists_for_period(inv.get("restaurant"), old_period):
+            keep_period_lock = True
+
+    if keep_period_lock:
+        new_price_list = old_price_list
+    else:
+        new_price_list = resolved_menu.get("price_list")
+        if order_type == "Aggregators" and not new_price_list:
+            frappe.throw(
+                _("Price list for customer {0} in branch {1} not found in Aggregator Settings.").format(
+                    inv.get("customer"), inv.get("branch")
+                ),
+                frappe.ValidationError,
+            )
+        if old_period and not dp_mod.serving_period_applies_to_order_type(
+            inv.get("restaurant"), old_period, order_type
+        ):
+            inv.custom_serving_period = (resolved_menu.get("serving_period") or {}).get("period_name") or None
+
+    if getattr(inv, "flags", None) is not None:
+        inv.flags.ury_server_order_type_change = True
+        inv.flags.ury_trusted_server_pricing = True
+
+    if new_price_list and new_price_list != old_price_list:
+        inv.selling_price_list = new_price_list
+        if getattr(inv, "flags", None) is not None:
+            inv.flags.ury_authoritative_price_list = new_price_list
+        pricing_dt = invoice_pricing_date(inv)
+        try:
+            release_field, released = item_price_release_states()
+        except Exception:
+            release_field, released = (None, None)
+        new_menu = resolved_menu.get("menu")
+        for row in inv.get("items") or []:
+            if cint(row.get("is_disposable")) == 1:
+                continue
+            if row.get("custom_line_role") == "Combo Upcharge" and (row.get("custom_parent_line_key") or "").strip():
+                # The linked modifier is priced by the modifier validator.
+                continue
+            if (
+                cint(row.get("custom_price_overridden")) == 1
+                or cint(row.get("custom_is_open_item")) == 1
+                or cint(row.get("custom_is_complimentary")) == 1
+            ):
+                continue
+            code = row.get("item_code")
+            if not code:
+                continue
+            new_rate = None
+            try:
+                ip = price_valid_on(
+                    code, new_price_list, pricing_dt, release_field, released, customer=inv.get("customer")
+                )
+                if ip and ip.get("price_list_rate") is not None:
+                    new_rate = flt(ip.get("price_list_rate"))
+            except Exception:
+                new_rate = None
+            if new_rate is None and new_menu:
+                menu_rate = frappe.db.get_value(
+                    "URY Menu Item", {"parent": new_menu, "item": code}, "rate"
+                )
+                if menu_rate is not None:
+                    new_rate = flt(menu_rate)
+            if new_rate is not None:
+                row.price_list_rate = new_rate
+                row.base_price_list_rate = new_rate
+                row.rate = new_rate
+                row.pricing_rules = None
+                row.discount_percentage = 0
+                row.discount_amount = 0
+    elif old_price_list and getattr(inv, "flags", None) is not None:
+        inv.flags.ury_authoritative_price_list = old_price_list
+
+    customer_doc = (
+        frappe.get_doc("Customer", inv.customer) if inv.get("customer") else None
+    )
+
+    tx_mod = _tax_mod()
+
+    tax_result = tx_mod.apply_order_type_tax(
+        inv,
+        pos_prof,
+        customer_doc=customer_doc,
+        reset_non_exempt_item_taxes=True,
+    )
+    inv.set_missing_values(for_validate=True)
+    inv.calculate_taxes_and_totals()
+
+    reason_suffix = f" Reason: {reason.strip()}" if (reason and str(reason).strip()) else ""
+    inv.add_comment(
+        "Comment",
+        _(
+            "Order type changed from {0} to {1}; tax category {2} -> {3}; tax template {4} -> {5}.{6}"
+        ).format(
+            old_order_type or "None",
+            order_type,
+            old_tax_category or "None",
+            tax_result.get("tax_category") or "None",
+            old_template or "None",
+            tax_result.get("taxes_and_charges") or "None",
+            reason_suffix,
+        ),
+    )
+    prev_priv_verified = getattr(getattr(inv, "flags", None), "ury_privileged_action_verified", False)
+    if getattr(inv, "flags", None) is not None:
+        inv.flags.ury_privileged_action_verified = True
+    try:
+        inv.save()
+    finally:
+        if getattr(inv, "flags", None) is not None:
+            inv.flags.ury_privileged_action_verified = prev_priv_verified
+            inv.flags.ury_server_order_type_change = False
+            inv.flags.ury_trusted_server_pricing = False
+
+    if inv.get("restaurant_table") and inv.get("restaurant_table") != old_table:
+        frappe.db.set_value(
+            "URY Table",
+            inv.restaurant_table,
+            {"occupied": 1, "latest_invoice_time": inv.get("creation") or now_datetime()},
+        )
+    if old_table and inv.get("restaurant_table") != old_table:
+        _free_tables_if_no_open_invoices(old_table, old_merged)
+
+    return inv.as_dict()
         
         
 

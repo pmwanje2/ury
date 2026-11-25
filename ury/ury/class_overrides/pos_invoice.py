@@ -66,6 +66,244 @@ _COPY_RENDER_MARKER = object()
 
 
 class CustomPOSInvoice(POSInvoice):
+	def validate(self):
+		# G41 coexistence with sales-time-pricing@1:
+		# `Sales Time Pricing - POS Invoice` (Before Validate Server Script) runs AFTER
+		# `ury_pos_invoice.before_validate` and overwrites `custom_transaction_local_time` /
+		# `custom_transaction_weekday` with site `now_datetime()`. Re-apply the server-only
+		# outlet-timezone stamp captured on `self.flags` right BEFORE `super().validate()`
+		# evaluates ERPNext's `apply_pricing_rule()` so Pricing Rules ALWAYS evaluate against
+		# the outlet's true local time (or verified offline capture window).
+		flags = getattr(self, "flags", None)
+		if flags is not None and not cint(self.get("is_return")):
+			auth_time = getattr(flags, "_ury_auth_local_time", None)
+			auth_wd = getattr(flags, "_ury_auth_weekday", None)
+			if isinstance(auth_time, str) and auth_time.strip():
+				self.custom_transaction_local_time = auth_time.strip()
+			if isinstance(auth_wd, str) and auth_wd.strip():
+				self.custom_transaction_weekday = auth_wd.strip()
+			if hasattr(flags, "_ury_auth_serving_period"):
+				auth_period = getattr(flags, "_ury_auth_serving_period", None)
+				self.custom_serving_period = auth_period or None
+
+		orig_spt = cint(self.get("set_posting_time"))
+		temp_offline_spt = False
+		if (
+			flags is not None
+			and getattr(flags, "ury_trusted_offline_capture", False)
+			and not cint(self.get("is_return"))
+		):
+			offline_dt = getattr(flags, "_ury_offline_posting_dt", None)
+			if offline_dt is not None:
+				if not hasattr(offline_dt, "date"):
+					try:
+						offline_dt = frappe.utils.get_datetime(offline_dt)
+					except Exception:
+						offline_dt = None
+				if offline_dt is not None and hasattr(offline_dt, "date"):
+					self.posting_date = offline_dt.date()
+					self.posting_time = offline_dt.time()
+					if not orig_spt:
+						self.set_posting_time = 1
+						temp_offline_spt = True
+
+		# Coexistence with sales-time-pricing@1 on same-second returns:
+		# `Sales Time Pricing - POS Invoice` (Before Validate) already enforced SALES-TIME-005
+		# and stamped whole-second `HH:MM:SS` (`.000000` microseconds) when `set_posting_time == 0`.
+		# Meanwhile the original submitted POS Invoice stores microsecond precision from ERPNext's
+		# `validate_posting_time()`, which runs AFTER `super(SalesInvoice, self).validate()` ->
+		# `validate_return_against()`. Restore current server `now_datetime()` microsecond precision
+		# right before `super().validate()` ONLY when `set_posting_time == 0` (never weakening
+		# SALES-TIME-005 or altering explicit privileged posting times).
+		if (
+			cint(self.get("is_return")) == 1
+			and not cint(self.get("set_posting_time"))
+			and not getattr(frappe.flags, "in_import", False)
+			and not getattr(flags, "from_restore", False)
+		):
+			now_dt = frappe.utils.now_datetime()
+			if hasattr(now_dt, "strftime"):
+				self.posting_date = now_dt.strftime("%Y-%m-%d")
+				self.posting_time = now_dt.strftime("%H:%M:%S.%f")
+
+		# Shield server-verified or persisted #152 overridden/open/comp rows from
+		# ERPNext's apply_pricing_rule() re-applying sales-time-pricing@1 discounts.
+		# Never shield unverified client-forged rows.
+		protected_rows = self._snapshot_authorized_pricing_rows()
+		try:
+			res = super().validate()
+			if protected_rows:
+				self._restore_authorized_pricing_rows(protected_rows)
+			return res
+		finally:
+			if temp_offline_spt:
+				self.set_posting_time = 0
+
+	def _snapshot_authorized_pricing_rows(self):
+		if cint(self.get("is_return")):
+			return {}
+		flags = getattr(self, "flags", None)
+		privileged_verified = bool(getattr(flags, "ury_privileged_action_verified", False))
+		persisted_auth_names = set()
+		if not privileged_verified:
+			is_new_fn = getattr(self, "is_new", None)
+			is_new = bool(is_new_fn()) if callable(is_new_fn) else not bool(self.get("name"))
+			if not is_new:
+				prev = None
+				get_before = getattr(self, "get_doc_before_save", None)
+				if callable(get_before):
+					try:
+						prev = get_before()
+					except Exception:
+						prev = None
+				prev_items = (
+					(prev.get("items") if hasattr(prev, "get") else getattr(prev, "items", None))
+					if prev is not None
+					else None
+				)
+				if prev_items is None and self.get("name"):
+					try:
+						prev_items = frappe.get_all(
+							"POS Invoice Item",
+							filters={"parent": self.get("name")},
+							fields=[
+								"name",
+								"custom_price_overridden",
+								"custom_is_open_item",
+								"custom_is_complimentary",
+							],
+						)
+					except Exception:
+						prev_items = None
+				for prow in prev_items or []:
+					pname = prow.get("name") if hasattr(prow, "get") else getattr(prow, "name", None)
+					if not pname:
+						continue
+					if (
+						cint(prow.get("custom_price_overridden") if hasattr(prow, "get") else getattr(prow, "custom_price_overridden", 0)) == 1
+						or cint(prow.get("custom_is_open_item") if hasattr(prow, "get") else getattr(prow, "custom_is_open_item", 0)) == 1
+						or cint(prow.get("custom_is_complimentary") if hasattr(prow, "get") else getattr(prow, "custom_is_complimentary", 0)) == 1
+					):
+						persisted_auth_names.add(pname)
+
+		snaps = {}
+		for row in self.get("items") or []:
+			if cint(row.get("is_disposable") if hasattr(row, "get") else getattr(row, "is_disposable", 0)) == 1:
+				continue
+			has_flag = (
+				cint(row.get("custom_price_overridden") if hasattr(row, "get") else getattr(row, "custom_price_overridden", 0)) == 1
+				or cint(row.get("custom_is_open_item") if hasattr(row, "get") else getattr(row, "custom_is_open_item", 0)) == 1
+				or cint(row.get("custom_is_complimentary") if hasattr(row, "get") else getattr(row, "custom_is_complimentary", 0)) == 1
+			)
+			if not has_flag:
+				continue
+			rname = row.get("name") if hasattr(row, "get") else getattr(row, "name", None)
+			if not privileged_verified and (not rname or rname not in persisted_auth_names):
+				continue
+			snaps[id(row)] = {
+				"name": rname,
+				"price_list_rate": flt(row.get("price_list_rate") if hasattr(row, "get") else getattr(row, "price_list_rate", 0)),
+				"rate": flt(row.get("rate") if hasattr(row, "get") else getattr(row, "rate", 0)),
+				"base_price_list_rate": flt(row.get("base_price_list_rate") if hasattr(row, "get") else getattr(row, "base_price_list_rate", 0)),
+				"base_rate": flt(row.get("base_rate") if hasattr(row, "get") else getattr(row, "base_rate", 0)),
+				"discount_percentage": flt(row.get("discount_percentage") if hasattr(row, "get") else getattr(row, "discount_percentage", 0)),
+				"discount_amount": flt(row.get("discount_amount") if hasattr(row, "get") else getattr(row, "discount_amount", 0)),
+				"pricing_rules": row.get("pricing_rules") if hasattr(row, "get") else getattr(row, "pricing_rules", None),
+			}
+		return snaps
+
+	def _restore_authorized_pricing_rows(self, snaps):
+		restored_names = set()
+		changed = False
+		for row in self.get("items") or []:
+			snap = snaps.get(id(row))
+			if snap is None:
+				continue
+			curr_rate = flt(row.get("rate") if hasattr(row, "get") else getattr(row, "rate", 0))
+			curr_plr = flt(row.get("price_list_rate") if hasattr(row, "get") else getattr(row, "price_list_rate", 0))
+			curr_disc_pct = flt(row.get("discount_percentage") if hasattr(row, "get") else getattr(row, "discount_percentage", 0))
+			curr_disc_amt = flt(row.get("discount_amount") if hasattr(row, "get") else getattr(row, "discount_amount", 0))
+			curr_pr = (row.get("pricing_rules") if hasattr(row, "get") else getattr(row, "pricing_rules", None)) or ""
+			snap_pr = snap["pricing_rules"] or ""
+			if (
+				abs(curr_rate - snap["rate"]) > 1e-6
+				or abs(curr_plr - snap["price_list_rate"]) > 1e-6
+				or abs(curr_disc_pct - snap["discount_percentage"]) > 1e-6
+				or abs(curr_disc_amt - snap["discount_amount"]) > 1e-6
+				or curr_pr != snap_pr
+			):
+				for field in (
+					"price_list_rate",
+					"rate",
+					"base_price_list_rate",
+					"base_rate",
+					"discount_percentage",
+					"discount_amount",
+					"pricing_rules",
+				):
+					setattr(row, field, snap[field])
+				rname = (row.get("name") if hasattr(row, "get") else getattr(row, "name", None)) or snap["name"]
+				if rname:
+					restored_names.add(rname)
+				changed = True
+		if changed:
+			pr_rows = self.get("pricing_rules")
+			if isinstance(pr_rows, list) and restored_names:
+				kept = [
+					pr
+					for pr in pr_rows
+					if (pr.get("child_docname") if hasattr(pr, "get") else getattr(pr, "child_docname", None))
+					not in restored_names
+				]
+				if callable(getattr(self, "set", None)):
+					self.set("pricing_rules", kept)
+				else:
+					self.pricing_rules = kept
+			if callable(getattr(self, "calculate_taxes_and_totals", None)):
+				self.calculate_taxes_and_totals()
+
+	def set_taxes(self):
+		if getattr(self.flags, "ury_explicit_no_taxes", False):
+			return
+		return super().set_taxes()
+
+	def set_missing_values(self, for_validate=False):
+		protected_rows = self._snapshot_authorized_pricing_rows()
+		res = super().set_missing_values(for_validate=for_validate)
+		if protected_rows:
+			self._restore_authorized_pricing_rows(protected_rows)
+		return res
+
+	def set_pos_fields(self, for_validate=False):
+		# Open-check rate stability (G40): ERPNext's set_pos_fields() unconditionally resets
+		# selling_price_list to POS Profile.selling_price_list on every validate(). Preserve ONLY
+		# a server-authoritative price list (set by before_validate/sync_order/change_order_type)
+		# or a persisted open check's stamped Serving Period price list — never an unvalidated
+		# client payload on a new REST POST/PUT.
+		preserved_pl = None
+		if (self.get("order_type") or "") != "Aggregators":
+			flags = getattr(self, "flags", None)
+			auth_pl = (getattr(flags, "ury_authoritative_price_list", None) or "").strip() if flags else ""
+			if auth_pl:
+				preserved_pl = auth_pl
+			elif not (callable(getattr(self, "is_new", None)) and self.is_new()):
+				get_before = getattr(self, "get_doc_before_save", None)
+				prev = get_before() if callable(get_before) else None
+				prev_period = (
+					(prev.get("custom_serving_period") if hasattr(prev, "get") else getattr(prev, "custom_serving_period", None))
+					or ""
+				).strip() if prev is not None else ""
+				prev_pl = (
+					(prev.get("selling_price_list") if hasattr(prev, "get") else getattr(prev, "selling_price_list", None))
+					or ""
+				).strip() if prev is not None else ""
+				if prev_period and prev_pl:
+					preserved_pl = prev_pl
+		res = super().set_pos_fields(for_validate=for_validate)
+		if preserved_pl:
+			self.selling_price_list = preserved_pl
+		return res
+
 	def calculate_taxes_and_totals(self):
 		from ury.ury.hooks.ury_pos_tender import calculate_taxes_and_totals_excluding_tip
 		from ury.ury_pos.pricing_actions import calculate_taxes_and_totals_for_service_charge

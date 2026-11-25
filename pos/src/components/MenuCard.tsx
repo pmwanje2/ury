@@ -13,6 +13,10 @@ interface MenuCardProps {
   id: string;
   name: string;
   price: number;
+  promoRate?: number | null;
+  promoLabel?: string | null;
+  unavailableDaypart?: boolean;
+  daypartLabel?: string | null;
   item_image: string | null;
   course?: string;
   item: string;
@@ -28,6 +32,10 @@ interface MenuCardProps {
 const MenuCard: FC<MenuCardProps> = ({
   name,
   price,
+  promoRate,
+  promoLabel,
+  unavailableDaypart = false,
+  daypartLabel,
   item_image,
   course,
   onClick,
@@ -81,15 +89,24 @@ const MenuCard: FC<MenuCardProps> = ({
   };
 
   const availabilityTag = getAvailabilityTag();
+  const hasPromo = promoRate != null && Number.isFinite(promoRate) && promoRate < price;
+  const effectivePriceLabel = formatCurrency(hasPromo ? promoRate! : price, currency);
+  const originalPriceLabel = hasPromo ? formatCurrency(price, currency) : null;
+  const effectiveDaypartLabel = unavailableDaypart
+    ? (daypartLabel || t('menu.daypart_available'))
+    : null;
 
   const card = (
     <MenuItemCard
       name={name}
-      priceLabel={formatCurrency(price, currency)}
+      priceLabel={effectivePriceLabel}
+      originalPriceLabel={originalPriceLabel}
+      promoBadge={hasPromo ? (promoLabel || undefined) : undefined}
+      daypartLabel={effectiveDaypartLabel}
       imageUrl={item_image}
       course={course}
-      onClick={onClick}
-      disabled={disabled || unavailable}
+      onClick={unavailableDaypart ? undefined : onClick}
+      disabled={disabled || unavailable || unavailableDaypart}
       availabilityTag={availabilityTag}
     />
   );

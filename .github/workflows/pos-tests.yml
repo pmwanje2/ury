@@ -74,5 +74,7 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_till_cash_controls
           PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_till_close_controls
           PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_tender_halo
+          PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_tax_determination
+          PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_dayparts
           PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_modifiers_combos
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_kot_modifier_routing

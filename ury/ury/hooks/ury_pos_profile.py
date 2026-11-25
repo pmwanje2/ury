@@ -20,6 +20,7 @@ def validate(doc, method):
     validate_bill_check(doc, method)
     validate_cost_center(doc, method)
     validate_order_type_customers(doc, method)
+    validate_order_type_tax_categories_hook(doc, method)
     validate_room_lookup_method(doc, method)
     validate_paid_out_approval_threshold(doc, method)
     validate_till_cash_thresholds(doc, method)
@@ -144,6 +145,14 @@ def validate_service_charge_rules(doc, method=None):
 
     if not rules and flt(doc.get("custom_service_charge_rate")) > 0:
         _validate_service_charge_account(doc, doc.get("custom_service_charge_account"), tips_account)
+
+
+def validate_order_type_tax_categories_hook(doc, method=None):
+    if not doc.get("custom_order_type_tax_categories"):
+        return
+    from ury.ury_pos.tax_determination import validate_order_type_tax_categories
+
+    validate_order_type_tax_categories(doc, method)
 
 
 def validate_paid_out_approval_threshold(doc, method=None):

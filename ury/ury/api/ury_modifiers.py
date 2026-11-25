@@ -1113,7 +1113,11 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 	child_rows = []
 
 	for idx, row in enumerate(active_rows):
-		is_mod = cint(row.get("custom_is_modifier")) == 1 or bool((row.get("custom_parent_line_key") or "").strip())
+		is_mod = (
+			cint(row.get("custom_is_modifier")) == 1
+			or bool((row.get("custom_parent_line_key") or "").strip())
+			or row.get("custom_line_role") == "Combo Upcharge"
+		)
 		if is_mod:
 			child_rows.append(row)
 		else:

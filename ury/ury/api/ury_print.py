@@ -67,6 +67,10 @@ def network_printing(
     reprint_meta = _reprint_meta
     if doctype == "POS Invoice":
         check_split_target_access(target, "write")
+        if int(getattr(target, "docstatus", 0) or 0) == 0:
+            from ury.ury_pos.tax_determination import validate_efris_readiness
+
+            validate_efris_readiness(target, throw=True)
         doc = target
         if reprint_meta is None:
             from ury.ury_pos.floor_actions import authorize_and_count_bill_print
@@ -187,6 +191,10 @@ def select_network_printer(
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
     check_split_target_access(invoice_doc, "write")
+    if int(getattr(invoice_doc, "docstatus", 0) or 0) == 0:
+        from ury.ury_pos.tax_determination import validate_efris_readiness
+
+        validate_efris_readiness(invoice_doc, throw=True)
     from ury.ury_pos.floor_actions import authorize_and_count_bill_print
 
     reprint_meta = authorize_and_count_bill_print(
@@ -250,6 +258,10 @@ def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None)
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
     check_split_target_access(invoice_doc, "write")
+    if int(getattr(invoice_doc, "docstatus", 0) or 0) == 0:
+        from ury.ury_pos.tax_determination import validate_efris_readiness
+
+        validate_efris_readiness(invoice_doc, throw=True)
     from ury.ury_pos.floor_actions import authorize_and_count_bill_print
 
     reprint_meta = authorize_and_count_bill_print(
@@ -319,6 +331,10 @@ def print_pos_page(doctype, name, print_format, approval_token=None, reason=None
         )
 
         check_split_target_access(doc_to_check, "write")
+        if int(getattr(doc_to_check, "docstatus", 0) or 0) == 0:
+            from ury.ury_pos.tax_determination import validate_efris_readiness
+
+            validate_efris_readiness(doc_to_check, throw=True)
         if print_format:
             validate_pos_invoice_print_format(doc_to_check, print_format)
         else:

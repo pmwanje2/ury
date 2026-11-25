@@ -59,6 +59,7 @@
     "staff_pins": "PIN du personnel",
     "till_cash": "Caisse",
     "my_approval_pin": "Mon PIN d'approbation",
+    "tax_exempt": "Exonéré de taxe",
     "business_date_badge": "Date commerciale : {{date}}",
     "shift_report": "Rapport de poste X / Z"
   },
@@ -74,7 +75,8 @@
     "availability_load_failed": "Impossible de charger la disponibilité. Réessayez.",
     "no_availability_overrides": "Aucun changement de disponibilité pour cet établissement.",
     "sold_out_count": "Épuisé ({{count}})",
-    "qty_left_unconfirmed": "{{qty}} restant(s) ?"
+    "qty_left_unconfirmed": "{{qty}} restant(s) ?",
+    "daypart_available": "Hors plage horaire de service"
   },
   "pos_sidebar": {
     "categories": "Catégories",
@@ -98,7 +100,13 @@
     "edit_comment": "Modifier le commentaire",
     "pax": "Couverts",
     "insufficient_capacity": "Capacité insuffisante pour ajouter cet article",
-    "guest_label": "Nom du client (facultatif)"
+    "guest_label": "Nom du client (facultatif)",
+    "net_total": "Net",
+    "discount": "Remise",
+    "tax": "Taxe",
+    "offline_estimate": "Estimation hors ligne — vérifiée à la reconnexion",
+    "tax_preview_loading": "Calcul des taxes...",
+    "toggle_breakdown": "Détail des taxes"
   },
   "order": {
     "select_to_view": "Sélectionnez une commande pour voir les détails",
@@ -159,6 +167,9 @@
     "already_received": "Déjà reçu",
     "balance_due": "Solde dû",
     "reference_label": "Réf. : {{ref}}",
+    "net_total": "Net",
+    "tax": "Taxe",
+    "efris_warning_title": "Vérification de conformité fiscale",
     "halo_warning": "Verrouillage montant élevé (HALO) : le règlement {{mode}} ({{amount}}) dépasse le maximum autorisé ({{limit}}). Vérifiez la saisie ou demandez le PIN d’un responsable.",
     "halo_approval_title": "Approuver un règlement hors plafond",
     "room_limit": "Plafond",

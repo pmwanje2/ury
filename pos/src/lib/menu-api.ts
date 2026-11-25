@@ -1,5 +1,20 @@
 import { call } from '@ury/core';
 
+export interface ActiveServingPeriod {
+  period_name: string;
+  start_time: string;
+  end_time: string;
+  menu?: string | null;
+  price_list_override?: string | null;
+  priority?: number;
+}
+
+export interface TaxSummary {
+  tax_category?: string | null;
+  taxes_and_charges?: string | null;
+  label?: string | null;
+}
+
 export interface ModifierOption {
   option_code: string;
   item: string | null;
@@ -67,6 +82,10 @@ export interface MenuItem {
   recommended?: boolean;
   description?: string;
   special_dish?: 1 | 0;
+  unavailable_daypart?: boolean;
+  daypart_label?: string | null;
+  promo_rate?: number | null;
+  promo_label?: string | null;
   is_combo_meal?: boolean;
   product_bundle?: string | null;
   bundle_defaults?: BundleDefaultItem[];
@@ -78,27 +97,41 @@ export interface MenuItem {
   custom_allow_zero_price?: number;
 }
 
+export interface MenuResponsePayload {
+  items: MenuItem[];
+  name?: string;
+  modified_time?: string;
+  active_serving_period?: ActiveServingPeriod | null;
+  price_list?: string | null;
+  timezone?: string | null;
+  tax_summary?: TaxSummary | null;
+}
+
 export interface GetMenuResponse {
-  message: {
-    items: MenuItem[];
-  };
+  message: MenuResponsePayload;
 }
 
 export interface GetAggregatorMenuResponse {
   message: MenuItem[];
 }
 
-export const getRestaurantMenu = async (posProfile: string, room: string | null, order_type: string | null) => {
+export const getRestaurantMenuWithMeta = async (
+  posProfile: string,
+  room: string | null,
+  order_type: string | null,
+  customer?: string | null,
+): Promise<MenuResponsePayload> => {
   try {
     const response = await call.get<GetMenuResponse>(
       'ury.ury_pos.api.getRestaurantMenu',
       {
         pos_profile: posProfile,
         room: room,
-        order_type: order_type
+        order_type: order_type,
+        ...(customer ? { customer } : {}),
       }
     );
-    return response.message.items;
+    return response.message;
   } catch (error: any) {
     if (error._server_messages) {
       const messages = JSON.parse(error._server_messages);
@@ -107,6 +140,11 @@ export const getRestaurantMenu = async (posProfile: string, room: string | null,
     }
     throw error;
   }
+};
+
+export const getRestaurantMenu = async (posProfile: string, room: string | null, order_type: string | null) => {
+  const payload = await getRestaurantMenuWithMeta(posProfile, room, order_type);
+  return payload.items;
 };
 
 export const getAggregatorMenu = async (aggregator: string) => {

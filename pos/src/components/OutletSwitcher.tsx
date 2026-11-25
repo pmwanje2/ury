@@ -30,9 +30,11 @@ export const OutletPickerDialog = ({
   onSwitched,
 }: OutletPickerDialogProps) => {
   const posProfile = usePOSStore((state) => state.posProfile);
-  const storeOutlets = usePOSStore((state) => state.availableOutlets) ?? [];
-  const availableOutlets = outlets && outlets.length > 0 ? outlets : storeOutlets;
-  const activeOrders = usePOSStore((state) => state.activeOrders) ?? [];
+  const rawStoreOutlets = usePOSStore((state) => state.availableOutlets);
+  const storeOutlets = Array.isArray(rawStoreOutlets) ? rawStoreOutlets : [];
+  const availableOutlets = Array.isArray(outlets) && outlets.length > 0 ? outlets : storeOutlets;
+  const rawActiveOrders = usePOSStore((state) => state.activeOrders);
+  const activeOrders = Array.isArray(rawActiveOrders) ? rawActiveOrders : [];
   const switchOutlet = usePOSStore((state) => state.switchOutlet);
 
   const [pendingTarget, setPendingTarget] = useState<AvailableOutlet | null>(null);
@@ -208,7 +210,8 @@ interface OutletSwitcherProps {
 
 const OutletSwitcher = ({ disabled = false }: OutletSwitcherProps) => {
   const posProfile = usePOSStore((state) => state.posProfile);
-  const availableOutlets = usePOSStore((state) => state.availableOutlets) ?? [];
+  const rawAvailableOutlets = usePOSStore((state) => state.availableOutlets);
+  const availableOutlets = Array.isArray(rawAvailableOutlets) ? rawAvailableOutlets : [];
   const [open, setOpen] = useState(false);
 
   if (availableOutlets.length <= 1) {

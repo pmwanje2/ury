@@ -13,7 +13,10 @@
   "special_dish",
   "disabled",
   "course_icon",
-  "course"
+  "course",
+  "custom_available_from",
+  "custom_available_to",
+  "custom_serving_period"
  ],
  "fields": [
   {
@@ -62,6 +65,21 @@
    "fieldtype": "Data",
    "in_standard_filter": 1,
    "label": "Course Icon"
+  },
+  {
+   "fieldname": "custom_available_from",
+   "fieldtype": "Time",
+   "label": "Available From"
+  },
+  {
+   "fieldname": "custom_available_to",
+   "fieldtype": "Time",
+   "label": "Available To"
+  },
+  {
+   "fieldname": "custom_serving_period",
+   "fieldtype": "Data",
+   "label": "Serving Period"
   }
  ],
  "index_web_pages_for_search": 1,

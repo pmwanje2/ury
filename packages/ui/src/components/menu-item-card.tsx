@@ -16,6 +16,9 @@ export type MenuItemAvailabilityTag = {
 export interface MenuItemCardProps {
   name: string
   priceLabel: string
+  originalPriceLabel?: string | null
+  promoBadge?: string | null
+  daypartLabel?: string | null
   imageUrl?: string | null
   course?: string
   onClick?: () => void
@@ -44,6 +47,9 @@ function formatQty(quantity: number): string {
 export function MenuItemCard({
   name,
   priceLabel,
+  originalPriceLabel,
+  promoBadge,
+  daypartLabel,
   imageUrl,
   course,
   onClick,
@@ -193,6 +199,15 @@ export function MenuItemCard({
             {name.slice(0, 2).toUpperCase()}
           </div>
         )}
+        {promoBadge && !unavailableMessage && (
+          <span
+            data-testid="menu-item-promo-badge"
+            title={promoBadge}
+            className="absolute bottom-1.5 start-1.5 max-w-[calc(100%-0.75rem)] truncate rounded bg-emerald-600/95 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm"
+          >
+            {promoBadge}
+          </span>
+        )}
         {unavailableMessage && (
           <span className="absolute end-1 top-1 rounded bg-gray-900/80 px-2 py-0.5 text-[10px] font-medium text-white">
             {unavailableMessage}
@@ -216,6 +231,11 @@ export function MenuItemCard({
           <span className="shrink-0 text-sm font-semibold tabular-nums text-gray-900">
             {priceLabel}
           </span>
+          {originalPriceLabel ? (
+            <span className="shrink-0 text-xs tabular-nums text-gray-400 line-through">
+              {originalPriceLabel}
+            </span>
+          ) : null}
           {availabilityTag ? (
             <Badge size="tag" variant={availabilityTag.variant}>
               {availabilityTag.showDot ? (
@@ -225,6 +245,11 @@ export function MenuItemCard({
             </Badge>
           ) : null}
         </div>
+        {daypartLabel ? (
+          <p className="mt-1 truncate text-[11px] font-medium text-gray-500" title={daypartLabel}>
+            {daypartLabel}
+          </p>
+        ) : null}
         {hasStepper ? <div className="mt-auto h-11 shrink-0" aria-hidden /> : null}
       </div>
       {showQtyControls && (

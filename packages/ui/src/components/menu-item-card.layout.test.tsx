@@ -71,4 +71,23 @@ describe('MenuItemCard height', () => {
     expect(row.contains(screen.getByText('Not available today'))).toBe(true)
     expect(getComputedStyle(row).flexWrap).toBe('wrap')
   })
+
+  it('positions promoBadge along the bottom of the media header with truncation clear of top-right menus', () => {
+    render(
+      <MenuItemCard
+        name="Classic Kampalan Burger"
+        priceLabel="UGX 16,000"
+        originalPriceLabel="UGX 20,000"
+        promoBadge="Daypart Special -20%"
+        course="Main"
+      />
+    )
+    const badge = screen.getByText('Daypart Special -20%')
+    const style = getComputedStyle(badge)
+    expect(badge.getAttribute('title')).toBe('Daypart Special -20%')
+    expect(style.bottom).not.toBe('auto')
+    expect(style.top).toBe('auto')
+    expect(style.textOverflow).toBe('ellipsis')
+    expect(style.whiteSpace).toBe('nowrap')
+  })
 })

@@ -102,72 +102,65 @@ def _drawer_kick_profile_fields(profile):
 #     )
 #     return tables
 
-def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
+def resolve_restaurant_menu(
+    branch,
+    room=None,
+    order_type=None,
+    cashier=False,
+    pos_profile=None,
+    customer=None,
+    at=None,
+):
     """
-    Resolve and return menu for a given branch, room, and order type.
-
-    Args:
-        branch: Branch name string (already resolved)
-        room: Optional room name
-        order_type: Optional order type
-        cashier: Boolean indicating if user is a cashier
-
-    Returns:
-        Dict with keys: items, modified_time, name
+    Resolve and return menu for a given branch, room, and order type using the
+    5-tier precedence (Aggregators -> room_wise_menu -> active Serving Period ->
+    order_type_wise_menu -> active_menu), plus per-item daypart availability and
+    active time-window Pricing Rule promo badges.
     """
-    menu_items = []
-    menu_items_with_image = []
+    from ury.ury_pos.dayparts import (
+        active_item_promos,
+        evaluate_item_daypart,
+        resolve_menu_and_price_list,
+    )
+
+    if isinstance(pos_profile, str):
+        pos_profile = frappe.get_doc("POS Profile", pos_profile.strip()) if pos_profile.strip() else None
 
     restaurant = frappe.db.get_value("URY Restaurant", {"branch": branch}, "name")
-
-    if room:
-
-        room_wise_menu = frappe.db.get_value(
-            "URY Restaurant", restaurant, "room_wise_menu"
-        )
-
-        if room_wise_menu:
-            menu = frappe.db.get_value(
-                "Menu for Room",
-                {"parent": restaurant, "room": room},
-                "menu"
-            )
-            if not menu:
-                 menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-        else:
-            menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-
-    elif cashier and order_type:
-        order_type_wise_menu = frappe.db.get_value(
-            "URY Restaurant", restaurant, "order_type_wise_menu"
-        )
-
-        if order_type_wise_menu:
-            menu = frappe.db.get_value(
-                "Order Type Menu",
-                {"parent": restaurant, "order_type": order_type},
-                "menu"
-            )
-            if not menu:
-                 menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-
-        else:
-            menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-
-    # Default menu if nothing is selected
-    else:
-        menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
+    resolved = resolve_menu_and_price_list(
+        branch,
+        restaurant=restaurant,
+        room=room,
+        order_type=order_type,
+        customer=customer,
+        at=at,
+        cashier=cashier,
+    )
+    menu = resolved.get("menu")
+    price_list = resolved.get("price_list")
+    active_period = resolved.get("serving_period")
+    local_dt = resolved.get("local_dt")
+    tz_name = resolved.get("timezone")
 
     if not menu:
         frappe.throw(_("Please set an active menu for Restaurant {0}").format(restaurant))
 
-
-    # Get menu items (your existing code)
     menu_items = frappe.get_all(
         "URY Menu Item",
         filters={"parent": menu, "disabled": 0},
-        fields=["item", "item_name", "rate", "special_dish", "disabled", "course", "idx"],
-        order_by="item_name asc"
+        fields=[
+            "item",
+            "item_name",
+            "rate",
+            "special_dish",
+            "disabled",
+            "course",
+            "idx",
+            "custom_available_from",
+            "custom_available_to",
+            "custom_serving_period",
+        ],
+        order_by="item_name asc",
     )
 
     # Guest screens order categories by the menu's own configuration
@@ -183,10 +176,23 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
         )
     } if courses else {}
 
-    price_list = frappe.db.get_value(
-        "Price List", {"restaurant_menu": menu, "enabled": 1}, "name"
+    posting_date = frappe.utils.getdate(local_dt.date() if local_dt else None)
+    if not price_list:
+        price_list = frappe.db.get_value(
+            "Price List", {"restaurant_menu": menu, "enabled": 1}, "name"
+        )
+    release_field, released = (None, None)
+    if price_list:
+        try:
+            release_field, released = item_price_release_states()
+        except Exception:
+            release_field, released = (None, None)
+
+    company = (
+        pos_profile.get("company")
+        if pos_profile is not None and hasattr(pos_profile, "get")
+        else frappe.db.get_value("Branch", branch, "company")
     )
-    company = frappe.db.get_value("Branch", branch, "company")
     try:
         from ury.ury.api.ury_modifiers import get_modifier_groups_for_items
 
@@ -195,6 +201,8 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
             price_list=price_list,
             branch=branch,
             company=company,
+            posting_date=posting_date,
+            customer=customer,
         )
     except Exception:
         modifier_meta = {}
@@ -220,51 +228,176 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
         except Exception:
             open_item_flags = {}
 
-    menu_items_with_image = [
-        {
-            "item": item.item,
-            "item_name": _(item.item_name) if item.item_name else item.item_name,
-            "rate": item.rate,
-            "special_dish": item.special_dish,
-            "disabled": item.disabled,
-            "item_image": (
-                open_item_flags[item.item].get("image")
-                if item.item in open_item_flags
-                else frappe.db.get_value("Item", item.item, "image")
-            ),
-            "custom_is_open_priced": cint(
-                open_item_flags.get(item.item, {}).get("custom_is_open_priced")
-            ),
-            "custom_allow_zero_price": cint(
-                open_item_flags.get(item.item, {}).get("custom_allow_zero_price")
-            ),
-            "course": item.course,
-            "course_label": _(item.course) if item.course else item.course,
-            "course_priority": course_priority.get(item.course),
-            "menu_order": item.idx,
-            **(modifier_meta.get(item.item) or {
-                "is_combo_meal": False,
-                "product_bundle": None,
-                "bundle_defaults": [],
-                "has_modifiers": False,
-                "has_required_modifiers": False,
-                "prompt_on_add": False,
-                "modifier_groups": [],
-            }),
-        }
-        for item in menu_items
-    ]
-    modified = frappe.db.get_value("URY Menu", menu, "modified")
+    menu_items_with_image = []
+    for item in menu_items:
+        resolved_rate = item.rate
+        if price_list:
+            try:
+                ip = price_valid_on(
+                    item.item, price_list, posting_date, release_field, released, customer=customer
+                )
+                if ip and ip.get("price_list_rate") is not None:
+                    resolved_rate = ip.get("price_list_rate")
+            except Exception:
+                pass
 
+        daypart_status = evaluate_item_daypart(
+            item, active_period=active_period, local_dt=local_dt, branch=branch
+        )
+        menu_items_with_image.append(
+            {
+                "item": item.item,
+                "item_name": _(item.item_name) if item.item_name else item.item_name,
+                "rate": resolved_rate,
+                "special_dish": item.special_dish,
+                "disabled": item.disabled,
+                "item_image": (
+                    open_item_flags[item.item].get("image")
+                    if item.item in open_item_flags
+                    else frappe.db.get_value("Item", item.item, "image")
+                ),
+                "custom_is_open_priced": cint(
+                    open_item_flags.get(item.item, {}).get("custom_is_open_priced")
+                ),
+                "custom_allow_zero_price": cint(
+                    open_item_flags.get(item.item, {}).get("custom_allow_zero_price")
+                ),
+                "course": item.course,
+                "course_label": _(item.course) if item.course else item.course,
+                "course_priority": course_priority.get(item.course),
+                "menu_order": item.idx,
+                "unavailable_daypart": daypart_status["unavailable_daypart"],
+                "daypart_label": daypart_status["daypart_label"],
+                **(modifier_meta.get(item.item) or {
+                    "is_combo_meal": False,
+                    "product_bundle": None,
+                    "bundle_defaults": [],
+                    "has_modifiers": False,
+                    "has_required_modifiers": False,
+                    "prompt_on_add": False,
+                    "modifier_groups": [],
+                }),
+            }
+        )
+
+    promos = active_item_promos(
+        menu_items_with_image,
+        company=company,
+        price_list=price_list,
+        customer=customer,
+        local_dt=local_dt,
+        posting_date=posting_date,
+        order_type=order_type,
+    )
+    for row in menu_items_with_image:
+        promo = promos.get(row["item"])
+        if promo:
+            row["promo_rate"] = promo["promo_rate"]
+            row["promo_label"] = promo["promo_label"]
+
+    tax_summary = None
+    if pos_profile is not None:
+        from ury.ury_pos.tax_determination import summarize_tax_for_order_type
+
+        tax_summary = summarize_tax_for_order_type(
+            pos_profile, order_type, customer=customer, posting_date=posting_date
+        )
+
+    modified = frappe.db.get_value("URY Menu", menu, "modified")
 
     return {
         "items": menu_items_with_image,
         "modified_time": modified,
-        "name": menu
+        "name": menu,
+        "active_serving_period": active_period,
+        "price_list": price_list,
+        "timezone": tz_name,
+        "tax_summary": tax_summary,
     }
 
+def _authorize_pos_profile_access(profile, *, expected_branch=None):
+    """Enforce read permission and branch/outlet authorization on a POS Profile."""
+    if callable(getattr(profile, "check_permission", None)):
+        profile.check_permission("read")
+    elif not frappe.has_permission("POS Profile", "read", doc=profile):
+        frappe.throw(_("Not permitted to access this POS Profile."), frappe.PermissionError)
+
+    user_roles = set(frappe.get_roles() or [])
+    is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
+    if is_super:
+        return None
+
+    user_branch = expected_branch if expected_branch is not None else getBranch()
+    profile_branch = (profile.get("branch") or "").strip() if hasattr(profile, "get") else ""
+    if profile_branch:
+        if not user_branch or user_branch != profile_branch:
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+        return user_branch
+
+    # Branchless POS Profile: non-privileged POS users must be explicitly listed in
+    # applicable_for_users and match the branch's company when both are set.
+    applicable_users = [
+        (row.get("user") or "").strip()
+        for row in (profile.get("applicable_for_users") or [])
+        if (row.get("user") or "").strip()
+    ]
+    if not applicable_users or frappe.session.user not in applicable_users:
+        frappe.throw(_("Not permitted to access this POS Profile."), frappe.PermissionError)
+
+    profile_company = (profile.get("company") or "").strip() if hasattr(profile, "get") else ""
+    if user_branch and profile_company:
+        branch_company = (frappe.db.get_value("Branch", user_branch, "company") or "").strip()
+        if branch_company and branch_company != profile_company:
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+    return user_branch
+
+
+def _authorize_customer_for_pos_profile(customer_name, profile):
+    """Load Customer and enforce Frappe read/User Permissions and POS Profile customer-group scope."""
+    customer_doc = frappe.get_doc("Customer", customer_name)
+    if callable(getattr(customer_doc, "check_permission", None)):
+        customer_doc.check_permission("read")
+    if not frappe.has_permission("Customer", "read", doc=customer_doc):
+        frappe.throw(_("Not permitted to access this Customer."), frappe.PermissionError)
+
+    user_roles = set(frappe.get_roles() or [])
+    is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
+    if is_super:
+        return customer_doc
+
+    allowed_groups = {
+        (row.get("customer_group") or "").strip()
+        for row in (profile.get("customer_groups") or [])
+        if (row.get("customer_group") or "").strip()
+    }
+    if allowed_groups:
+        cust_group = (customer_doc.get("customer_group") or "").strip()
+        if cust_group and cust_group not in allowed_groups:
+            group_permitted = False
+            try:
+                bounds = frappe.db.get_value("Customer Group", cust_group, ["lft", "rgt"], as_dict=True)
+                if isinstance(bounds, dict) and bounds.get("lft") is not None:
+                    ancestors = frappe.get_all(
+                        "Customer Group",
+                        filters={"lft": ["<=", bounds["lft"]], "rgt": [">=", bounds["rgt"]]},
+                        pluck="name",
+                    )
+                    group_permitted = bool(set(ancestors or []) & allowed_groups)
+            except Exception:
+                group_permitted = False
+            if not group_permitted:
+                frappe.throw(_("Customer is not permitted for this POS Profile."), frappe.PermissionError)
+
+    cust_branch = (customer_doc.get("branch") or "").strip() if hasattr(customer_doc, "get") else ""
+    profile_branch = (profile.get("branch") or "").strip() if hasattr(profile, "get") else ""
+    if cust_branch and profile_branch and cust_branch != profile_branch:
+        frappe.throw(_("Not permitted to access a customer outside your active branch."), frappe.PermissionError)
+
+    return customer_doc
+
+
 @frappe.whitelist()
-def getRestaurantMenu(pos_profile, room=None, order_type=None):
+def getRestaurantMenu(pos_profile, room=None, order_type=None, customer=None):
     user_role = frappe.get_roles()
 
     pos_profile_name = pos_profile if isinstance(pos_profile, str) else getattr(pos_profile, "name", "")
@@ -279,13 +412,27 @@ def getRestaurantMenu(pos_profile, room=None, order_type=None):
         pass
 
     pos_profile = frappe.get_doc("POS Profile", pos_profile)
+    try:
+        branch_name = getBranch(pos_profile=pos_profile.name)
+    except TypeError:
+        branch_name = getBranch()
+    _authorize_pos_profile_access(pos_profile, expected_branch=branch_name)
+    if customer and str(customer).strip():
+        _authorize_customer_for_pos_profile(str(customer).strip(), pos_profile)
 
     cashier = any(
         role.role in user_role for role in pos_profile.role_allowed_for_billing
     )
-    branch_name = getattr(pos_profile, "branch", None) or getBranch(pos_profile=pos_profile.name)
+    branch_name = getattr(pos_profile, "branch", None) or branch_name
 
-    return resolve_restaurant_menu(branch_name, room, order_type, cashier)
+    return resolve_restaurant_menu(
+        branch_name,
+        room,
+        order_type,
+        cashier,
+        pos_profile=pos_profile,
+        customer=customer,
+    )
 
 @frappe.whitelist()
 def getMenuCourses():
@@ -1255,6 +1402,7 @@ def getPosProfile(pos_profile=None):
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
         **_drawer_kick_profile_fields(pos_profiles),
         **get_default_customer_config(pos_profiles),
+        **_safe_order_type_tax_config(pos_profiles),
     }
 
     return invoice_details
@@ -1406,6 +1554,7 @@ def getPosProfileFull(pos_profile):
         "efris_print_wait_seconds": _efris_print_wait_seconds(profile),
         **_drawer_kick_profile_fields(profile),
         **get_default_customer_config(profile),
+        **_safe_order_type_tax_config(profile),
     }
 
 
@@ -4026,3 +4175,795 @@ def credit_accounts(pos_profile: str, query: str):
                            limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding,
                            currency=currency, conversion_rate=conversion_rate))
     return result
+
+
+def _safe_order_type_tax_config(profile):
+    try:
+        from ury.ury_pos.tax_determination import get_order_type_tax_config
+
+        return get_order_type_tax_config(profile)
+    except Exception:
+        return {"tax_category": None, "order_type_tax_categories": {}}
+
+
+def _apply_preview_selling_pricing_rules(doc):
+    """Evaluate native ERPNext selling Pricing Rules when previewing a cart without a customer.
+
+    ERPNext v16's ``set_transaction_type()`` omits ``POS Invoice`` from its selling doctype
+    tuple, falling back to ``transaction_type='buying'`` whenever ``doc.customer`` is blank.
+    Invoking ``get_pricing_rule_for_item`` with explicit ``transaction_type='selling'`` ensures
+    cart preview matches ``MenuCard`` and ``sync_order`` identically before a customer is chosen.
+    """
+    if doc.get("customer") or cint(doc.get("ignore_pricing_rule")) == 1:
+        return
+    try:
+        from erpnext.accounts.doctype.pricing_rule.pricing_rule import get_pricing_rule_for_item
+    except (ImportError, ModuleNotFoundError):
+        return
+
+    apply_fn = getattr(doc, "apply_pricing_rule_on_items", None)
+    if not callable(apply_fn):
+        return
+
+    dict_cls = getattr(frappe, "_dict", None)
+    if not isinstance(dict_cls, type):
+        dict_cls = dict
+
+    for item in doc.get("items") or []:
+        if (
+            cint(item.get("is_disposable")) == 1
+            or not item.get("item_code")
+            or cint(item.get("ignore_pricing_rule")) == 1
+            or cint(item.get("custom_price_overridden")) == 1
+            or cint(item.get("custom_is_open_item")) == 1
+            or cint(item.get("custom_is_complimentary")) == 1
+            or (
+                item.get("custom_line_role") == "Combo Upcharge"
+                and (item.get("custom_parent_line_key") or "").strip()
+            )
+        ):
+            continue
+        ctx = dict_cls(
+            {
+                "doctype": "POS Invoice",
+                "name": doc.get("name"),
+                "child_doctype": "POS Invoice Item",
+                "child_docname": item.get("name"),
+                "transaction_type": "selling",
+                "company": doc.get("company"),
+                "currency": doc.get("currency"),
+                "conversion_rate": doc.get("conversion_rate") or 1.0,
+                "price_list": doc.get("selling_price_list"),
+                "selling_price_list": doc.get("selling_price_list"),
+                "price_list_currency": doc.get("price_list_currency") or doc.get("currency"),
+                "plc_conversion_rate": doc.get("plc_conversion_rate") or 1.0,
+                "posting_date": doc.get("posting_date"),
+                "transaction_date": doc.get("posting_date"),
+                "coupon_code": doc.get("coupon_code"),
+                "ignore_pricing_rule": 0,
+                "item_code": item.get("item_code"),
+                "item_group": item.get("item_group"),
+                "brand": item.get("brand"),
+                "qty": item.get("qty"),
+                "stock_qty": item.get("stock_qty") or item.get("qty"),
+                "uom": item.get("uom") or item.get("stock_uom"),
+                "price_list_rate": item.get("price_list_rate"),
+                "rate": item.get("rate"),
+                "warehouse": item.get("warehouse"),
+            }
+        )
+        try:
+            ret = get_pricing_rule_for_item(ctx, doc=doc, for_validate=False)
+        except Exception:
+            continue
+        if ret and ret.get("pricing_rules"):
+            apply_fn(item, ret)
+
+
+def _format_rate_pct(rate: float) -> str:
+    rounded = round(float(rate), 2)
+    return str(int(rounded)) if rounded == int(rounded) else f"{rounded:g}"
+
+
+def _clean_tax_account_label(account_head: str | None, fallback_desc: str | None = None) -> str:
+    import re
+
+    acct = (account_head or "").strip()
+    if acct:
+        stripped = re.sub(r"\s+-\s+[A-Za-z0-9]+$", "", acct).strip()
+        if stripped:
+            return stripped
+    desc = (fallback_desc or "").strip()
+    if desc:
+        return re.sub(r"\s*\(\s*\d+(?:\.\d+)?%\s*\)\s*$", "", desc).strip() or desc
+    return ""
+
+
+def _build_preview_tax_rows(doc, prec: int) -> list[dict]:
+    """Build truthful preview tax rows, surfacing actual item-level rates when Item Tax Templates
+    override the header Sales Taxes and Charges template rate."""
+    from frappe.utils import flt
+
+    item_wise_rows = doc.get("item_wise_tax_details") or []
+    items = [r for r in (doc.get("items") or []) if cint(r.get("is_disposable")) != 1]
+
+    result = []
+    for row in doc.get("taxes") or []:
+        account_head = row.get("account_head") or ""
+        header_rate = flt(row.get("rate"))
+        raw_desc = row.get("description") or account_head or ""
+        tax_row_name = row.get("name")
+
+        charge_kind = (row.get("custom_pos_charge_kind") or "").strip()
+        charge_type = (row.get("charge_type") or "").strip()
+        is_special_charge_row = bool(charge_kind) or (
+            bool(charge_type) and charge_type != "On Net Total"
+        )
+
+        applied_rates: list[float] = []
+        if not is_special_charge_row:
+            if tax_row_name and item_wise_rows:
+                for iwd in item_wise_rows:
+                    if iwd.get("tax_row") == tax_row_name and flt(iwd.get("taxable_amount")) > 0:
+                        applied_rates.append(round(flt(iwd.get("rate")), 4))
+
+            if not applied_rates and account_head and items:
+                for item in items:
+                    raw_map = item.get("item_tax_rate")
+                    item_rate = header_rate
+                    if raw_map:
+                        try:
+                            parsed = json.loads(raw_map) if isinstance(raw_map, str) else raw_map
+                            if isinstance(parsed, dict) and account_head in parsed:
+                                item_rate = flt(parsed[account_head])
+                        except Exception:
+                            pass
+                    applied_rates.append(round(item_rate, 4))
+
+        distinct_rates = sorted(set(applied_rates))
+        non_zero_rates = sorted({r for r in distinct_rates if r > 0})
+        overridden = any(abs(r - header_rate) > 1e-6 for r in distinct_rates)
+
+        item_rate_override = False
+        effective_rate = header_rate
+        description = raw_desc
+
+        if overridden:
+            base_label = _clean_tax_account_label(account_head, raw_desc)
+            if len(distinct_rates) == 1:
+                item_rate_override = True
+                effective_rate = distinct_rates[0]
+                description = f"{base_label} ({_format_rate_pct(effective_rate)}%)" if base_label else f"{_format_rate_pct(effective_rate)}%"
+            elif len(non_zero_rates) == 1 and abs(non_zero_rates[0] - header_rate) > 1e-6:
+                item_rate_override = True
+                effective_rate = non_zero_rates[0]
+                description = f"{base_label} ({_format_rate_pct(effective_rate)}%)" if base_label else f"{_format_rate_pct(effective_rate)}%"
+            elif len(non_zero_rates) > 1:
+                item_rate_override = True
+                effective_rate = None
+                description = base_label or raw_desc
+
+        result.append(
+            {
+                "description": description,
+                "rate": effective_rate if effective_rate is not None else header_rate,
+                "header_rate": header_rate,
+                "effective_rate": effective_rate,
+                "item_rate_override": item_rate_override,
+                "tax_amount": flt(row.get("tax_amount"), prec),
+                "account_head": account_head,
+                "custom_pos_charge_kind": charge_kind,
+            }
+        )
+    return result
+
+
+_PREVIEW_MODIFIER_COMBO_FIELDS = (
+    "reservation_line_key",
+    "custom_parent_line_key",
+    "custom_line_role",
+    "custom_is_modifier",
+    "custom_modifier_prefix",
+    "custom_modifier_group",
+    "custom_modifier_option",
+    "custom_modifiers_json",
+    "custom_bundle_overrides_json",
+    "custom_inherit_parent_routing",
+    "custom_hide_unpriced_on_receipt",
+)
+
+
+def _has_modifier_or_combo_metadata(rows) -> bool:
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if (
+            cint(row.get("custom_is_modifier")) == 1
+            or bool((row.get("custom_parent_line_key") or "").strip())
+            or bool((row.get("custom_modifier_group") or "").strip())
+            or bool((row.get("custom_modifier_option") or "").strip())
+            or bool((row.get("custom_modifiers_json") or "").strip())
+            or bool((row.get("custom_bundle_overrides_json") or "").strip())
+            or (row.get("custom_line_role") or "").strip() in ("Modifier", "Combo Header", "Combo Upcharge")
+        ):
+            return True
+    return False
+
+
+def _is_privileged_preview_row(row, orig_invoice=None) -> bool:
+    from frappe.utils import flt
+
+    if (
+        cint(row.get("custom_price_overridden")) == 1
+        or cint(row.get("custom_is_open_item")) == 1
+        or cint(row.get("custom_is_complimentary")) == 1
+        or cint(row.get("ignore_pricing_rule")) == 1
+    ):
+        return True
+    return bool(
+        orig_invoice is not None
+        and cint(orig_invoice.get("custom_is_complimentary")) == 1
+        and flt(row.get("rate")) == 0
+        and flt(row.get("discount_percentage")) >= 100
+    )
+
+
+def _append_orig_preview_row(
+    doc,
+    row,
+    *,
+    qty=None,
+    cost_center=None,
+    warehouse=None,
+    privileged_snapshots=None,
+    orig_invoice=None,
+):
+    from frappe.utils import flt
+
+    is_privileged_row = _is_privileged_preview_row(row, orig_invoice=orig_invoice)
+    raw_plr = row.get("price_list_rate")
+    plr = flt(raw_plr) if raw_plr is not None else flt(row.get("rate"))
+    raw_base_plr = row.get("base_price_list_rate")
+    base_plr = flt(raw_base_plr) if raw_base_plr is not None else plr
+    raw_base_rate = row.get("base_rate")
+    base_rate = flt(raw_base_rate) if raw_base_rate is not None else flt(row.get("rate"))
+    eff_qty = flt(qty) if qty is not None else flt(row.get("qty"))
+
+    item_entry = {
+        "item_code": row.get("item_code"),
+        "item_name": row.get("item_name") or row.get("item_code"),
+        "qty": eff_qty,
+        "rate": flt(row.get("rate")),
+        "base_rate": base_rate,
+        "price_list_rate": plr,
+        "base_price_list_rate": base_plr,
+        "discount_percentage": flt(row.get("discount_percentage")),
+        "discount_amount": flt(row.get("discount_amount")),
+        "ignore_pricing_rule": 1 if is_privileged_row else cint(row.get("ignore_pricing_rule")),
+        "custom_price_overridden": cint(row.get("custom_price_overridden")),
+        "custom_is_open_item": cint(row.get("custom_is_open_item")),
+        "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
+        "uom": row.get("uom"),
+        "cost_center": row.get("cost_center") or cost_center,
+        "warehouse": row.get("warehouse") or warehouse,
+    }
+    if row.get("pricing_rules") is not None:
+        item_entry["pricing_rules"] = row.get("pricing_rules")
+    for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
+        if row.get(tax_field) is not None:
+            item_entry[tax_field] = row.get(tax_field)
+    for mod_field in _PREVIEW_MODIFIER_COMBO_FIELDS:
+        if row.get(mod_field) is not None:
+            item_entry[mod_field] = row.get(mod_field)
+
+    cloned_row = doc.append("items", item_entry)
+    is_combo_upcharge = (row.get("custom_line_role") or "") == "Combo Upcharge"
+    if (is_privileged_row or is_combo_upcharge) and cloned_row is not None and privileged_snapshots is not None:
+        privileged_snapshots[id(cloned_row)] = {
+            "price_list_rate": plr,
+            "base_price_list_rate": base_plr,
+            "rate": flt(row.get("rate")),
+            "base_rate": base_rate,
+            "discount_percentage": flt(row.get("discount_percentage")),
+            "discount_amount": flt(row.get("discount_amount")),
+            "pricing_rules": row.get("pricing_rules"),
+            "ignore_pricing_rule": 1 if is_privileged_row else cint(row.get("ignore_pricing_rule")),
+            "custom_price_overridden": cint(row.get("custom_price_overridden")),
+            "custom_is_open_item": cint(row.get("custom_is_open_item")),
+            "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
+        }
+    return cloned_row
+
+
+def _match_preview_items_to_orig_rows(raw_items, orig_rows):
+    """Match incoming cart preview items 1-to-1 to saved POS Invoice Item rows.
+
+    Pass 1 binds explicit row identities (`name` / `invoice_item_name`, then
+    `reservation_line_key` / `reservation_line_ref` / `line_ref`) with same
+    `item_code` so edits, qty changes, and newly added duplicate items stay
+    unambiguously separated. Pass 2 falls back to unclaimed rows of the same
+    `item_code` only for callers that omitted explicit row identities.
+    """
+    from frappe.utils import flt
+
+    candidates = [
+        (o_idx, row)
+        for o_idx, row in enumerate(orig_rows or [])
+        if cint(row.get("is_disposable")) != 1 and row.get("item_code")
+    ]
+    claimed: set[int] = set()
+    matched: dict[int, dict] = {}
+    has_explicit_key: dict[int, bool] = {}
+
+    for idx, raw in enumerate(raw_items or []):
+        code = raw.get("item") or raw.get("item_code")
+        if not code:
+            continue
+        raw_name = str(raw.get("name") or raw.get("invoice_item_name") or "").strip()
+        raw_key = str(
+            raw.get("reservation_line_key")
+            or raw.get("reservation_line_ref")
+            or raw.get("line_ref")
+            or ""
+        ).strip()
+        has_explicit_key[idx] = bool(raw_name or raw_key)
+
+        chosen = None
+        if raw_name:
+            for o_idx, row in candidates:
+                if o_idx in claimed or row.get("item_code") != code:
+                    continue
+                if str(row.get("name") or "").strip() == raw_name:
+                    chosen = (o_idx, row)
+                    break
+        if chosen is None and raw_key:
+            for o_idx, row in candidates:
+                if o_idx in claimed or row.get("item_code") != code:
+                    continue
+                row_key = str(row.get("reservation_line_key") or "").strip()
+                row_name = str(row.get("name") or "").strip()
+                if (row_key and row_key == raw_key) or (row_name and row_name == raw_key):
+                    chosen = (o_idx, row)
+                    break
+        if chosen is not None:
+            claimed.add(chosen[0])
+            matched[idx] = chosen[1]
+
+    for idx, raw in enumerate(raw_items or []):
+        if idx in matched or has_explicit_key.get(idx):
+            continue
+        code = raw.get("item") or raw.get("item_code")
+        if not code:
+            continue
+        pool = [(o_idx, row) for o_idx, row in candidates if o_idx not in claimed and row.get("item_code") == code]
+        if not pool:
+            continue
+        raw_item_name = str(raw.get("item_name") or "").strip()
+        raw_rate = raw.get("rate") if raw.get("rate") is not None else raw.get("price")
+        raw_is_mod = cint(raw.get("custom_is_modifier"))
+        raw_parent_key = str(raw.get("custom_parent_line_key") or "").strip()
+
+        def _rank(entry):
+            o_idx, row = entry
+            mod_miss = 0 if cint(row.get("custom_is_modifier")) == raw_is_mod else 1
+            parent_miss = (
+                0
+                if (not raw_parent_key or str(row.get("custom_parent_line_key") or "").strip() == raw_parent_key)
+                else 1
+            )
+            name_miss = 0 if (raw_item_name and str(row.get("item_name") or "").strip() == raw_item_name) else 1
+            rate_diff = abs(flt(row.get("rate")) - flt(raw_rate)) if raw_rate is not None else 0.0
+            return (mod_miss, parent_miss, name_miss, rate_diff, o_idx)
+
+        best_idx, best_row = min(pool, key=_rank)
+        claimed.add(best_idx)
+        matched[idx] = best_row
+
+    return matched
+
+
+@frappe.whitelist()
+def preview_order_totals(
+    pos_profile,
+    order_type=None,
+    customer=None,
+    items=None,
+    no_of_pax=0,
+    invoice_name=None,
+    additional_discount_percentage=0,
+    coupon_code=None,
+    room=None,
+    table=None,
+    captured_at=None,
+):
+    """Stateless, server-authoritative order totals & tax preview (ZERO DB writes).
+
+    Constructs an in-memory POS Invoice, stamps outlet timezone, resolves menu/daypart
+    price list + time-of-day Pricing Rules + SAP/Simphony order-type Tax Category &
+    native ERPNext Tax Rule + per-item Item Tax Templates + calculate_taxes_and_totals(),
+    plus optional country-gated EFRIS readiness warnings. Never inserts, saves, or commits.
+    """
+    from frappe.utils import flt, getdate
+
+    from ury.ury_pos.dayparts import resolve_menu_and_price_list, stamp_invoice_outlet_time
+    from ury.ury_pos.default_customer import resolve_default_customer
+    from ury.ury_pos.tax_determination import apply_order_type_tax, validate_efris_readiness
+
+    if isinstance(items, str):
+        items = frappe.parse_json(items) or []
+    items = list(items or [])
+
+    profile = frappe.get_doc("POS Profile", pos_profile)
+    _authorize_pos_profile_access(profile)
+    user_roles = set(frappe.get_roles() or [])
+    is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
+
+    if captured_at is not None and cint(profile.get("ury_offline_capture")) != 1:
+        frappe.throw(
+            coded_message(
+                "OFFLINE-CAPTURE-DISABLED",
+                _("Offline capture is not enabled for this POS Profile."),
+            ),
+            frappe.ValidationError,
+        )
+
+    doc = frappe.new_doc("POS Invoice")
+    doc.is_pos = 1
+    doc.pos_profile = pos_profile
+    doc.company = profile.get("company")
+    doc.currency = profile.get("currency")
+    doc.branch = profile.get("branch")
+    doc.restaurant = (
+        profile.get("restaurant")
+        or (
+            frappe.db.get_value("URY Restaurant", {"branch": doc.branch}, "name")
+            if doc.branch
+            else None
+        )
+    )
+
+    orig_invoice = None
+    if invoice_name:
+        orig_invoice = frappe.get_doc("POS Invoice", invoice_name)
+        if callable(getattr(orig_invoice, "check_permission", None)):
+            orig_invoice.check_permission("read")
+        if not is_super and orig_invoice.get("branch") and doc.branch and orig_invoice.branch != doc.branch:
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+
+    effective_order_type = (
+        (order_type or "").strip()
+        or (orig_invoice.get("order_type") if orig_invoice else None)
+        or "Dine In"
+    )
+    doc.order_type = effective_order_type
+    doc.no_of_pax = cint(no_of_pax) or (cint(orig_invoice.get("no_of_pax")) if orig_invoice else 0)
+    doc.restaurant_table = table or (orig_invoice.get("restaurant_table") if orig_invoice else None)
+    doc.custom_restaurant_room = room or (orig_invoice.get("custom_restaurant_room") if orig_invoice else None)
+
+    effective_customer = (
+        (customer or "").strip()
+        or (orig_invoice.get("customer") if orig_invoice else None)
+        or resolve_default_customer(profile, effective_order_type)
+    )
+    doc.customer = effective_customer
+    customer_doc = None
+    if effective_customer:
+        customer_doc = _authorize_customer_for_pos_profile(effective_customer, profile)
+
+    if orig_invoice and cint(orig_invoice.get("custom_tax_exempt")) == 1:
+        doc.custom_tax_exempt = 1
+        doc.tax_category = orig_invoice.get("tax_category") or ""
+        doc.taxes_and_charges = orig_invoice.get("taxes_and_charges") or ""
+    if orig_invoice:
+        if cint(orig_invoice.get("ignore_pricing_rule")) == 1:
+            doc.ignore_pricing_rule = 1
+        for sc_field in (
+            "custom_is_complimentary",
+            "custom_service_charge_waived",
+            "custom_service_charge_override_rate",
+            "custom_service_charge_override_amount",
+        ):
+            val = orig_invoice.get(sc_field)
+            if val is not None:
+                setattr(doc, sc_field, val)
+
+    if orig_invoice and orig_invoice.get("custom_serving_period"):
+        doc.custom_serving_period = orig_invoice.get("custom_serving_period")
+    if orig_invoice and orig_invoice.get("custom_transaction_local_time"):
+        doc.custom_transaction_local_time = orig_invoice.get("custom_transaction_local_time")
+    if orig_invoice and orig_invoice.get("custom_transaction_weekday"):
+        doc.custom_transaction_weekday = orig_invoice.get("custom_transaction_weekday")
+
+    stamp_at = captured_at if captured_at is not None else (orig_invoice.get("ury_offline_captured_at") if orig_invoice else None)
+    stamp_meta = stamp_invoice_outlet_time(doc, at=stamp_at)
+    local_dt = stamp_meta["local_dt"]
+    posting_date = getdate(local_dt.date() if local_dt else None)
+    doc.posting_date = posting_date
+    doc.posting_time = stamp_meta["local_time"]
+
+    resolved = resolve_menu_and_price_list(
+        doc.branch,
+        restaurant=doc.restaurant,
+        table=doc.restaurant_table,
+        room=doc.custom_restaurant_room,
+        order_type=effective_order_type,
+        customer=effective_customer,
+        local_dt=local_dt,
+    )
+    orig_order_type = (orig_invoice.get("order_type") or "").strip() if orig_invoice else ""
+    same_order_type = bool(orig_invoice) and (not orig_order_type or orig_order_type == effective_order_type)
+    active_price_list = resolved.get("price_list") or profile.get("selling_price_list")
+    price_list = (
+        (orig_invoice.get("selling_price_list") if same_order_type and orig_invoice.get("selling_price_list") else None)
+        or active_price_list
+    )
+    doc.selling_price_list = price_list
+    if getattr(doc, "flags", None) is not None:
+        doc.flags.ury_authoritative_price_list = price_list
+
+    cost_center = profile.get("cost_center") or (
+        frappe.db.get_value("POS Profile", pos_profile, "cost_center") if pos_profile else None
+    )
+    warehouse = profile.get("warehouse")
+
+    privileged_snapshots = {}
+    if not items and orig_invoice is not None:
+        for row in orig_invoice.get("items") or []:
+            if cint(row.get("is_disposable")) == 1:
+                continue
+            _append_orig_preview_row(
+                doc,
+                row,
+                cost_center=cost_center,
+                warehouse=warehouse,
+                privileged_snapshots=privileged_snapshots,
+                orig_invoice=orig_invoice,
+            )
+    else:
+        matched_orig_rows = (
+            _match_preview_items_to_orig_rows(items, orig_invoice.get("items") or [])
+            if orig_invoice is not None
+            else {}
+        )
+        new_line_price_list = active_price_list or price_list
+        modifier_price_overrides = {}
+        if _has_modifier_or_combo_metadata(items):
+            from ury.ury.api.ury_modifiers import validate_and_normalize_order_items
+
+            rate_precision = 2
+            if callable(getattr(doc, "precision", None)):
+                try:
+                    p = doc.precision("rate")
+                    if isinstance(p, int) and not isinstance(p, bool):
+                        rate_precision = p
+                except Exception:
+                    pass
+            if doc.get("currency"):
+                try:
+                    frac = cint(frappe.db.get_value("Currency", doc.currency, "fraction_units"))
+                    if frac >= 1:
+                        rate_precision = max(0, len(str(frac)) - 1)
+                except Exception:
+                    pass
+            past_item = (
+                [
+                    dict(r.as_dict() if callable(getattr(r, "as_dict", None)) else r)
+                    for r in (orig_invoice.get("items") or [])
+                    if cint(r.get("is_disposable")) != 1
+                ]
+                if orig_invoice is not None
+                else []
+            )
+            preview_menu = resolved.get("menu") or (
+                frappe.db.get_value("URY Menu", {"branch": doc.branch}, "name") if doc.branch else None
+            )
+            items, modifier_price_overrides = validate_and_normalize_order_items(
+                items,
+                past_item,
+                preview_menu,
+                new_line_price_list,
+                doc.branch,
+                doc.company,
+                posting_date=posting_date,
+                customer=effective_customer,
+                currency_precision=rate_precision,
+            )
+
+        release_field, released = (None, None)
+        if new_line_price_list:
+            try:
+                release_field, released = item_price_release_states()
+            except Exception:
+                release_field, released = (None, None)
+
+        for idx, raw in enumerate(items):
+            code = raw.get("item") or raw.get("item_code")
+            qty = flt(raw.get("qty") or raw.get("quantity") or 0)
+            if not code or qty <= 0:
+                continue
+            orig_row = matched_orig_rows.get(idx)
+            if orig_row is not None and (_is_privileged_preview_row(orig_row, orig_invoice=orig_invoice) or same_order_type):
+                _append_orig_preview_row(
+                    doc,
+                    orig_row,
+                    qty=qty,
+                    cost_center=cost_center,
+                    warehouse=warehouse,
+                    privileged_snapshots=privileged_snapshots,
+                    orig_invoice=orig_invoice,
+                )
+                continue
+            line_key = raw.get("reservation_line_key")
+            mod_override = modifier_price_overrides.get(line_key) if line_key else None
+            resolved_rate = None
+            if mod_override and mod_override.get("is_validated_modifier"):
+                resolved_rate = flt(mod_override["rate"])
+            elif new_line_price_list:
+                try:
+                    ip = price_valid_on(
+                        code, new_line_price_list, posting_date, release_field, released, customer=effective_customer
+                    )
+                    if ip and ip.get("price_list_rate") is not None:
+                        resolved_rate = flt(ip.get("price_list_rate"))
+                except Exception:
+                    resolved_rate = None
+            if resolved_rate is None:
+                resolved_rate = flt(raw.get("rate") or raw.get("price") or 0)
+            item_name = raw.get("item_name") or frappe.db.get_value("Item", code, "item_name") or code
+            item_entry = {
+                "item_code": code,
+                "item_name": item_name,
+                "qty": qty,
+                "rate": resolved_rate,
+                "price_list_rate": resolved_rate,
+                "base_price_list_rate": resolved_rate,
+                "cost_center": (orig_row.get("cost_center") if orig_row else None) or cost_center,
+            }
+            eff_warehouse = (orig_row.get("warehouse") if orig_row else None) or warehouse
+            if eff_warehouse:
+                item_entry["warehouse"] = eff_warehouse
+            for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
+                if raw.get(tax_field) is not None:
+                    item_entry[tax_field] = raw.get(tax_field)
+                elif orig_row is not None and orig_row.get(tax_field) is not None and tax_field == "custom_tax_exempt":
+                    item_entry[tax_field] = orig_row.get(tax_field)
+            for mod_field in _PREVIEW_MODIFIER_COMBO_FIELDS:
+                if raw.get(mod_field) is not None:
+                    item_entry[mod_field] = raw.get(mod_field)
+            appended = doc.append("items", item_entry)
+            if (
+                (raw.get("custom_line_role") or "") == "Combo Upcharge"
+                and appended is not None
+                and mod_override
+                and mod_override.get("is_validated_modifier")
+            ):
+                privileged_snapshots[id(appended)] = {
+                    "price_list_rate": resolved_rate,
+                    "base_price_list_rate": resolved_rate,
+                    "rate": resolved_rate,
+                    "base_rate": resolved_rate,
+                    "discount_percentage": 0.0,
+                    "discount_amount": 0.0,
+                    "pricing_rules": None,
+                    "ignore_pricing_rule": 0,
+                    "custom_price_overridden": 0,
+                    "custom_is_open_item": 0,
+                    "custom_is_complimentary": 0,
+                }
+
+    disc_pct = flt(additional_discount_percentage)
+    if disc_pct < 0 or disc_pct > 100:
+        frappe.throw(_("Discount percentage must be between 0 and 100"), frappe.ValidationError)
+    if disc_pct > 0:
+        doc.additional_discount_percentage = disc_pct
+        doc.discount_amount = 0
+    elif orig_invoice and additional_discount_percentage in (None, "", 0, "0"):
+        if flt(orig_invoice.get("additional_discount_percentage")) > 0:
+            doc.additional_discount_percentage = flt(orig_invoice.get("additional_discount_percentage"))
+            doc.discount_amount = 0
+        elif flt(orig_invoice.get("discount_amount")) > 0:
+            doc.additional_discount_percentage = 0
+            doc.discount_amount = flt(orig_invoice.get("discount_amount"))
+        else:
+            doc.additional_discount_percentage = 0
+            doc.discount_amount = 0
+        if orig_invoice.get("apply_discount_on"):
+            doc.apply_discount_on = orig_invoice.get("apply_discount_on")
+    else:
+        doc.additional_discount_percentage = 0
+        doc.discount_amount = 0
+
+    if coupon_code and getattr(doc, "meta", None) and doc.meta.has_field("coupon_code"):
+        doc.coupon_code = coupon_code
+
+    # Frappe caches per-document field currency under (doctype, doc.name) on frappe.local.field_currency;
+    # for unsaved in-memory docs doc.name is None, so an earlier unsaved POS Invoice in another currency
+    # (e.g. UGX 0dp before USD 2dp or BHD 3dp) would otherwise poison precision() on this preview.
+    local_fc = getattr(getattr(frappe, "local", None), "field_currency", None)
+    saved_none_fc = None
+    if isinstance(local_fc, dict):
+        saved_none_fc = {k: local_fc.pop(k) for k in list(local_fc.keys()) if isinstance(k, tuple) and len(k) == 2 and k[1] is None}
+
+    try:
+        apply_order_type_tax(doc, profile, customer_doc=customer_doc, posting_date=posting_date)
+        doc_flags = getattr(doc, "flags", None)
+        prev_priv_verified = bool(getattr(doc_flags, "ury_privileged_action_verified", False)) if doc_flags is not None else False
+        if privileged_snapshots and doc_flags is not None:
+            doc_flags.ury_privileged_action_verified = True
+        try:
+            doc.set_missing_values(for_validate=True)
+        finally:
+            if privileged_snapshots and doc_flags is not None:
+                doc_flags.ury_privileged_action_verified = prev_priv_verified
+        if privileged_snapshots:
+            restored_names = set()
+            for r in doc.get("items") or []:
+                snap = privileged_snapshots.get(id(r))
+                if snap is None:
+                    continue
+                for field, value in snap.items():
+                    setattr(r, field, value)
+                rname = r.get("name") if hasattr(r, "get") else getattr(r, "name", None)
+                if rname:
+                    restored_names.add(rname)
+            pr_rows = doc.get("pricing_rules")
+            if isinstance(pr_rows, list) and restored_names:
+                kept_pr = [
+                    pr
+                    for pr in pr_rows
+                    if (pr.get("child_docname") if hasattr(pr, "get") else getattr(pr, "child_docname", None))
+                    not in restored_names
+                ]
+                if callable(getattr(doc, "set", None)):
+                    doc.set("pricing_rules", kept_pr)
+                else:
+                    doc.pricing_rules = kept_pr
+        if not orig_invoice:
+            _apply_preview_selling_pricing_rules(doc)
+        try:
+            from ury.ury_pos.pricing_actions import sync_service_charge
+
+            sync_service_charge(doc, profile)
+        except ImportError:
+            pass
+        doc.calculate_taxes_and_totals()
+
+        prec = doc.precision("grand_total") if callable(getattr(doc, "precision", None)) else 2
+        if not isinstance(prec, int) or isinstance(prec, bool):
+            prec = 2
+    finally:
+        final_fc = getattr(getattr(frappe, "local", None), "field_currency", None)
+        if isinstance(final_fc, dict):
+            for k in list(final_fc.keys()):
+                if isinstance(k, tuple) and len(k) == 2 and k[1] is None:
+                    final_fc.pop(k, None)
+            if saved_none_fc:
+                final_fc.update(saved_none_fc)
+
+    efris_warnings = validate_efris_readiness(doc, throw=False)
+
+    return {
+        "net_total": flt(doc.get("net_total"), prec),
+        "discount_amount": flt(doc.get("discount_amount"), prec),
+        "tax_rows": _build_preview_tax_rows(doc, prec),
+        "total_taxes_and_charges": flt(doc.get("total_taxes_and_charges"), prec),
+        "grand_total": flt(doc.get("grand_total"), prec),
+        "rounded_total": flt(doc.get("rounded_total") or doc.get("grand_total"), prec),
+        "rounding_adjustment": flt(doc.get("rounding_adjustment"), prec),
+        "tax_category": doc.get("tax_category") or "",
+        "taxes_and_charges": doc.get("taxes_and_charges") or "",
+        "serving_period": doc.get("custom_serving_period") or None,
+        "transaction_local_time": doc.get("custom_transaction_local_time") or None,
+        "transaction_weekday": doc.get("custom_transaction_weekday") or None,
+        "item_taxes": [
+            {
+                "item_code": r.get("item_code"),
+                "item_tax_template": r.get("item_tax_template") or None,
+                "item_tax_rate": r.get("item_tax_rate") or "{}",
+                "rate": flt(r.get("rate"), prec),
+                "net_amount": flt(r.get("net_amount", r.get("amount")), prec),
+            }
+            for r in (doc.get("items") or [])
+        ],
+        "efris_warnings": efris_warnings,
+    }

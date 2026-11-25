@@ -42,6 +42,7 @@
     "staff_pins": "PIN del personal",
     "till_cash": "Caja",
     "my_approval_pin": "Mi PIN de aprobación",
+    "tax_exempt": "Exento de impuestos",
     "business_date_badge": "Fecha comercial: {{date}}",
     "shift_report": "Informe de turno X / Z"
   },
@@ -57,7 +58,8 @@
     "availability_load_failed": "No se pudo cargar la disponibilidad. Inténtalo de nuevo.",
     "no_availability_overrides": "No hay cambios de disponibilidad para este local.",
     "sold_out_count": "Agotados ({{count}})",
-    "qty_left_unconfirmed": "¿Quedan {{qty}}?"
+    "qty_left_unconfirmed": "¿Quedan {{qty}}?",
+    "daypart_available": "Fuera del horario de servicio"
   },
   "pos_sidebar": {
     "categories": "Categorías",
@@ -81,7 +83,13 @@
     "edit_comment": "Editar comentario",
     "pax": "Pax",
     "insufficient_capacity": "Capacidad insuficiente para agregar más de este artículo",
-    "guest_label": "Nombre del huésped (opcional)"
+    "guest_label": "Nombre del huésped (opcional)",
+    "net_total": "Neto",
+    "discount": "Descuento",
+    "tax": "Impuesto",
+    "offline_estimate": "Estimación sin conexión — verificada al reconectar",
+    "tax_preview_loading": "Calculando impuestos...",
+    "toggle_breakdown": "Desglose de impuestos"
   },
   "order": {
     "select_to_view": "Selecciona un pedido para ver el detalle",
@@ -129,6 +137,9 @@
     "already_received": "Ya recibido",
     "balance_due": "Saldo pendiente",
     "reference_label": "Ref.: {{ref}}",
+    "net_total": "Neto",
+    "tax": "Impuesto",
+    "efris_warning_title": "Verificación fiscal",
     "halo_warning": "Bloqueo por monto alto (HALO): el pago {{mode}} ({{amount}}) supera el máximo permitido ({{limit}}). Verifique los dígitos o solicite PIN de gerente.",
     "halo_approval_title": "Aprobar pago de monto alto",
     "room_limit": "Límite",

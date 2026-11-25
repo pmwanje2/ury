@@ -105,6 +105,7 @@
     "staff_pins": "Staff PINs",
     "till_cash": "Till Cash",
     "my_approval_pin": "My approval PIN",
+    "tax_exempt": "Tax Exempt",
     "business_date_badge": "Business Date: {{date}}",
     "shift_report": "Shift X / Z Report"
   },
@@ -130,7 +131,8 @@
       "sold_out": "Sold out",
       "temporarily": "Temporarily unavailable"
     },
-    "search_placeholder": "Search menu items..."
+    "search_placeholder": "Search menu items...",
+    "daypart_available": "Outside serving window"
   },
   "pos_sidebar": {
     "categories": "Categories",
@@ -154,7 +156,13 @@
     "edit_comment": "Edit comment",
     "pax": "Pax",
     "insufficient_capacity": "Insufficient capacity to add more of this item",
-    "guest_label": "Guest name (optional)"
+    "guest_label": "Guest name (optional)",
+    "net_total": "Net",
+    "discount": "Discount",
+    "tax": "Tax",
+    "offline_estimate": "Offline estimate — verified on reconnect",
+    "tax_preview_loading": "Calculating taxes...",
+    "toggle_breakdown": "Tax breakdown"
   },
   "order": {
     "select_to_view": "Select an order to view details",
@@ -226,6 +234,9 @@
     "already_received": "Already received",
     "balance_due": "Balance due",
     "reference_label": "Ref: {{ref}}",
+    "net_total": "Net",
+    "tax": "Tax",
+    "efris_warning_title": "Tax readiness check",
     "halo_warning": "High Amount Lockout: {{mode}} tender ({{amount}}) exceeds the maximum allowed ({{limit}}). Check for mistyped digits or request manager PIN approval.",
     "halo_approval_title": "Approve High Amount Tender",
     "room_limit": "Limit",

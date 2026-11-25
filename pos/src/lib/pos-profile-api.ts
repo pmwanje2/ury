@@ -76,6 +76,8 @@ export interface PosProfileLimited {
   offline_payment_modes?: OfflinePaymentMode[];
   /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
   efris_print_wait_seconds?: number;
+  tax_category?: string | null;
+  order_type_tax_categories?: Record<string, string>;
   /** G36: optional clock-in enforcement flags. */
   require_clock_in_to_order?: number;
   block_clock_out_with_open_work?: number;
@@ -170,6 +172,8 @@ export interface PosProfileFull {
   custom_tax_exempt_category?: string | null;
   custom_tips_payable_account?: string | null;
   efris_print_wait_seconds?: number;
+  tax_category?: string | null;
+  order_type_tax_categories?: Record<string, string>;
   require_clock_in_to_order?: number;
   block_clock_out_with_open_work?: number;
   require_tip_declaration?: number;
@@ -357,6 +361,9 @@ function combinePosProfiles(
       limitedProfile.offline_payment_modes ?? fullProfile.offline_payment_modes ?? [],
     efris_print_wait_seconds:
       limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
+    tax_category: fullProfile.tax_category ?? limitedProfile.tax_category ?? null,
+    order_type_tax_categories:
+      fullProfile.order_type_tax_categories ?? limitedProfile.order_type_tax_categories ?? {},
     require_clock_in_to_order: Number(
       limitedProfile.require_clock_in_to_order ?? fullProfile.require_clock_in_to_order ?? 0,
     ),

@@ -66,6 +66,7 @@
     "staff_pins": "أرقام PIN للموظفين",
     "till_cash": "نقد الصندوق",
     "my_approval_pin": "رقم PIN للموافقة الخاص بي",
+    "tax_exempt": "معفى من الضريبة",
     "business_date_badge": "تاريخ العمل: {{date}}",
     "shift_report": "تقرير الوردية X / Z"
   },
@@ -91,7 +92,8 @@
       "sold_out": "نفدت الكمية",
       "temporarily": "غير متاح مؤقتًا"
     },
-    "search_placeholder": "ابحث في أصناف القائمة..."
+    "search_placeholder": "ابحث في أصناف القائمة...",
+    "daypart_available": "خارج أوقات التقديم"
   },
   "pos_sidebar": {
     "categories": "فئات",
@@ -115,7 +117,13 @@
     "edit_comment": "تعديل التعليق",
     "pax": "عدد الأشخاص",
     "insufficient_capacity": "السعة غير كافية لإضافة المزيد من هذا الصنف",
-    "guest_label": "اسم النزيل (اختياري)"
+    "guest_label": "اسم النزيل (اختياري)",
+    "net_total": "الصافي",
+    "discount": "الخصم",
+    "tax": "الضريبة",
+    "offline_estimate": "تقدير دون اتصال — يتم التحقق عند إعادة الاتصال",
+    "tax_preview_loading": "جاري حساب الضرائب...",
+    "toggle_breakdown": "تفاصيل الضريبة"
   },
   "order": {
     "select_to_view": "حدد طلبًا لعرض التفاصيل",
@@ -187,6 +195,9 @@
     "account_available": "الائتمان المتاح",
     "no_accounts": "لم يتم العثور على حسابات معتمدة.",
     "account_search_failed": "تعذّر البحث في حسابات الائتمان.",
+    "net_total": "الصافي",
+    "tax": "الضريبة",
+    "efris_warning_title": "فحص الجاهزية الضريبية",
     "halo_warning": "قفل المبلغ المرتفع (HALO): دفعة {{mode}} ({{amount}}) تتجاوز الحد الأقصى ({{limit}}). تحقق من الرقم أو اطلب رمز PIN للمدير.",
     "halo_approval_title": "اعتماد دفعة مبلغ مرتفع",
     "room_limit": "الحد",

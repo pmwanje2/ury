@@ -228,9 +228,8 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
             },
             {
                 "fieldname": "custom_tax_exempt_certificate",
-                "fieldtype": "Data",
+                "fieldtype": "Small Text",
                 "label": "Tax Exempt Certificate / Reference",
-                "length": 64,
                 "read_only": 1,
                 "no_copy": 1,
                 "insert_after": "custom_tax_exempt_reason",

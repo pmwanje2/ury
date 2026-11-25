@@ -87,6 +87,10 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
                 id={item.id}
                 name={item.name}
                 price={item.price}
+                promoRate={item.promo_rate}
+                promoLabel={item.promo_label}
+                unavailableDaypart={item.unavailable_daypart}
+                daypartLabel={item.daypart_label}
                 item_image={item.image}
                 course={item.course_label || item.course}
                 item={item.item}

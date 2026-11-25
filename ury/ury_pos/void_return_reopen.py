@@ -2044,7 +2044,7 @@ def create_pos_return(
     _copy_currency_rate_fields(orig, ret)
     ret.posting_date = _today_date()
     ret.posting_time = _now_time()
-    ret.set_posting_time = 1
+    ret.set_posting_time = 0
     ret.update_stock = cint(_field(orig, "update_stock", 0))
     ret.invoice_printed = 0
     ret.restaurant_table = None
@@ -2261,7 +2261,7 @@ def create_unreferenced_return(
     ret.selling_price_list = price_list
     ret.posting_date = _today_date()
     ret.posting_time = _now_time()
-    ret.set_posting_time = 1
+    ret.set_posting_time = 0
     ret.update_stock = cint(_field(profile_doc, "update_stock", 0))
     ret.invoice_printed = 0
     ret.restaurant_table = None
@@ -2637,7 +2637,7 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
     _copy_currency_rate_fields(orig, rev)
     rev.posting_date = _today_date()
     rev.posting_time = _now_time()
-    rev.set_posting_time = 1
+    rev.set_posting_time = 0
     rev.update_stock = cint(_field(orig, "update_stock", 0))
     rev.invoice_printed = 0
     rev.restaurant_table = None
@@ -2950,7 +2950,7 @@ def adjust_closed_check(
     _copy_currency_rate_fields(orig, rep)
     rep.posting_date = _today_date()
     rep.posting_time = _now_time()
-    rep.set_posting_time = 1
+    rep.set_posting_time = 0
     rep.update_stock = cint(_field(orig, "update_stock", 0))
     rep.invoice_printed = 1
     rep.restaurant_table = _field(orig, "restaurant_table")
@@ -3107,7 +3107,7 @@ def reopen_closed_check(
     _copy_currency_rate_fields(orig, reopened)
     reopened.posting_date = _today_date()
     reopened.posting_time = _now_time()
-    reopened.set_posting_time = 1
+    reopened.set_posting_time = 0
     reopened.update_stock = cint(_field(orig, "update_stock", 0))
     reopened.invoice_printed = 0
     reopened.restaurant_table = restored_table

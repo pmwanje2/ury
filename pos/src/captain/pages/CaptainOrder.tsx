@@ -156,7 +156,18 @@ export default function CaptainOrder() {
     [editingItemUniqueId, activeOrders]
   );
 
-  const total = activeOrders.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const effectiveUnitPrice = (item: typeof activeOrders[0]) => {
+    const basePrice =
+      !item.selectedVariant &&
+      item.promo_rate != null &&
+      Number.isFinite(item.promo_rate) &&
+      item.promo_rate < item.price
+        ? item.promo_rate
+        : item.selectedVariant?.price || item.price;
+    const addonsTotal = item.selectedAddons?.reduce((sum, addon) => sum + addon.price, 0) || 0;
+    return basePrice + addonsTotal;
+  };
+  const total = activeOrders.reduce((sum, item) => sum + effectiveUnitPrice(item) * item.quantity, 0);
   const isInteractionDisabled = isOrderInteractionDisabled() || isSubmitting;
 
   const canView = permissions?.view ?? false;
