@@ -356,6 +356,12 @@ def getModeOfPayment():
     from ury.ury_pos.offline_tenders import profile_offline_payment_modes
 
     posDetails = getPosProfile()
+    if (
+        not isinstance(posDetails, dict)
+        or posDetails.get("requires_outlet_selection")
+        or not posDetails.get("pos_profile")
+    ):
+        return []
     posProfile = posDetails["pos_profile"]
     posProfiles = frappe.get_doc("POS Profile", posProfile)
     mode_of_payments = posProfiles.payments
