@@ -3084,6 +3084,383 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
         self.assertEqual(res_switch_delivery["grand_total"], 48510.0)
         self.assertEqual([r["rate"] for r in res_switch_delivery["item_taxes"]], [12500.0, 17600.0, 14000.0])
 
+    def test_preview_order_totals_prices_and_preserves_156_modifiers_and_combo_upcharges(self):
+        """#153 x #156 interop: preview_order_totals must resolve authoritative modifier &
+        Combo Upcharge rates via validate_and_normalize_order_items (never falling back to
+        standalone Item Price or tampered client rate), preserve modifier/combo metadata on
+        the in-memory POS Invoice, keep #152 overridden modifier rows intact on draft edits,
+        and skip Combo Upcharge rows in _reprice_items_from_authoritative_price_list."""
+        import json as _json
+
+        frappe_mock, utils = _make_frappe_env()
+        frappe_mock.session = SimpleNamespace(user="cashier_a@example.com")
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        frappe_mock.has_permission = MagicMock(return_value=True)
+        frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+            "Rest A"
+            if dt == "URY Restaurant"
+            else (
+                "Main Branch A"
+                if dt == "POS Profile" and field == "branch"
+                else (
+                    1
+                    if dt == "Currency" and field == "fraction_units"
+                    else ("Main Menu" if dt == "URY Menu" else None)
+                )
+            )
+        )
+        frappe_mock.get_all.return_value = []
+
+        price_map = {
+            "RIBEYE": 35000.0,
+            "EXTRA-CHEESE": 3000.0,
+            "BURGER-COMBO": 25000.0,
+            # Standalone menu price for SWEET-POTATO is 8,000, while Combo Upcharge is 2,000!
+            "SWEET-POTATO": 8000.0,
+        }
+
+        def _fake_price_valid_on(item_code, price_list, posting_date, *_args, **_kwargs):
+            if item_code in price_map:
+                return Row(price_list_rate=price_map[item_code])
+            return None
+
+        def _fake_validate_and_normalize(
+            items,
+            past_item,
+            menu,
+            price_list,
+            branch,
+            company,
+            *,
+            posting_date=None,
+            customer=None,
+            currency_precision=2,
+        ):
+            normalized = [dict(r) for r in items]
+            overrides = {}
+            for r in normalized:
+                lkey = r.get("reservation_line_key")
+                if r.get("custom_line_role") == "Modifier" and r.get("item") == "EXTRA-CHEESE":
+                    r["rate"] = 3000.0
+                    overrides[lkey] = {
+                        "rate": 3000.0,
+                        "price_list_rate": 3000.0,
+                        "item_code": "EXTRA-CHEESE",
+                        "is_validated_modifier": True,
+                    }
+                elif r.get("custom_line_role") == "Combo Upcharge" and r.get("item") == "SWEET-POTATO":
+                    r["rate"] = 2000.0
+                    overrides[lkey] = {
+                        "rate": 2000.0,
+                        "price_list_rate": 2000.0,
+                        "item_code": "SWEET-POTATO",
+                        "is_validated_modifier": True,
+                    }
+            return normalized, overrides
+
+        class _InteropPreviewInvoice(FakeInvoice):
+            """Simulates real ERPNext v16 set_missing_values overwriting unprotected Combo Upcharge
+            rates with standalone Item Price or applying a 20% PRLE if not shielded."""
+
+            def precision(self, _f=None):
+                return 0
+
+            def set_missing_values(self, for_validate=False):
+                super().set_missing_values(for_validate=for_validate)
+                for idx, r in enumerate(self.get("items") or [], start=1):
+                    r.setdefault("name", f"PREVIEW-MOD-{idx}")
+                    if r.get("item_code") == "SWEET-POTATO":
+                        # Without protection, ERPNext standalone price lookup would clobber 2,000 -> 8,000
+                        r["price_list_rate"] = 8000.0
+                        r["rate"] = 8000.0
+                    elif _cint(r.get("custom_price_overridden")) == 1:
+                        # Simulate PRLE attempting to apply -20% on overridden modifier unless shielded
+                        plr = float(r.get("price_list_rate") or 0)
+                        r["discount_percentage"] = 20.0
+                        r["rate"] = round(plr * 0.80, 0)
+
+            def calculate_taxes_and_totals(self):
+                prec = self.precision("grand_total")
+                net = 0.0
+                for r in self.get("items") or []:
+                    eff_rate = round(float(r.get("rate") or 0), prec)
+                    r["rate"] = eff_rate
+                    r["amount"] = round(eff_rate * float(r.get("qty") or 0), prec)
+                    r["net_amount"] = r["amount"]
+                    net += r["net_amount"]
+                self["total"] = round(net, prec)
+                self["net_total"] = round(net, prec)
+                tax_total = 0.0
+                for t in self.get("taxes") or []:
+                    t["tax_amount"] = round(net * float(t.get("rate") or 0) / 100.0, prec)
+                    tax_total += t["tax_amount"]
+                self["total_taxes_and_charges"] = round(tax_total, prec)
+                self["grand_total"] = round(net + tax_total, prec)
+                self["rounded_total"] = self["grand_total"]
+                self["rounding_adjustment"] = 0.0
+
+        profile = Row(
+            name="POS Profile A",
+            company="Maximus Foods UG",
+            currency="UGX",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            selling_price_list="Standard UGX",
+            cost_center="Main - MFU",
+            warehouse="Stores - MFU",
+            applicable_for_users=[Row(user="cashier_a@example.com")],
+            customer_groups=[],
+        )
+
+        unpriced_json = _json.dumps([{"group": "Doneness", "option_code": "MED-RARE", "label": "Medium Rare"}])
+        bundle_json = _json.dumps([
+            {
+                "group": "Combo Side",
+                "slot_item": "FRIES",
+                "chosen_item": "SWEET-POTATO",
+                "label": "Sweet Potato Fries",
+                "qty": 1,
+            }
+        ])
+
+        orig_mod_draft = Row(
+            name="MFU-MOD-001",
+            branch="Main Branch A",
+            pos_profile="POS Profile A",
+            order_type="Dine In",
+            customer="Walk In Guest",
+            no_of_pax=2,
+            selling_price_list="Standard UGX",
+            items=[
+                Row(
+                    name="row-ribeye",
+                    reservation_line_key="rk-ribeye",
+                    item_code="RIBEYE",
+                    item_name="Ribeye Steak",
+                    qty=1.0,
+                    price_list_rate=35000.0,
+                    rate=35000.0,
+                    custom_line_role="Standard",
+                    custom_is_modifier=0,
+                    custom_modifiers_json=unpriced_json,
+                ),
+                Row(
+                    name="row-cheese-ov",
+                    reservation_line_key="rk-cheese",
+                    item_code="EXTRA-CHEESE",
+                    item_name="Extra Cheese",
+                    qty=1.0,
+                    price_list_rate=1500.0,
+                    base_price_list_rate=1500.0,
+                    rate=1500.0,
+                    base_rate=1500.0,
+                    custom_price_overridden=1,
+                    custom_is_modifier=1,
+                    custom_parent_line_key="rk-ribeye",
+                    custom_line_role="Modifier",
+                    custom_modifier_group="Add-ons",
+                    custom_modifier_option="EXTRA-CHEESE",
+                    custom_modifier_prefix="Extra",
+                ),
+                Row(
+                    name="row-combo",
+                    reservation_line_key="rk-combo",
+                    item_code="BURGER-COMBO",
+                    item_name="Burger Combo Meal",
+                    qty=1.0,
+                    price_list_rate=25000.0,
+                    rate=25000.0,
+                    custom_line_role="Combo Header",
+                    custom_is_modifier=0,
+                    custom_bundle_overrides_json=bundle_json,
+                ),
+                Row(
+                    name="row-upcharge",
+                    reservation_line_key="rk-upcharge",
+                    item_code="SWEET-POTATO",
+                    item_name="Sweet Potato Upgrade",
+                    qty=1.0,
+                    price_list_rate=2000.0,
+                    base_price_list_rate=2000.0,
+                    rate=2000.0,
+                    base_rate=2000.0,
+                    custom_is_modifier=1,
+                    custom_parent_line_key="rk-combo",
+                    custom_line_role="Combo Upcharge",
+                    custom_modifier_group="Combo Side",
+                    custom_modifier_option="SWEET-POTATO",
+                ),
+            ],
+        )
+
+        created_docs = []
+
+        def _new_doc(_dt):
+            d = _InteropPreviewInvoice(
+                taxes=[
+                    Row(
+                        charge_type="On Net Total",
+                        account_head="VAT 18% Output - MFU",
+                        description="VAT 18%",
+                        rate=18.0,
+                        tax_amount=0.0,
+                        custom_pos_charge_kind="",
+                    )
+                ]
+            )
+            created_docs.append(d)
+            return d
+
+        frappe_mock.new_doc = MagicMock(side_effect=_new_doc)
+        frappe_mock.get_doc = MagicMock(
+            side_effect=lambda dt, name=None: orig_mod_draft if dt == "POS Invoice" else profile
+        )
+
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury.api.ury_modifiers": _stub(
+                "ury.ury.api.ury_modifiers",
+                validate_and_normalize_order_items=MagicMock(side_effect=_fake_validate_and_normalize),
+            ),
+            "ury.ury_pos.dayparts": _stub(
+                "ury.ury_pos.dayparts",
+                resolve_menu_and_price_list=MagicMock(
+                    return_value={"menu": "Main Menu", "price_list": "Standard UGX", "serving_period": None}
+                ),
+                stamp_invoice_outlet_time=MagicMock(
+                    return_value={"local_dt": datetime(2026, 11, 25, 13, 0, 0), "local_time": "13:00:00"}
+                ),
+            ),
+            "ury.ury_pos.default_customer": _stub(
+                "ury.ury_pos.default_customer",
+                resolve_default_customer=MagicMock(return_value="Walk In Guest"),
+                get_default_customer_config=MagicMock(return_value={}),
+            ),
+            "ury.ury_pos.tax_determination": _stub(
+                "ury.ury_pos.tax_determination",
+                apply_order_type_tax=MagicMock(),
+                validate_efris_readiness=MagicMock(return_value=[]),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                sync_service_charge=MagicMock(),
+            ),
+        }
+
+        cart_payload = [
+            {
+                "item": "RIBEYE",
+                "item_name": "Ribeye Steak",
+                "qty": 1,
+                "rate": 35000,
+                "reservation_line_key": "rk-ribeye",
+                "custom_line_role": "Standard",
+                "custom_modifiers_json": unpriced_json,
+            },
+            {
+                "item": "EXTRA-CHEESE",
+                "item_name": "Extra Cheese",
+                "qty": 1,
+                "rate": 100,  # tampered client rate; server must use 3,000
+                "reservation_line_key": "rk-cheese",
+                "custom_is_modifier": 1,
+                "custom_parent_line_key": "rk-ribeye",
+                "custom_line_role": "Modifier",
+                "custom_modifier_group": "Add-ons",
+                "custom_modifier_option": "EXTRA-CHEESE",
+                "custom_modifier_prefix": "Extra",
+            },
+            {
+                "item": "BURGER-COMBO",
+                "item_name": "Burger Combo Meal",
+                "qty": 1,
+                "rate": 25000,
+                "reservation_line_key": "rk-combo",
+                "custom_line_role": "Combo Header",
+                "custom_bundle_overrides_json": bundle_json,
+            },
+            {
+                "item": "SWEET-POTATO",
+                "item_name": "Sweet Potato Upgrade",
+                "qty": 1,
+                "rate": 500,  # tampered client rate; server must use Combo Upcharge 2,000 (NOT standalone 8,000!)
+                "reservation_line_key": "rk-upcharge",
+                "custom_is_modifier": 1,
+                "custom_parent_line_key": "rk-combo",
+                "custom_line_role": "Combo Upcharge",
+                "custom_modifier_group": "Combo Side",
+                "custom_modifier_option": "SWEET-POTATO",
+            },
+        ]
+
+        with patch.dict(sys.modules, modules):
+            api_mod = _load_module("ury.ury_pos.api", URY_PKG / "ury_pos/api.py")
+            with (
+                patch.object(api_mod, "_authorize_pos_profile_access", MagicMock()),
+                patch.object(api_mod, "_authorize_customer_for_pos_profile", MagicMock(return_value=Row(name="Walk In Guest"))),
+                patch.object(api_mod, "item_price_release_states", MagicMock(return_value=(None, None))),
+                patch.object(api_mod, "price_valid_on", MagicMock(side_effect=_fake_price_valid_on)),
+            ):
+                # Case A: Unsaved modified + combo cart
+                res_unsaved = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Dine In",
+                    items=cart_payload,
+                )
+                # Case B: Saved draft with #152 overridden modifier (1,500) + Combo Upcharge (2,000)
+                draft_edit_payload = [
+                    {**cart_payload[0], "name": "row-ribeye"},
+                    {**cart_payload[1], "name": "row-cheese-ov", "rate": 1500},
+                    {**cart_payload[2], "name": "row-combo"},
+                    {**cart_payload[3], "name": "row-upcharge", "rate": 2000},
+                ]
+                res_saved = api_mod.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Dine In",
+                    invoice_name="MFU-MOD-001",
+                    items=draft_edit_payload,
+                )
+
+        # Case C: Direct REST _reprice_items_from_authoritative_price_list skips Combo Upcharge rows
+        _rest_frappe, rest_modules = self._load_direct_rest_env()
+        rest_doc = Row(
+            items=[
+                Row(item_code="BURGER-COMBO", custom_line_role="Combo Header", rate=1.0, price_list_rate=1.0),
+                Row(item_code="SWEET-POTATO", custom_line_role="Combo Upcharge", rate=2000.0, price_list_rate=2000.0),
+            ]
+        )
+        with patch.dict(sys.modules, rest_modules):
+            hook_mod = _load_module("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+            with patch.object(
+                hook_mod,
+                "_lookup_authoritative_item_price",
+                side_effect=lambda code, _pl, uom=None: price_map.get(code),
+            ):
+                hook_mod._reprice_items_from_authoritative_price_list(rest_doc, "Standard UGX", force_all=True)
+
+        # Case A assertions: 35,000 + 3,000 + 25,000 + 2,000 = 65,000 net; 11,700 VAT; 76,700 grand
+        self.assertEqual([r["rate"] for r in res_unsaved["item_taxes"]], [35000.0, 3000.0, 25000.0, 2000.0])
+        self.assertEqual(res_unsaved["net_total"], 65000.0)
+        self.assertEqual(res_unsaved["grand_total"], 76700.0)
+        self.assertEqual(created_docs[0]["items"][0].get("custom_modifiers_json"), unpriced_json)
+        self.assertEqual(created_docs[0]["items"][1].get("custom_is_modifier"), 1)
+        self.assertEqual(created_docs[0]["items"][1].get("custom_parent_line_key"), "rk-ribeye")
+        self.assertEqual(created_docs[0]["items"][2].get("custom_bundle_overrides_json"), bundle_json)
+        self.assertEqual(created_docs[0]["items"][3].get("custom_line_role"), "Combo Upcharge")
+
+        # Case B assertions: 35,000 + 1,500 (overridden!) + 25,000 + 2,000 = 63,500 net; 11,430 VAT; 74,930 grand
+        self.assertEqual([r["rate"] for r in res_saved["item_taxes"]], [35000.0, 1500.0, 25000.0, 2000.0])
+        self.assertEqual(res_saved["net_total"], 63500.0)
+        self.assertEqual(res_saved["grand_total"], 74930.0)
+        self.assertEqual(created_docs[1]["items"][2].get("custom_bundle_overrides_json"), bundle_json)
+        self.assertEqual(created_docs[1]["items"][3].get("custom_line_role"), "Combo Upcharge")
+
+        # Case C assertions: standard Combo Header repriced 1 -> 25,000; Combo Upcharge kept at 2,000 (NOT 8,000)
+        self.assertEqual(rest_doc["items"][0]["rate"], 25000.0)
+        self.assertEqual(rest_doc["items"][1]["rate"], 2000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

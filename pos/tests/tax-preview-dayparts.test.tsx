@@ -756,4 +756,160 @@ describe('POS-PR-7: Header status strip, MenuCard daypart/promo, OrderPanel & Pa
     expect(footer).toHaveTextContent('UGX 10530');
     expect(footer).toHaveTextContent('UGX 69030');
   });
+
+  it('OrderPanel forwards #156 modifier and combo metadata to preview_order_totals and renders modifier rows alongside server tax breakdown', async () => {
+    const selectedModifiers = [{ group: 'Doneness', option_code: 'MED-RARE', label: 'Medium Rare' }];
+    const bundleOverrides = [
+      {
+        group: 'Combo Side',
+        slot_item: 'FRIES',
+        chosen_item: 'SWEET-POTATO',
+        label: 'Sweet Potato Fries',
+        qty: 1,
+      },
+    ];
+    mockPosState.value = {
+      ...mockPosState.value,
+      isUpdatingOrder: false,
+      orderId: null,
+      selectedOrderType: 'Dine In',
+      selectedTable: 'T-05',
+      noOfPax: 2,
+      activeOrders: [
+        {
+          id: 'RIBEYE',
+          item: 'RIBEYE',
+          name: 'Ribeye Steak',
+          price: 35000,
+          quantity: 1,
+          uniqueId: 'rk-ribeye',
+          reservationLineKey: 'rk-ribeye',
+          lineRole: 'Standard',
+          selectedModifiers,
+        },
+        {
+          id: 'EXTRA-CHEESE',
+          item: 'EXTRA-CHEESE',
+          name: 'Extra Cheese',
+          price: 3000,
+          quantity: 1,
+          uniqueId: 'rk-cheese',
+          reservationLineKey: 'rk-cheese',
+          isModifier: true,
+          parentLineKey: 'rk-ribeye',
+          lineRole: 'Modifier',
+          modifierGroup: 'Add-ons',
+          modifierOption: 'EXTRA-CHEESE',
+          modifierPrefix: 'Extra',
+        },
+        {
+          id: 'BURGER-COMBO',
+          item: 'BURGER-COMBO',
+          name: 'Burger Combo Meal',
+          price: 25000,
+          quantity: 1,
+          uniqueId: 'rk-combo',
+          reservationLineKey: 'rk-combo',
+          lineRole: 'Combo Header',
+          is_combo_meal: true,
+          bundleOverrides,
+        },
+        {
+          id: 'SWEET-POTATO',
+          item: 'SWEET-POTATO',
+          name: 'Sweet Potato Upgrade',
+          price: 2000,
+          quantity: 1,
+          uniqueId: 'rk-upcharge',
+          reservationLineKey: 'rk-upcharge',
+          isModifier: true,
+          parentLineKey: 'rk-combo',
+          lineRole: 'Combo Upcharge',
+          modifierGroup: 'Combo Side',
+          modifierOption: 'SWEET-POTATO',
+        },
+      ],
+    };
+
+    mockCallPost.mockResolvedValueOnce({
+      message: {
+        net_total: 65000,
+        discount_amount: 0,
+        tax_rows: [{ description: 'VAT 18%', rate: 18, tax_amount: 11700 }],
+        total_taxes_and_charges: 11700,
+        grand_total: 76700,
+        rounded_total: 76700,
+        item_taxes: [
+          { item_code: 'RIBEYE', rate: 35000, net_amount: 35000 },
+          { item_code: 'EXTRA-CHEESE', rate: 3000, net_amount: 3000 },
+          { item_code: 'BURGER-COMBO', rate: 25000, net_amount: 25000 },
+          { item_code: 'SWEET-POTATO', rate: 2000, net_amount: 2000 },
+        ],
+        efris_warnings: [],
+      },
+    });
+
+    render(<OrderPanel />);
+
+    await waitFor(
+      () => {
+        expect(mockCallPost).toHaveBeenCalledWith(
+          'ury.ury_pos.api.preview_order_totals',
+          expect.objectContaining({ pos_profile: 'Main Till', order_type: 'Dine In' }),
+        );
+      },
+      { timeout: 1000 },
+    );
+
+    const previewCall = mockCallPost.mock.calls.find(
+      ([method]) => method === 'ury.ury_pos.api.preview_order_totals',
+    );
+    expect(previewCall).toBeTruthy();
+    const sentItems = (previewCall![1] as { items: Array<Record<string, unknown>> }).items;
+    expect(sentItems).toHaveLength(4);
+    expect(sentItems[0]).toMatchObject({
+      item: 'RIBEYE',
+      reservation_line_key: 'rk-ribeye',
+      custom_modifiers_json: JSON.stringify(selectedModifiers),
+    });
+    expect(sentItems[1]).toMatchObject({
+      item: 'EXTRA-CHEESE',
+      reservation_line_key: 'rk-cheese',
+      custom_is_modifier: 1,
+      custom_parent_line_key: 'rk-ribeye',
+      custom_line_role: 'Modifier',
+      custom_modifier_group: 'Add-ons',
+      custom_modifier_option: 'EXTRA-CHEESE',
+      custom_modifier_prefix: 'Extra',
+    });
+    expect(sentItems[2]).toMatchObject({
+      item: 'BURGER-COMBO',
+      reservation_line_key: 'rk-combo',
+      custom_line_role: 'Combo Header',
+      custom_bundle_overrides_json: JSON.stringify(bundleOverrides),
+    });
+    expect(sentItems[3]).toMatchObject({
+      item: 'SWEET-POTATO',
+      reservation_line_key: 'rk-upcharge',
+      custom_is_modifier: 1,
+      custom_parent_line_key: 'rk-combo',
+      custom_line_role: 'Combo Upcharge',
+      custom_modifier_group: 'Combo Side',
+      custom_modifier_option: 'SWEET-POTATO',
+    });
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('order-tax-preview-footer')).toHaveTextContent('UGX 76700');
+      },
+      { timeout: 1000 },
+    );
+
+    expect(screen.getByTestId('modifier-child-rk-cheese')).toHaveTextContent('Extra Extra Cheese');
+    expect(screen.getByTestId('modifier-child-rk-upcharge')).toHaveTextContent('Sweet Potato Upgrade');
+    expect(screen.getByText('Medium Rare')).toBeInTheDocument();
+    expect(screen.getByText('Sweet Potato Fries')).toBeInTheDocument();
+    expect(screen.getByTestId('order-tax-preview-footer')).toHaveTextContent('UGX 65000');
+    expect(screen.getByTestId('order-tax-preview-footer')).toHaveTextContent('UGX 11700');
+  });
 });
