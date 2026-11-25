@@ -90,6 +90,7 @@ def _site_less_frappe():
 
 _framework, _modules = _site_less_frappe()
 with patch.dict(sys.modules, _modules):
+    from ury.ury.api import table_lifecycle
     from ury.ury.doctype.ury_order import ury_order
 
 # Tests assert these exception types. They are the stub, never installed frappe.
@@ -117,10 +118,12 @@ class TestCancelOrderReason(unittest.TestCase):
         self.count_delta = MagicMock()
         availability = ModuleType("ury.ury.api.ury_availability")
         availability.apply_count_delta = self.count_delta
-        self.enterContext(patch.dict(sys.modules, {availability.__name__: availability}))
+        self.enterContext(patch.dict(sys.modules, {
+            availability.__name__: availability, table_lifecycle.__name__: table_lifecycle,
+        }))
         self.enterContext(patch.object(ury_order._void_ops, "has_sent_kot_for_invoice", return_value=False))
         self.enterContext(patch.object(ury_order._void_ops, "_active_pos_reasons", return_value=[]))
-        self.enterContext(patch("ury.ury.api.table_lifecycle.table_policy", return_value={}))
+        self.enterContext(patch.object(table_lifecycle, "table_policy", return_value={}))
         for target, replacement in (
             ("frappe", self.framework),
             ("_", lambda message: message),
