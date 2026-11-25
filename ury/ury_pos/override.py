@@ -540,6 +540,36 @@ def _external_pin_verifier():
     return frappe.get_attr(valid[-1])
 
 
+def _external_pin_manager():
+    """Resolve manager(action, *, user=None, pin=None, caller=None, pos_profile=None).
+
+    Status returns enrollment flags. Set and clear persist changes and raise on failure.
+    """
+    hooks = frappe.get_hooks("pos_override_pin_manager") or []
+    if isinstance(hooks, str):
+        hooks = [hooks]
+    valid = [h for h in hooks if isinstance(h, str) and h.strip()]
+    if not valid:
+        return None
+    return frappe.get_attr(valid[-1])
+
+
+def _external_pin_status(manager, user: str) -> dict[str, bool]:
+    status = manager("status", user=user)
+    return {
+        "has_pin": bool(status.get("has_pin")),
+        "must_reset": bool(status.get("must_reset", False)),
+        "locked": bool(status.get("locked", False)),
+    }
+
+
+def _refuse_external_pin_management():
+    frappe.throw(
+        frappe._("Approval PINs on this site are managed by the property's cashier PIN store."),
+        frappe.ValidationError,
+    )
+
+
 def _is_outlet_member(user: str, profile) -> bool:
     """Enabled, non-Admin/Guest user assigned to this POS Profile/branch/company."""
     if not user or user in ("Administrator", "Guest") or not profile:
@@ -1856,14 +1886,27 @@ def my_pin_status() -> dict[str, bool]:
     user = frappe.session.user
     if not user or user in ("Administrator", "Guest") or _is_non_interactive_or_agent_session(user):
         _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts in interactive sessions.", frappe.PermissionError)
-    external = _external_pin_verifier() is not None
-    has_pin = _has_override_pin(user) if not external else True
-    return {"has_pin": has_pin, "external_verifier": external}
+    manager = _external_pin_manager()
+    if manager is not None:
+        return {
+            **_external_pin_status(manager, user),
+            "external_verifier": True,
+            "can_manage_here": True,
+        }
+    if _external_pin_verifier() is not None:
+        return {"has_pin": True, "external_verifier": True, "can_manage_here": False}
+    return {
+        "has_pin": _has_override_pin(user),
+        "must_reset": False,
+        "locked": False,
+        "external_verifier": False,
+        "can_manage_here": True,
+    }
 
 
 @frappe.whitelist(methods=["POST"])
 def set_my_pin(password: str, pin: str) -> dict[str, Any]:
-    """Enrol or update the signed-in user's own approval PIN in Frappe `__Auth` after password re-entry.
+    """Enrol or update the signed-in user's own approval PIN after password re-entry.
 
     P0 #2: Never allows `AuthenticationError` (401) to escape and terminate the live till session;
     counts failed password checks durably in DB + Redis and raises `ValidationError` (417).
@@ -1880,11 +1923,9 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
         )
     if cint(frappe.db.get_value("User", user, "enabled")) != 1:
         _refuse("POS-AUTH-NOT-ELIGIBLE", "This account is disabled.", frappe.PermissionError)
-    if _external_pin_verifier() is not None:
-        frappe.throw(
-            frappe._("Approval PINs on this site are managed by the property's cashier PIN store."),
-            frappe.ValidationError,
-        )
+    manager = _external_pin_manager()
+    if manager is None and _external_pin_verifier() is not None:
+        _refuse_external_pin_management()
     if not isinstance(password, str) or not password:
         frappe.throw(frappe._("Enter your account password to confirm."), frappe.ValidationError)
 
@@ -1932,20 +1973,24 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
             frappe.ValidationError,
         )
 
-    had_pin_or_failures = (
-        _has_override_pin(user)
-        or _db_failed_password_count(user, pw_lock_min) > 0
-        or bool(frappe.db.exists("POS Authorisation Log", {"approver": user, "outcome": "Failed PIN"}))
-    )
-    _update_password(
-        user,
-        pin,
-        doctype=PIN_AUTH_DOCTYPE,
-        fieldname=PIN_AUTH_FIELDNAME,
-        logout_all_sessions=False,
-    )
+    if manager is not None:
+        manager("set", user=user, pin=pin)
+        log_pin_reset = True
+    else:
+        log_pin_reset = (
+            _has_override_pin(user)
+            or _db_failed_password_count(user, pw_lock_min) > 0
+            or bool(frappe.db.exists("POS Authorisation Log", {"approver": user, "outcome": "Failed PIN"}))
+        )
+        _update_password(
+            user,
+            pin,
+            doctype=PIN_AUTH_DOCTYPE,
+            fieldname=PIN_AUTH_FIELDNAME,
+            logout_all_sessions=False,
+        )
     pw_tracker.add_success_attempt()
-    if had_pin_or_failures:
+    if log_pin_reset:
         _write_log(
             requester=user,
             approver=user,
@@ -1999,7 +2044,14 @@ def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
             frappe.PermissionError,
         )
 
-    _clear_override_pin(target)
+    manager = _external_pin_manager()
+    if manager is not None:
+        manager("clear", user=target, caller=caller, pos_profile=pos_profile)
+    else:
+        if _external_pin_verifier() is not None:
+            _refuse_external_pin_management()
+        _clear_override_pin(target)
+
     if pos_profile:
         profile = _get_profile(pos_profile)
         if profile:
@@ -2021,6 +2073,8 @@ def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
         isolated=True,
     )
     _add_authentication_log(f"Approval PIN cleared for {target} by {caller}", caller)
+    if manager is not None:
+        return {"ok": True, "has_pin": False, "must_reset": True}
     return {"ok": True, "user": target, "has_pin": False}
 
 
@@ -2041,7 +2095,8 @@ def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
             "Only a manager for this till can view staff approval PIN status.",
             frappe.PermissionError,
         )
-    enrolled_users = _users_with_override_pin()
+    manager = _external_pin_manager()
+    enrolled_users = _users_with_override_pin() if manager is None else set()
     users = frappe.get_all(
         "User",
         filters={"enabled": 1, "user_type": "System User"},
@@ -2054,9 +2109,13 @@ def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
         if not uid or uid in ("Administrator", "Guest"):
             continue
         if _is_outlet_member(uid, profile):
+            status = (
+                _external_pin_status(manager, uid) if manager is not None
+                else {"has_pin": uid.casefold() in enrolled_users}
+            )
             out.append({
                 "user": uid,
                 "full_name": row.get("full_name") or _get_fullname(uid) or uid,
-                "has_pin": uid.casefold() in enrolled_users,
+                **status,
             })
     return out

@@ -1256,13 +1256,15 @@
     "error_reason": "اختر سببًا نشطًا (وأضف ملاحظة قصيرة إذا كانت مطلوبة)."
   },
   "approval_pin": {
-    "title": "تعيين رقم PIN للموافقة",
+    "title": "رقم PIN للموافقة الخاص بي",
     "description": "استخدم رقم PIN الشخصي للموافقة على التجاوزات في الصندوق دون تبديل الجلسة.",
     "tab_my_pin": "رقم PIN الخاص بي",
-    "tab_clear_staff": "مسح رقم PIN لموظف",
+    "tab_clear_staff": "أرقام PIN للموظفين",
     "status_label": "الحالة",
     "status_set": "تم تعيين رقم PIN للموافقة",
     "status_not_set": "لم يتم تعيين رقم PIN للموافقة",
+    "status_reset_required": "إعادة التعيين مطلوبة",
+    "status_locked": "مقفل",
     "external_managed": "تُدار أرقام PIN للموافقة في هذا الموقع من خلال مخزن أرقام PIN للصندوق في المنشأة.",
     "current_password": "كلمة المرور الحالية",
     "new_pin": "رقم PIN الجديد للموافقة",

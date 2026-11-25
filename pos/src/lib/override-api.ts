@@ -39,15 +39,27 @@ export interface AuthoriseResponse {
   expires_in: number;
 }
 
-export interface MyPinStatus {
+interface PinStatus {
   has_pin: boolean;
-  external_verifier: boolean;
+  must_reset?: boolean;
+  locked?: boolean;
 }
 
-export interface PinUserStatus {
+export interface MyPinStatus extends PinStatus {
+  external_verifier: boolean;
+  can_manage_here?: boolean;
+}
+
+export interface PinUserStatus extends PinStatus {
   user: string;
   full_name: string;
+}
+
+interface ClearPinResponse {
+  ok: boolean;
   has_pin: boolean;
+  user?: string;
+  must_reset?: boolean;
 }
 
 const REFUSAL_CODES: readonly AuthRefusalCode[] = [
@@ -188,10 +200,10 @@ export async function setMyPin(password: string, pin: string): Promise<{ ok: boo
   return res.message;
 }
 
-export async function clearUserPin(user: string, posProfile?: string): Promise<{ ok: boolean; user: string; has_pin: boolean }> {
+export async function clearUserPin(user: string, posProfile?: string): Promise<ClearPinResponse> {
   const payload: Record<string, unknown> = { user };
   if (posProfile) payload.pos_profile = posProfile;
-  const res = await call.post<{ message: { ok: boolean; user: string; has_pin: boolean } }>(
+  const res = await call.post<{ message: ClearPinResponse }>(
     'ury.ury_pos.override.clear_user_pin',
     payload,
   );

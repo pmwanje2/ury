@@ -1056,13 +1056,15 @@
     "error_reason": "Choisissez un motif actif (et ajoutez une note si nécessaire)."
   },
   "approval_pin": {
-    "title": "Définir mon PIN d'approbation",
+    "title": "Mon PIN d’approbation",
     "description": "Utilisez votre PIN personnel pour approuver des opérations en caisse sans changer de session.",
     "tab_my_pin": "Mon PIN d'approbation",
-    "tab_clear_staff": "Effacer le PIN d'un employé",
+    "tab_clear_staff": "PIN du personnel",
     "status_label": "Statut",
     "status_set": "PIN d'approbation défini",
     "status_not_set": "Aucun PIN d'approbation",
+    "status_reset_required": "Réinitialisation requise",
+    "status_locked": "Verrouillé",
     "external_managed": "Les PIN d'approbation de ce site sont gérés par le coffre PIN de l'établissement.",
     "current_password": "Mot de passe actuel",
     "new_pin": "Nouveau PIN d'approbation",
