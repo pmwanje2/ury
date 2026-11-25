@@ -142,6 +142,7 @@ def _require_till_privilege(
 	reference_doctype: str = "POS Opening Entry",
 	token: str | None = None,
 	amount: float | None = None,
+	approval_variances=None,
 	fallback_privilege: str | None = None,
 	allow_cashier_default: bool = False,
 	require_second_person: bool = False,
@@ -160,6 +161,7 @@ def _require_till_privilege(
 		approval = override_mod.consume(
 			token, code, profile.name, reference_name, claim,
 			approval_amount=amount, reference_doctype=reference_doctype,
+			approval_variances=approval_variances,
 		)
 		approver = (approval.get("approver") or "").strip()
 		excluded = {(frappe.session.user or "").casefold()}
@@ -1424,8 +1426,32 @@ def _new_counted_closing(profile, opening, counts, period_end_date):
 	return closing
 
 
+def _signed_cash_variances(closing, profile):
+	"""Return every cash variance in its tender currency, including rows within tolerance."""
+	currency = (profile.get("currency") or frappe.db.get_value(
+		"Company", profile.company, "default_currency"
+	) or "").strip().upper()
+	variances = []
+	for row in closing.get("payment_reconciliation") or []:
+		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") != "Cash":
+			continue
+		tender_currency = (row.get("custom_tender_currency") or "").strip().upper()
+		foreign_variance = row.get("custom_foreign_difference")
+		if tender_currency and tender_currency != currency and foreign_variance not in (None, ""):
+			variance_currency, difference = tender_currency, foreign_variance
+		else:
+			variance_currency, difference = currency, row.get("difference")
+		variances.append((row.mode_of_payment, variance_currency, flt(difference, currency_precision(variance_currency))))
+	return tuple(sorted(variances))
+
+
 def over_short_approval_amount(profile, opening_name, counted_payments, *, period_end_date=None):
-	"""Compute the close's company-currency variance using an unsaved closing document."""
+	amount, _ = over_short_approval_context(profile, opening_name, counted_payments, period_end_date=period_end_date)
+	return amount
+
+
+def over_short_approval_context(profile, opening_name, counted_payments, *, period_end_date=None):
+	"""Price the cap and collect signed tenders from an unsaved closing document."""
 	from ury.ury.hooks import ury_pos_closing_entry
 
 	opening = _resolve_open_shift(profile, pos_opening_entry=opening_name, required=True)
@@ -1436,7 +1462,7 @@ def over_short_approval_amount(profile, opening_name, counted_payments, *, perio
 		ury_pos_closing_entry._set_expected_amounts(closing)
 	ury_pos_closing_entry.calculate_closing_amount(closing, None)
 	variances, _, _ = _cash_variances_above_tolerance(closing, profile)
-	return _company_over_short_amount(closing, profile, variances)
+	return _company_over_short_amount(closing, profile, variances), _signed_cash_variances(closing, profile)
 
 
 def _company_over_short_amount(closing, profile, variances):
@@ -1710,6 +1736,7 @@ def close_till_with_controls(
 			os_claim,
 			token=over_short_approval_token,
 			amount=_company_over_short_amount(closing, profile, exceeding),
+			approval_variances=_signed_cash_variances(closing, profile),
 			require_second_person=True,
 			excluded_approvers={frappe.session.user, opening.user},
 		)
@@ -2012,6 +2039,7 @@ def force_close_till(
 			os_claim,
 			token=over_short_approval_token,
 			amount=_company_over_short_amount(closing, profile, exceeding),
+			approval_variances=_signed_cash_variances(closing, profile),
 			require_second_person=True,
 			excluded_approvers={frappe.session.user, opening.user},
 		)

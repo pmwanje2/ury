@@ -579,46 +579,111 @@ def _pin_provider_exception_code(error: Exception) -> str:
     return "POS-AUTH-UNAVAILABLE"
 
 
-def _protect_pin_endpoint(endpoint):
-    @wraps(endpoint)
-    def guarded(*args, **kwargs):
-        try:
-            return endpoint(*args, **kwargs)
-        except Exception as error:
-            del args
-            kwargs.clear()
-            expected = (
-                getattr(frappe, name, None) for name in (
-                    "ValidationError", "PermissionError", "AuthenticationError", "DoesNotExistError",
-                    "FrappeTypeError", "CSRFTokenError", "SessionExpired", "SessionStopped",
-                    "TooManyRequestsError", "DuplicateEntryError",
+def _read_pin_form() -> _PinInput:
+    form = getattr(frappe, "form_dict", None)
+    if not isinstance(form, dict):
+        return _PinInput(None)
+    credentials = _PinInput(form.get("pin"), form.get("password", form.get("current_password")))
+    _scrub_form_secrets()
+    return credentials
+
+
+def scrub_pin_request():
+    """Move credentials out of the RPC form before Frappe checks and dispatches it.
+
+    Frappe initializes the HTTP request before this hook. Its original request
+    body and raw kwargs passed explicitly by a Python caller to frappe.call
+    belong to Frappe's upstream frames.
+    """
+    form = getattr(frappe, "form_dict", None)
+    if not isinstance(form, dict):
+        return
+    command = form.get("cmd")
+    if not command:
+        request = getattr(frappe.local, "request", None)
+        path = getattr(request, "path", "")
+        for prefix in ("/api/method/", "/api/v1/method/", "/api/v2/method/"):
+            if path.startswith(prefix):
+                command = path[len(prefix):].split("/", 1)[0]
+                break
+    if command == "ury.ury_pos.override.authorise":
+        frappe.local.ury_pin_request = ("authorise", _read_pin_form())
+    elif command == "ury.ury_pos.override.set_my_pin":
+        frappe.local.ury_pin_request = ("set_my_pin", _read_pin_form())
+
+
+def _take_pin_request(endpoint_name) -> _PinInput:
+    form_credentials = _read_pin_form()
+    request_credentials = getattr(frappe.local, "ury_pin_request", None)
+    if request_credentials and request_credentials[0] == endpoint_name:
+        frappe.local.ury_pin_request = None
+        return request_credentials[1]
+    return form_credentials
+
+
+def _protect_pin_endpoint(*credential_positions):
+    """Keep the wire credentials out of the whitelisted signature and preserve direct Python calls."""
+    positional_indices = {position for position, _ in credential_positions}
+
+    def protect(endpoint):
+        @wraps(endpoint)
+        def guarded(*args, **kwargs):
+            try:
+                credentials = _take_pin_request(endpoint.__name__)
+                if "current_password" in kwargs:
+                    credentials.password = kwargs.pop("current_password")
+                for position, name in credential_positions:
+                    if position < len(args):
+                        setattr(credentials, name, args[position])
+                    if name in kwargs:
+                        setattr(credentials, name, kwargs.pop(name))
+                args = tuple(value for position, value in enumerate(args) if position not in positional_indices)
+                return endpoint(*args, credentials=credentials, **kwargs)
+            except Exception as error:
+                del args
+                kwargs.clear()
+                expected = (
+                    getattr(frappe, name, None) for name in (
+                        "ValidationError", "PermissionError", "AuthenticationError", "DoesNotExistError",
+                        "FrappeTypeError", "CSRFTokenError", "SessionExpired", "SessionStopped",
+                        "TooManyRequestsError", "DuplicateEntryError",
+                    )
                 )
-            )
-            if any(isinstance(cls, type) and isinstance(error, cls) for cls in expected):
-                # Developer mode also snapshots handled errors. Dispatcher frames still hold credentials.
+                if any(isinstance(cls, type) and isinstance(error, cls) for cls in expected):
+                    # Developer mode also snapshots handled errors. Dispatcher frames still hold credentials.
+                    error.skip_error_log = True
+                    raise
+
+            try:
+                _scrub_form_secrets()
+                frappe.clear_messages()
+                frappe.logger().error("Unexpected approval PIN endpoint failure in %s", endpoint.__name__)
+            except Exception:
+                # Error reporting must never expose the original request via a second exception.
+                pass
+            try:
+                _refuse_pin_provider_unavailable()
+            except frappe.ValidationError as error:
                 error.skip_error_log = True
                 raise
-
-        try:
-            _scrub_form_secrets()
-            frappe.clear_messages()
-            frappe.logger().error("Unexpected approval PIN endpoint failure in %s", endpoint.__name__)
-        except Exception:
-            # Error reporting must never expose the original request via a second exception.
-            pass
-        try:
-            _refuse_pin_provider_unavailable()
-        except frappe.ValidationError as error:
+            except Exception:
+                # Translation or message handling may be unavailable during a framework failure.
+                pass
+            error = frappe.ValidationError(f"{_PIN_UNAVAILABLE_MESSAGE} [POS-AUTH-UNAVAILABLE]")
             error.skip_error_log = True
-            raise
-        except Exception:
-            # Translation or message handling may be unavailable during a framework failure.
-            pass
-        error = frappe.ValidationError(f"{_PIN_UNAVAILABLE_MESSAGE} [POS-AUTH-UNAVAILABLE]")
-        error.skip_error_log = True
-        raise error
+            raise error
 
-    return guarded
+        # Frappe whitelist wraps this function, then frappe.call filters newargs by
+        # this signature. Only the before_request hook can scrub the original HTTP
+        # kwargs. An in-process frappe.call supplied explicit secrets owns those kwargs.
+        endpoint_signature = signature(endpoint)
+        guarded.__signature__ = endpoint_signature.replace(parameters=[
+            parameter for name, parameter in endpoint_signature.parameters.items()
+            if name != "credentials"
+        ])
+        return guarded
+
+    return protect
 
 
 _PIN_UNAVAILABLE_MESSAGE = "The approval PIN service is unavailable. Try again later."
@@ -1657,23 +1722,28 @@ def _sent_item_claim_amount(invoice, claim):
     return total
 
 
+def _over_short_claim_context(reference_doctype, reference_name, profile, claim):
+    if (
+        reference_doctype != "POS Opening Entry" or not reference_name
+        or claim.get("pos_opening_entry") != reference_name
+        or claim.get("pos_profile") != profile.name
+    ):
+        _refuse("POS-AUTH-CHANGED", "The till shift changed. Request approval again.", frappe.ValidationError)
+    from ury.ury_pos.till_controls import over_short_approval_context
+
+    return over_short_approval_context(
+        profile, reference_name, claim.get("counted_payments"),
+        period_end_date=claim.get("period_end_date"),
+    )
+
+
 def _claim_approval_amount(reference_doctype, reference_name, profile, privilege, claim):
     """Price the action against persisted FX and keep the signed claim in transaction units."""
+    if privilege == "over_short_close":
+        amount, _ = _over_short_claim_context(reference_doctype, reference_name, profile, claim)
+        return amount
     amount_field = _INVOICE_APPROVAL_AMOUNT_FIELDS.get(privilege, "amount")
     amount = _parse_optional_number(claim.get(amount_field))
-    if privilege == "over_short_close":
-        if (
-            reference_doctype != "POS Opening Entry" or not reference_name
-            or claim.get("pos_opening_entry") != reference_name
-            or claim.get("pos_profile") != profile.name
-        ):
-            _refuse("POS-AUTH-CHANGED", "The till shift changed. Request approval again.", frappe.ValidationError)
-        from ury.ury_pos.till_controls import over_short_approval_amount
-
-        return over_short_approval_amount(
-            profile, reference_name, claim.get("counted_payments"),
-            period_end_date=claim.get("period_end_date"),
-        )
     if privilege == "on_account_over_limit":
         # Credit is calculated and claimed in company currency at settlement.
         return _parse_optional_number(claim.get("proposed"))
@@ -1748,28 +1818,27 @@ def _claim_approval_amount(reference_doctype, reference_name, profile, privilege
     return company_approval_amount(invoice, amount, frappe) if amount is not None else None
 
 
-def _approval_claim_digest(claim_json: str, privilege: str, amount: float | None) -> str:
-    if privilege == "over_short_close":
-        # A changed shift balance must be approved against its new monetary limit.
-        claim_json = _canonical_claim_json({"claim": claim_json, "variance": amount})
+def _approval_claim_digest(claim_json: str, amount: float | None, variances) -> str:
+    if variances is not None:
+        claim_json = _canonical_claim_json({
+            "claim": claim_json, "variance": amount, "tenders": sorted(variances),
+        })
     return hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
 
 
 @frappe.whitelist(methods=["POST"])
-@_protect_pin_endpoint
+@_protect_pin_endpoint((3, "pin"))
 def authorise(
     pos_profile: str,
     privilege: str,
     approver: str,
-    pin: str,
     reference_doctype: str,
     reference_name: str,
     claim: dict[str, Any] | str,
+    *,
+    credentials: _PinInput,
 ) -> dict[str, Any]:
     """Verify an eligible manager's PIN and mint a single-use 120 s approval token."""
-    credentials = _PinInput(pin)
-    del pin
-    _scrub_form_secrets()
 
     _validate_privilege(privilege)
     parsed_claim = _parse_claim(claim)
@@ -1824,8 +1893,12 @@ def authorise(
             frappe.PermissionError,
         )
 
-    amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
-    claim_hash = _approval_claim_digest(claim_json, privilege, amt)
+    variances = None
+    if privilege == "over_short_close":
+        amt, variances = _over_short_claim_context(reference_doctype, reference_name, profile, parsed_claim)
+    else:
+        amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
+    claim_hash = _approval_claim_digest(claim_json, amt, variances)
     matching_rules = _matching_authorise_rules(
         approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
     )
@@ -2089,6 +2162,7 @@ def consume(
     claim: dict[str, Any] | str,
     *,
     approval_amount: float | None = None,
+    approval_variances=None,
     reference_doctype: str = "POS Invoice",
 ):
     """Atomically consume a single-use approval token bound to session, check, and claim.
@@ -2180,9 +2254,16 @@ def consume(
         )
 
     amt = approval_amount
-    if privilege == "over_short_close" and amt is None:
-        amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
-    expected_claim_hash = _approval_claim_digest(claim_json, privilege, amt)
+    variances = None
+    if privilege == "over_short_close":
+        variances = approval_variances
+        if amt is None or variances is None:
+            calculated_amount, variances = _over_short_claim_context(
+                reference_doctype, reference_name, profile, parsed_claim,
+            )
+            if amt is None:
+                amt = calculated_amount
+    expected_claim_hash = _approval_claim_digest(claim_json, amt, variances)
     if not hmac.compare_digest(str(approved.get("claim_hash") or ""), expected_claim_hash):
         _refuse(
             "POS-AUTH-CHANGED",
@@ -2269,7 +2350,10 @@ def require(
     """Return None when caller may act alone, consumed approval with token, or raise POS-AUTH-REQUIRED."""
     _validate_privilege(privilege)
     if token:
-        return consume(token, privilege, pos_profile, reference_name, claim, approval_amount=amount)
+        return consume(
+            token, privilege, pos_profile, reference_name, claim,
+            approval_amount=amount, reference_doctype=reference_doctype,
+        )
 
     parsed_claim = _parse_claim(claim)
     eff_pct = percent if percent is not None else _parse_optional_number(parsed_claim.get("percent"))
@@ -2320,16 +2404,13 @@ def my_pin_status() -> dict[str, bool]:
 
 
 @frappe.whitelist(methods=["POST"])
-@_protect_pin_endpoint
-def set_my_pin(password: str, pin: str) -> dict[str, Any]:
+@_protect_pin_endpoint((0, "password"), (1, "pin"))
+def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
     """Enrol or update the signed-in user's own approval PIN after password re-entry.
 
     P0 #2: Never allows `AuthenticationError` (401) to escape and terminate the live till session;
     counts failed password checks durably in DB + Redis and raises `ValidationError` (417).
     """
-    credentials = _PinInput(pin, password)
-    del pin, password
-    _scrub_form_secrets()
     user = frappe.session.user
     if not user or user in ("Administrator", "Guest"):
         _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts only.", frappe.PermissionError)
