@@ -30,17 +30,7 @@ export async function printOrder({
       throw new Error('QZ host is not set')
     }
     const html = await getInvoicePrintHtml(orderId, format as string, letter_head)
-    try {
-      await printWithQz(qz_host, html)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (/sign|init|uninitialized|private key|key/i.test(message)) {
-        throw new Error(
-          'QZ printing is not configured. Set VITE_QZ_SIGN_KEY or provide serve/privateKey.ts, then rebuild.'
-        )
-      }
-      throw error
-    }
+    await printWithQz(qz_host, html)
     await updatePrintStatus(orderId)
     return 'qz'
   }

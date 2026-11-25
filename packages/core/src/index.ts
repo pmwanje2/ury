@@ -46,7 +46,6 @@ export type { CurrencyInfo } from './format';
 export {
   ESC_POS_DRAWER_KICK_PIN_2,
   ESC_POS_DRAWER_KICK_PIN_5,
-  initPrinting,
   loadQzPrinter,
   disconnectQzPrinter,
   printWithQz,

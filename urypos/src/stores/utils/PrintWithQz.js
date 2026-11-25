@@ -1,13 +1,7 @@
 import axios from "axios";
 import { loadQz } from "../../../../packages/core/src/print/qz-runtime";
-import { privateKey } from "../../../privateKey";
-
-import {
-    KEYUTIL,
-    KJUR,
-    stob64,
-    hextorstr,
-} from 'jsrsasign';
+import { configureQzSignature } from "../../../../packages/core/src/print/qz-signing";
+import frappe from "../frappeSdk.js";
 
 export async function loadQzPrinter(host){
     const qz = await loadQz();
@@ -50,21 +44,7 @@ export function disconnectQzPrinter(){
 export async function printWithQz(host,htmlToPrint){
     const qz = await loadQz();
     return new Promise((resolve,reject)=>{
-        qz.security.setSignatureAlgorithm("SHA512"); // Since 2.1
-        qz.security.setSignaturePromise(function(toSign) {
-            return function(resolve) {
-                try {
-                    var pk = KEYUTIL.getKey(privateKey);
-                    var sig = new KJUR.crypto.Signature({"alg": "SHA512withRSA"});  // Use "SHA1withRSA" for QZ Tray 2.0 and older
-                    sig.init(pk); 
-                    sig.updateString(toSign);
-                    var hex = sig.sign();
-                    resolve(stob64(hextorstr(hex)));
-                } catch (err) {
-                    reject(err);
-                }
-            };
-        });
+        configureQzSignature(qz, (method, args) => frappe.call().post(method, args));
 
         const printing=()=>{
             qz.printers.getDefault()

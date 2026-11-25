@@ -6,6 +6,7 @@ Refusal ids (closed, append-only):
   a reserved character.
 - URY_FLOOR_PROFILE_NOT_PAIRABLE (ValidationError): the POS Profile name cannot be carried
   in the signed device cookie.
+- URY_FLOOR_PIN_POLICY_CONFLICT (ValidationError): eligible profiles have disjoint PIN lengths.
 - URY_FLOOR_PIN_ISSUE_EXHAUSTED (ValidationError): no free PIN was found after retries.
 - URY_FLOOR_PIN_LOGIN_DISABLED (ValidationError): the POS Profile has floor PIN login off or is
   disabled, or no POS Profile has floor PIN login on.
@@ -156,7 +157,7 @@ def pair_device(pos_profile, label):
 	profile.add_comment("Info", f"Floor tablet '{escape(label)}' paired by {escape(frappe.session.user)}")
 
 
-def _managed_profile(user=None):
+def _pin_profiles():
 	# Authorization first, so profile state is never disclosed to a caller without write.
 	if not frappe.has_permission("POS Profile", "write"):
 		_not_permitted("A manager must issue a PIN to eligible floor staff.")
@@ -164,21 +165,29 @@ def _managed_profile(user=None):
 	profiles = [p for p in (frappe.get_doc("POS Profile", row.name) for row in rows) if _enabled(p)]
 	if not profiles:
 		_login_disabled("No POS Profile has floor PIN sign-in turned on.")
-	profiles = [p for p in profiles if frappe.has_permission("POS Profile", "write", p)]
-	if not profiles:
+	managed = [profile for profile in profiles if frappe.has_permission("POS Profile", "write", profile)]
+	if not managed:
 		_not_permitted("A manager must issue a PIN to eligible floor staff.")
-	if user is None:
-		return profiles[0]
-	for profile in profiles:
-		if _eligible(user, profile):
-			return profile
-	_refuse("URY_FLOOR_PIN_TARGET_INELIGIBLE", "This user cannot get a floor PIN.", frappe.ValidationError)
+	return profiles, managed
 
 
 @frappe.whitelist(methods=["POST"])
 def issue_pin(user):
-	profile = _managed_profile(user)
-	length = floor_pin_policy(profile)["max_length"]
+	profiles, managed = _pin_profiles()
+	eligible = [profile for profile in profiles if _eligible(user, profile)]
+	managed_names = {profile.name for profile in managed}
+	if not any(profile.name in managed_names for profile in eligible):
+		_refuse("URY_FLOOR_PIN_TARGET_INELIGIBLE", "This user cannot get a floor PIN.", frappe.ValidationError)
+
+	# One PIN hash is shared by all eligible tablets. Use the longest common length.
+	policies = [floor_pin_policy(profile) for profile in eligible]
+	length = min(policy["max_length"] for policy in policies)
+	if length < max(policy["min_length"] for policy in policies):
+		_refuse(
+			"URY_FLOOR_PIN_POLICY_CONFLICT",
+			"Align the floor PIN length settings for this staff member’s eligible POS profiles before issuing a PIN.",
+			frappe.ValidationError,
+		)
 	previous = frappe.db.get_value("User", user, "custom_floor_pin_hash")
 	for _ in range(20):
 		pin = f"{secrets.randbelow(10 ** length):0{length}d}"
@@ -199,7 +208,8 @@ def issue_pin(user):
 
 @frappe.whitelist(methods=["GET"])
 def pin_staff():
-	profile = _managed_profile()
+	_, managed = _pin_profiles()
+	profile = managed[0]
 	return [
 		{
 			"user": user,

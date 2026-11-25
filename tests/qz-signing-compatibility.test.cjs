@@ -1,47 +1,46 @@
-// Execute the unchanged, Git-bound QZ callback without loading printer transport or private-key modules.
-// Ported from the version-2 fork (f6c00c41, b2ce8b35); the jsrsasign version follows urypos/package.json.
+// Exercise the shared POS signer and Desk callback against a synthetic signing RPC.
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
-const { createRequire } = require('node:module');
-const { createHash, generateKeyPairSync, sign, verify } = require('node:crypto');
+const { generateKeyPairSync, sign, verify } = require('node:crypto');
 const vm = require('node:vm');
 const root = resolve(__dirname, '..');
-const localRequire = createRequire(resolve(root, 'urypos/package.json'));
-const declared = JSON.parse(readFileSync(resolve(root, 'urypos/package.json'))).dependencies.jsrsasign;
+const signMethod = 'ury.ury.api.ury_print.signature_promise';
 
-for (const keyType of ['pkcs8', 'pkcs1']) {
-test(`actual QZ RSA-SHA512 callback preserves deterministic signatures with synthetic ${keyType} on the locked jsrsasign`, () => {
-  const source = readFileSync(resolve(root, 'urypos/src/stores/utils/PrintWithQz.js'));
-  const blob = createHash('sha1').update(`blob ${source.length}\0`).update(source).digest('hex');
-  assert.equal(blob, 'ba56045434e381f96fb86cfda5a8fcd373bb8b0f');
-  assert.match(declared, /^\d+\.\d+\.\d+$/);
-  assert.equal(localRequire('jsrsasign/package.json').version, declared);
-  const marker = 'qz.security.setSignaturePromise(';
-  const text = source.toString();
-  assert.equal(text.split(marker).length, 2);
-  const start = text.indexOf(marker) + marker.length;
-  const end = text.indexOf('\n        });', start);
-  assert.ok(end > start);
-  const expression = text.slice(start, end) + '\n        }';
-  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const syntheticKey = privateKey.export({ type: keyType, format: 'pem' });
-  const { KEYUTIL, KJUR, stob64, hextorstr } = localRequire('jsrsasign');
-  const callback = vm.runInNewContext(`(${expression})`, {
-    KEYUTIL, KJUR, stob64, hextorstr, privateKey: syntheticKey,
-    reject(error) { throw error; },
-  }, { timeout: 1000 });
-  const challenge = 'synthetic QZ challenge: independent RSA-SHA512 verification';
-  let encoded;
-  callback(challenge)((value) => { encoded = value; });
-  assert.equal(typeof encoded, 'string');
-  const signature = Buffer.from(encoded, 'base64');
-  assert.ok(verify('RSA-SHA512', Buffer.from(challenge), publicKey, signature));
-  assert.deepEqual(signature, sign('RSA-SHA512', Buffer.from(challenge), privateKey));
-  assert.equal(verify('RSA-SHA512', Buffer.from(challenge + '!'), publicKey, signature), false);
-  const tampered = Buffer.from(signature);
-  tampered[0] ^= 1;
-  assert.equal(verify('RSA-SHA512', Buffer.from(challenge), publicKey, tampered), false);
-});
+for (const client of ['shared POS', 'Desk']) {
+  test(`${client} uses the guarded QZ RPC and preserves RSA-SHA512 signatures`, async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    let allowed = true;
+    let callback;
+    let requests = 0;
+    const bridge = { security: {
+      setSignatureAlgorithm(algorithm) { assert.equal(algorithm, 'SHA512'); },
+      setSignaturePromise(signer) { callback = signer; },
+    } };
+    async function post(method, { toSign }) {
+      assert.equal(method, signMethod);
+      requests += 1;
+      if (!allowed) throw new Error('Not permitted');
+      return { message: sign('RSA-SHA512', Buffer.from(toSign), privateKey).toString('base64') };
+    }
+
+    if (client === 'shared POS') {
+      const { configureQzSignature } = await import('../packages/core/src/print/qz-signing.ts');
+      configureQzSignature(bridge, post);
+    } else {
+      const frappe = { call(options) {
+        post(options.method, options.args).then(options.callback, options.error);
+      } };
+      const source = readFileSync(resolve(root, 'ury/public/js/sign-message.js'), 'utf8');
+      vm.runInNewContext(source, { qz: bridge, frappe, console: { error() {} } });
+    }
+
+    const challenge = 'synthetic QZ challenge';
+    const encoded = await new Promise(callback(challenge));
+    assert.equal(verify('RSA-SHA512', Buffer.from(challenge), publicKey, Buffer.from(encoded, 'base64')), true);
+    allowed = false;
+    await assert.rejects(new Promise(callback(challenge)), /Not permitted/);
+    assert.equal(requests, 2);
+  });
 }

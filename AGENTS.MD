@@ -84,7 +84,7 @@ ury/
 │   │   ├── pos_extend.js             ← Injected on /point-of-sale page
 │   │   ├── restrict_qty_edit_pos.js  ← Prevents qty edit in legacy POS
 │   │   ├── ury_pos_kot.js            ← KOT related JS
-│   │   └── sign-message.js / jsrsasign-all-min.js  ← QZ Tray signing
+│   │   └── sign-message.js  ← QZ Tray signing client
 │   ├── pos/              ← Built React POS assets (output of `cd pos && yarn build`)
 │   ├── mosaic/        ← Built KOT display assets
 │   └── urypos/           ← Built legacy POS assets
@@ -184,7 +184,7 @@ All frontends are served as Frappe web pages. Route rules in `hooks.py` (`websit
 
 ### QZ Tray
 - Thermal printing uses QZ Tray (desktop app). The POS sends signed print jobs.
-- Signing keys: `public/js/sign-message.js` + `jsrsasign-all-min.js`
+- Signing: `public/js/sign-message.js` calls the guarded site endpoint.
 - QZ host is configured per POS Profile (`qz_host` field).
 
 ---
@@ -200,7 +200,7 @@ All frontends are served as Frappe web pages. Route rules in `hooks.py` (`websit
 
 Shared code for the React apps lives in `packages/`:
 - `@ury/ui` — components (`import { Button, Dialog, ... } from '@ury/ui'`), theme tokens (`@import '@ury/ui/styles/theme.css'`), Tailwind preset (`presets: [preset]` from `@ury/ui/tailwind-preset`). Consumer Tailwind configs must include `"../packages/ui/src/**/*.{ts,tsx}"` in `content`.
-- `@ury/core` — frappe client (`call`/`db`/`auth`), auth/role helpers, `storage`, formatting, QZ print transport. Printing requires `initPrinting({ signKey })` at app startup; the signing key stays in the consuming app (never in `packages/`).
+- `@ury/core` — frappe client (`call`/`db`/`auth`), auth/role helpers, `storage`, formatting, QZ print transport. Printing requests signatures from the site’s authenticated QZ endpoint.
 
 Build commands:
 ```bash

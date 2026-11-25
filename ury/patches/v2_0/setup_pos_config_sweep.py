@@ -3,7 +3,7 @@
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
-from ury.ury_pos.covers import DEFAULT_MAX_COVERS, MAX_STORED_COVERS
+from ury.ury_pos.covers import COVER_WHITESPACE, DEFAULT_MAX_COVERS, MAX_STORED_COVERS
 from ury.ury_pos.floor_pin import FLOOR_PIN_SETTINGS
 
 DEFAULT_QZ_ROLES = (
@@ -49,12 +49,19 @@ def _convert_legacy_covers():
     frappe.db.sql("""
         UPDATE `tabPOS Invoice`
         SET no_of_pax = CASE
-          WHEN TRIM(custom_legacy_covers) REGEXP '^[+]?[0-9]+([.]0+)?$'
-          THEN CASE WHEN CAST(TRIM(custom_legacy_covers) AS DECIMAL(65, 0)) <= %(max_covers)s
-                    THEN CAST(TRIM(custom_legacy_covers) AS DECIMAL(65, 0)) ELSE 0 END
+          WHEN REGEXP_REPLACE(custom_legacy_covers, %(edge_whitespace)s, '') REGEXP '^[+]?[0-9]+([.]0+)?$'
+          THEN CASE
+            WHEN CAST(REGEXP_REPLACE(custom_legacy_covers, %(edge_whitespace)s, '') AS DECIMAL(65, 0))
+                 <= %(max_covers)s
+            THEN CAST(REGEXP_REPLACE(custom_legacy_covers, %(edge_whitespace)s, '') AS DECIMAL(65, 0))
+            ELSE 0
+          END
           ELSE 0
         END
-    """, {"max_covers": MAX_STORED_COVERS})
+    """, {
+        "edge_whitespace": f"^[{COVER_WHITESPACE}]+|[{COVER_WHITESPACE}]+$",
+        "max_covers": MAX_STORED_COVERS,
+    })
 
 
 def ensure_employee_job_code():

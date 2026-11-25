@@ -1,6 +1,7 @@
 import { loadQz } from './qz-runtime';
 import axios from 'axios';
-import { KEYUTIL, KJUR, stob64, hextorstr } from 'jsrsasign';
+import { call } from '../frappe/client';
+import { configureQzSignature } from './qz-signing';
 
 export const ESC_POS_DRAWER_KICK_PIN_2 = '1b700019fa';
 export const ESC_POS_DRAWER_KICK_PIN_5 = '1b700119fa';
@@ -12,37 +13,6 @@ export interface KickDrawerQzResult {
   status: 'Sent';
   hex: string;
   printer: QzPrinterTarget;
-}
-
-let injectedSignKey: string | null = null;
-
-export function initPrinting(opts: { signKey: string }) {
-  injectedSignKey = opts.signKey;
-}
-
-function ensureSignKey(): string {
-  if (!injectedSignKey) {
-    throw new Error(
-      'QZ printing has not been initialized. Call initPrinting({ signKey: ... }) before using printWithQz.'
-    );
-  }
-  return injectedSignKey;
-}
-
-function configureQzSignature(qz: any, signKey: string): void {
-  qz.security.setSignatureAlgorithm('SHA512');
-  qz.security.setSignaturePromise((toSign: string) => (resolve: (sig: string) => void, reject: (err?: string) => void) => {
-    try {
-      const pk = KEYUTIL.getKey(signKey);
-      const sig = new KJUR.crypto.Signature({ alg: 'SHA512withRSA' });
-      sig.init(pk);
-      sig.updateString(toSign);
-      const hex = sig.sign();
-      resolve(stob64(hextorstr(hex)));
-    } catch (err) {
-      reject(String(err));
-    }
-  });
 }
 
 export function resolveDrawerKickHex(opts?: {
@@ -86,10 +56,9 @@ export function disconnectQzPrinter(): void {
 }
 
 export async function printWithQz(host: string, htmlToPrint: string): Promise<void> {
-  const signKey = ensureSignKey();
   const qz = await loadQz();
 
-  configureQzSignature(qz, signKey);
+  configureQzSignature(qz, call.post);
 
   const printing = async () => {
     const printer = await qz.printers.getDefault();
@@ -115,9 +84,7 @@ export async function kickDrawerQz(
   const hex = resolveDrawerKickHex({ hex: hexCommand, pin });
   const qz = await loadQz();
 
-  if (injectedSignKey) {
-    configureQzSignature(qz, injectedSignKey);
-  }
+  configureQzSignature(qz, call.post);
 
   const sendPulse = async (): Promise<KickDrawerQzResult> => {
     const target: QzPrinterTarget = printerName || (await qz.printers.getDefault());

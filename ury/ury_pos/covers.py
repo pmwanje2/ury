@@ -8,6 +8,7 @@ import frappe
 # Legacy clients limited entry to 50. Profiles can override it, including 0 for no cap.
 DEFAULT_MAX_COVERS = 50
 MAX_STORED_COVERS = 2_147_483_647
+COVER_WHITESPACE = " \t\r\n\v\f"
 
 
 def covers_config(profile):
@@ -32,7 +33,7 @@ def parse_covers(value):
     if isinstance(value, float) and math.isfinite(value) and value.is_integer():
         return int(value)
     if isinstance(value, str):
-        text = value.strip()
+        text = value.strip(COVER_WHITESPACE)
         if len(text) <= 64 and re.fullmatch(r"\+?[0-9]+(?:\.0+)?", text):
             return int(text.partition(".")[0])
     return None

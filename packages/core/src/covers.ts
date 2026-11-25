@@ -6,9 +6,8 @@ export interface CoversProfile {
 const MAX_STORED_COVERS = 2_147_483_647;
 
 export function normalizeCovers(value: unknown): number {
-  const numeric = typeof value === 'string' && /^\+?[0-9]+(?:\.0+)?$/.test(value.trim())
-    ? Number(value)
-    : value;
+  const text = typeof value === 'string' ? value.replace(/^[ \t\r\n\v\f]+|[ \t\r\n\v\f]+$/g, '') : null;
+  const numeric = text !== null && text.length <= 64 && /^\+?[0-9]+(?:\.0+)?$/.test(text) ? Number(text) : value;
   return typeof numeric === 'number' && Number.isInteger(numeric)
     && numeric >= 1 && numeric <= MAX_STORED_COVERS ? numeric : 1;
 }
