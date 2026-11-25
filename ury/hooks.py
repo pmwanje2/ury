@@ -203,6 +203,7 @@ jinja = {
 # site (every CI run) gets URY's Custom Field fixtures but none of its
 # DocPerms. See ury.install.ensure_role_permissions for the full write-up.
 after_install = "ury.install.after_install"
+after_app_install = "ury.install.after_app_install"
 boot_session = "ury.ury.boot_insights.boot_session"
 
 # Uninstallation
@@ -258,6 +259,7 @@ after_migrate = [
     # Role Permissions, User Permissions and Data Import, which site governance depends on.
     "ury.ury.desk_islands.after_migrate",
     "ury.ury.brief_admin.ensure_default",
+    "ury.patches.v2_0.setup_pos_config_sweep.ensure_employee_job_code",
 ]
 
 # The "URY Sales Plan" Workflow fixture (ury/ury/workflow/ury_sales_plan/ury_sales_plan.json)
@@ -363,7 +365,10 @@ doc_events = {
         # the cashier can open the shift before the Order Taker submitted.
         "before_submit": "ury.ury.hooks.pos_opening.update_daily_checklists",
         "on_submit": "ury.ury.hooks.ury_pos_opening_entry.reset_item_availability_on_open",
-        "before_insert":"ury.ury.api.ury_kot_order_number.set_last_invoice_in_pos_open",
+        "before_insert": [
+            "ury.ury.api.ury_kot_order_number.set_last_invoice_in_pos_open",
+            "ury.ury_pos.timeclock.stamp_opening_job_code",
+        ],
         },
     "POS Closing Entry": {
         # Whole-till consolidation (POS Invoice mode): before_validate clears
@@ -374,6 +379,7 @@ doc_events = {
         "before_save": "ury.ury.hooks.ury_pos_closing_entry.before_save",
         "validate":[
             "ury.ury.hooks.ury_pos_closing_entry.validate",
+            "ury.ury_pos.timeclock.stamp_closing_job_code",
             "ury.ury.utils.stock_count_gate.validate_pos_closing_entry",
             # T5 / I-10: session-scoped closing reconciliation. Runs AFTER
             # `ury_pos_closing_entry.validate`, which is what populates

@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import { canRecallKot, recentServedQuery } from "./kitchen-actions.js";
+import { canRecallKot } from "./kitchen-actions.js";
 import { createStationPrinter } from "./station-print.js";
 import enLocale from "../locales/en.json";
 import arLocale from "../locales/ar.json";
@@ -140,9 +140,6 @@ describe("G26: KDS Expo Mode, All-Day Summary, Rush/VIP, Course Grouping & Confi
     const now = new Date("2026-11-24T14:00:00");
     expect(canRecallKot(served25MinAgo, now, 15)).toBe(false);
     expect(canRecallKot(served25MinAgo, now, 30)).toBe(true);
-
-    const q30 = recentServedQuery("Branch A", "Kitchen", now, 30);
-    expect(q30.filters.modified).toEqual([">=", "2026-11-24 13:30:00"]);
 
     server.recallWindowMinutes = 30;
     server.kots = [makeKot()];

@@ -16,32 +16,8 @@ export function canRecallKot(kot, now, windowMinutes = 15) {
   const productionMinutes = Number(kot.production_time);
   const creation = new Date(kot.creation.replace(" ", "T")).getTime();
   const elapsed = now.getTime() - (creation + productionMinutes * 60000);
-  const limitMs = normalizeRecallWindowMinutes(windowMinutes) * 60000;
+  const limitMs = normalizeRecallWindowMinutes(kot.recall_window_minutes ?? windowMinutes) * 60000;
   return Number.isFinite(productionMinutes) && productionMinutes >= 0 && elapsed >= 0 && elapsed <= limitMs;
-}
-
-export function recentServedQuery(branch, production, now, windowMinutes = 15) {
-  const limitMs = normalizeRecallWindowMinutes(windowMinutes) * 60000;
-  const cutoff = new Date(now.getTime() - limitMs);
-  // Frappe datetimes are site-local, not UTC. `now` is adjusted to the clock
-  // returned by kot_list, so a browser in another timezone uses the same window.
-  const localCutoff = new Date(cutoff.getTime() - cutoff.getTimezoneOffset() * 60000)
-    .toISOString().slice(0, 19).replace("T", " ");
-  return {
-    doctype: "URY KOT",
-    fields: ["name", "invoice", "restaurant_table", "table_takeaway", "order_no", "order_status", "creation", "production_time"],
-    filters: {
-      // An all-branch admin board has no branch; a branch = null filter would match nothing.
-      ...(branch ? { branch } : {}),
-      ...(production ? { production } : {}),
-      order_status: "Served",
-      docstatus: 1,
-      type: ["not in", ["Cancelled", "Partially cancelled"]],
-      modified: [">=", localCutoff],
-    },
-    order_by: "modified desc",
-    limit_page_length: 100,
-  };
 }
 
 export function sortKotsByPriority(kots) {

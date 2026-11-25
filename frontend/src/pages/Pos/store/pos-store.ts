@@ -1,3 +1,4 @@
+import { normalizeCovers } from '@ury/core/covers';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
@@ -560,7 +561,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   setSelectedItem: (item) => set({ selectedItem: item }),
   setSelectedAggregator: (aggregator) => set({ selectedAggregator: aggregator }),
   setOrderComment: (comment: string) => set({ orderComment: comment }),
-  setNoOfPax: (pax: number) => set({ noOfPax: pax }),
+  setNoOfPax: (pax: number) => set({ noOfPax: normalizeCovers(pax) }),
 
   processPayment: async (paymentMode: string, amount: number) => {
     try {
@@ -707,7 +708,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           customerSource: 'order',
           isUpdatingOrder: true,
           orderId: order.name,
-          noOfPax: order.no_of_pax || 1,
+          noOfPax: normalizeCovers(order.no_of_pax),
           lastModifiedTime: order.modified || null,
           orderComment: order.custom_comments || '',
         });

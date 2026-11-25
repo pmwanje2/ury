@@ -1330,6 +1330,8 @@ def getPosProfile(pos_profile=None):
     raw_block_open = pos_profiles.get("custom_block_clock_out_with_open_work")
     block_clock_out_with_open_work = 1 if raw_block_open in (None, "") else cint(raw_block_open)
 
+    from ury.ury_pos.covers import covers_config
+
     invoice_details = {
         "pos_profile": pos_profile_name,
         "branch": branch,
@@ -1411,6 +1413,7 @@ def getPosProfile(pos_profile=None):
         "offline_payment_modes": offline_payment_modes,
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
         **_drawer_kick_profile_fields(pos_profiles),
+        **covers_config(pos_profiles),
         **get_default_customer_config(pos_profiles),
         **_safe_order_type_tax_config(pos_profiles),
     }
@@ -1481,8 +1484,11 @@ def getPosProfileFull(pos_profile):
     block_clock_out_with_open_work = 1 if raw_block_open in (None, "") else cint(raw_block_open)
     from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
 
+    from ury.ury_pos.covers import covers_config
+
     return {
         "name": profile.name,
+        **covers_config(profile),
         "owner": profile.owner,
         "creation": profile.creation,
         "modified": profile.modified,

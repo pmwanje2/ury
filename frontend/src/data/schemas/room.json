@@ -12,9 +12,7 @@
     },
     "room_type": {
       "type": "string",
-      "title": "Room Type",
-      "enum": ["Indoor", "Outdoor", "Rooftop", "Private Dining", "Bar Area"],
-      "default": "Indoor"
+      "title": "Room Type"
     },
     "branch": {
       "type": "string",

@@ -144,6 +144,7 @@
     "failed_process_order": "فشل في معالجة الطلب",
     "no_active_order": "لم يتم العثور على طلب نشط لهذه الطاولة",
     "qz_host_not_set": "مضيف QZ غير محدد",
+    "printer_signing_refused": "رُفض توقيع الطباعة. تحقّق من صلاحيات الطباعة وحاول مرة أخرى.",
     "print_failed": "فشلت الطباعة: {{reason}}",
     "invalid_discount": "يرجى إدخال قيمة خصم صحيحة",
     "discount_exceeds_max": "لا يمكن أن تتجاوز نسبة الخصم 100٪",

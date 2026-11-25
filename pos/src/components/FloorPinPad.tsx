@@ -2,7 +2,7 @@ import { FormEvent, useRef, useState } from 'react';
 import { auth, call, parseFrappeError } from '@ury/core';
 import { Button, Input } from '@ury/ui';
 import { t } from '../i18n';
-import { clearFloorLogoutFailureMarker, setFloorSessionMarker } from '../lib/floor-session';
+import { clearFloorLogoutFailureMarker, getFloorPad, setFloorSessionMarker } from '../lib/floor-session';
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
@@ -28,6 +28,8 @@ function signedIn() {
 }
 
 export default function FloorPinPad({ offline = false }: { offline?: boolean }) {
+  const { min_length: minLength = 4, max_length: maxLength = 4 } = getFloorPad();
+  const fixedLength = minLength === maxLength;
   const [pin, setPin] = useState('');
   const pinRef = useRef('');
   const [usernameForm, setUsernameForm] = useState(false);
@@ -58,17 +60,20 @@ export default function FloorPinPad({ offline = false }: { offline?: boolean }) 
     }
   };
 
+  const confirmPin = (value: string) => {
+    if (busyRef.current || value.length < minLength || value.length > maxLength) return;
+    busyRef.current = true;
+    setBusy(true);
+    void submitPin(value);
+  };
+
   const press = (digit: string) => {
-    if (busyRef.current || pinRef.current.length >= 4) return;
+    if (busyRef.current || pinRef.current.length >= maxLength) return;
     const next = `${pinRef.current}${digit}`;
     setError('');
     pinRef.current = next;
     setPin(next);
-    if (next.length === 4) {
-      busyRef.current = true;
-      setBusy(true);
-      void submitPin(next);
-    }
+    if (fixedLength && next.length === maxLength) confirmPin(next);
   };
 
   const submitUsername = async (event: FormEvent<HTMLFormElement>) => {
@@ -99,8 +104,10 @@ export default function FloorPinPad({ offline = false }: { offline?: boolean }) 
         {!usernameForm ? (
           <div className="space-y-6 text-center">
             <h1 className="text-2xl font-semibold text-gray-900">{t('floor_pin.title')}</h1>
-            <p className="text-gray-600">{t('floor_pin.pin_prompt')}</p>
-            <div aria-label="4-digit PIN" className="h-12 text-4xl tracking-widest text-gray-900">
+            <p className="text-gray-600">
+              {fixedLength && maxLength === 4 ? t('floor_pin.pin_prompt') : t('floor_pin.enter_staff_pin')}
+            </p>
+            <div aria-label={fixedLength && maxLength === 4 ? '4-digit PIN' : t('floor_pin.enter_staff_pin')} className="h-12 text-4xl tracking-widest text-gray-900">
               {'●'.repeat(pin.length)}
             </div>
             <div className="grid grid-cols-3 gap-3" dir="ltr">
@@ -127,6 +134,11 @@ export default function FloorPinPad({ offline = false }: { offline?: boolean }) 
                 ⌫
               </Button>
             </div>
+            {!fixedLength && (
+              <Button type="button" disabled={busy || pin.length < minLength} onClick={() => confirmPin(pinRef.current)}>
+                {t('floor_pin.sign_in')}
+              </Button>
+            )}
             {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
             <Button type="button" variant="link" onClick={() => { setUsernameForm(true); clearPin(); setError(''); }}>
               {t('floor_pin.username_fallback')}

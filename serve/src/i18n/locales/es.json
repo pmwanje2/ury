@@ -202,6 +202,7 @@
     "failed_process_order": "Error al procesar el pedido",
     "no_active_order": "No hay un pedido activo para esta mesa",
     "qz_host_not_set": "El host de QZ no está configurado",
+    "printer_signing_refused": "Se rechazó la firma de impresión. Comprueba tus permisos de impresión y vuelve a intentarlo.",
     "print_failed": "Falló la impresión: {{reason}}",
     "invalid_discount": "Ingresa un valor de descuento válido",
     "discount_exceeds_max": "El descuento porcentual no puede superar el 100%",

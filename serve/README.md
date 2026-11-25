@@ -49,7 +49,7 @@ Open `https://<site>/ury/serve/` (trailing slash matches the PWA scope).
 ## Known limitations
 
 - Offline: the service worker shows `public/offline.html`. Orders are **not** queued or replayed offline.
-- QZ Tray: optional. Set `VITE_QZ_SIGN_KEY` or a local `privateKey.ts` value, then rebuild. Do not commit private keys. Host and print type come from the POS Profile (`qz_host`, `print_type`). Without a signing key, QZ throws a clear configuration error; network and socket (`print_pos_page`) transports still work.
+- QZ Tray uses the POS Profile host and the site’s QZ signing RPC. Configure the private key on the site and the allowed roles in POS Print Settings. The public certificate is served at `/assets/ury/files/cert.pem`.
 - Printer health: requires the optional `ury_printer_watch` app. When missing, OperationalTools shows an amber unavailable state; print job lists still work.
 - Takeaway: requires a billing role (`role_allowed_for_billing` / `canSettlePayment`). Deep links without that role are blocked.
 - Uncertain / failed sync: Serve keeps the local draft and **blocks resend**. Table orders can explicitly **Reload from server** (replaces draft only after a successful fetch). Takeaway cannot safely reload — staff must verify in POS, then **Leave without resending** (no blind gate reset).

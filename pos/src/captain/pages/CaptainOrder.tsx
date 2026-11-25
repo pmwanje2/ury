@@ -1,3 +1,4 @@
+import { coversLimit } from '@ury/core/covers';
 import { qtyReductionMessage } from '../../lib/qty-reduction-message';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -607,7 +608,7 @@ export default function CaptainOrder() {
   };
 
   const MIN_PAX = 1;
-  const MAX_PAX = 50;
+  const maxCovers = coversLimit(posProfile, tableOrderType);
 
   const groupSectionLines = (lines: OrderDeltaLine[]) => {
     const parents: OrderDeltaLine[] = [];
@@ -683,11 +684,11 @@ export default function CaptainOrder() {
             </Button>
             <span className="w-6 text-center">{noOfPax}</span>
             <Button
-              onClick={() => setNoOfPax(Math.min(MAX_PAX, noOfPax + 1))}
+              onClick={() => setNoOfPax(noOfPax + 1)}
               variant="outline"
               size="icon"
               className="w-8 h-8 rounded-full"
-              disabled={isInteractionDisabled || noOfPax >= MAX_PAX}
+              disabled={isInteractionDisabled || noOfPax >= maxCovers}
             >
               +
             </Button>

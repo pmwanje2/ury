@@ -202,6 +202,7 @@
     "failed_process_order": "Failed to process order",
     "no_active_order": "No active order found for this table",
     "qz_host_not_set": "QZ host is not set",
+    "printer_signing_refused": "Printer signing was refused. Check your printing permissions and try again.",
     "print_failed": "Print failed: {{reason}}",
     "invalid_discount": "Please enter a valid discount value",
     "discount_exceeds_max": "Percentage discount cannot exceed 100%",

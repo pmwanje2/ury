@@ -46,7 +46,6 @@ export type { CurrencyInfo } from './format';
 export {
   ESC_POS_DRAWER_KICK_PIN_2,
   ESC_POS_DRAWER_KICK_PIN_5,
-  initPrinting,
   loadQzPrinter,
   disconnectQzPrinter,
   printWithQz,
@@ -54,6 +53,7 @@ export {
   kickDrawerQz,
 } from './print/qz';
 export type { DrawerPin, QzPrinterTarget, KickDrawerQzResult } from './print/qz';
+export { QzSigningRefusedError } from './print/qz-signing';
 export {
   MERGED_POS_INVOICE_PRINT_FORMAT,
   UNSAFE_POS_INVOICE_PRINT_FORMATS,

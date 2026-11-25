@@ -1,0 +1,71 @@
+{
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "area_type",
+  "sort_order"
+ ],
+ "fields": [
+  {
+   "fieldname": "area_type",
+   "fieldtype": "Data",
+   "label": "Area Type",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "sort_order",
+   "fieldtype": "Int",
+   "label": "Sort Order",
+   "description": "The first area type is the default when adding a room.",
+   "in_list_view": 1
+  }
+ ],
+ "module": "URY",
+ "name": "Dining Area Type",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "select": 1,
+   "create": 1,
+   "write": 1,
+   "delete": 1
+  },
+  {
+   "role": "URY Admin",
+   "read": 1,
+   "select": 1,
+   "create": 1,
+   "write": 1,
+   "delete": 1
+  },
+  {
+   "role": "URY Manager",
+   "read": 1,
+   "select": 1,
+   "create": 1,
+   "write": 1,
+   "delete": 1
+  },
+  {
+   "role": "URY Captain",
+   "read": 1,
+   "select": 1
+  },
+  {
+   "role": "URY Cashier",
+   "read": 1,
+   "select": 1
+  },
+  {
+   "role": "URY Waiter",
+   "read": 1,
+   "select": 1
+  }
+ ],
+ "autoname": "field:area_type",
+ "naming_rule": "By fieldname",
+ "allow_rename": 1
+}

@@ -67,7 +67,7 @@ def _checkin_table_available() -> bool:
         return False
 
 
-def _resolve_active_employee(user: str, company: str | None = None) -> dict[str, Any] | None:
+def _resolve_active_employee(user: str, company: str | None = None, *, for_update=False) -> dict[str, Any] | None:
     if not user or user in ("Administrator", "Guest"):
         return None
     filters: dict[str, Any] = {"user_id": user, "status": "Active"}
@@ -78,31 +78,22 @@ def _resolve_active_employee(user: str, company: str | None = None) -> dict[str,
         filters,
         ["name", "employee_name", "user_id", "company", "status"],
         as_dict=True,
+        **({"for_update": True} if for_update else {}),
     )
     if isinstance(row, dict) and row.get("name"):
         return row
     return None
 
 
-def _latest_checkin(employee: str) -> dict[str, Any] | None:
-    rows = frappe.get_all(
-        "Employee Checkin",
-        filters={"employee": employee},
-        fields=["name", "log_type", "time", "shift", "device_id"],
-        order_by="time desc, creation desc, name desc",
-        limit=1,
-    )
-    if isinstance(rows, (list, tuple)) and rows:
-        return rows[0]
-    latest_type = frappe.db.get_value(
+def _latest_checkin(employee: str, *, for_update=False) -> dict[str, Any] | None:
+    return frappe.db.get_value(
         "Employee Checkin",
         {"employee": employee},
-        "log_type",
-        order_by="time desc",
+        ["name", "log_type", "time", "shift", "device_id", "custom_pos_job_code"],
+        as_dict=True,
+        order_by="time desc, creation desc, name desc",
+        **({"for_update": True} if for_update else {}),
     )
-    if isinstance(latest_type, str) and latest_type:
-        return {"log_type": latest_type, "time": None, "shift": None, "device_id": None}
-    return None
 
 
 def is_user_clocked_in(
@@ -188,6 +179,33 @@ def _block_open_work_enabled(profile) -> bool:
     return cint(raw) == 1
 
 
+def _profile_job_codes(profile):
+    return list(dict.fromkeys(
+        row.get("job_code") for row in ((profile.get("custom_pos_job_codes") or []) if profile else [])
+        if row.get("job_code")
+    ))
+
+
+def stamp_opening_job_code(doc, method=None):
+    # A submitted opening captures the job held when the till was opened.
+    if not doc.is_new():
+        return
+    doc.custom_pos_job_code = None
+    if not is_hrms_timeclock_available():
+        return
+    employee = _resolve_active_employee(doc.user, company=doc.company)
+    latest = _latest_checkin(employee["name"]) if employee else None
+    if latest and latest.get("log_type") == "IN" and latest.get("device_id") == f"POS:{doc.pos_profile}":
+        doc.custom_pos_job_code = latest.get("custom_pos_job_code")
+
+
+def stamp_closing_job_code(doc, method=None):
+    doc.custom_pos_job_code = (
+        frappe.db.get_value("POS Opening Entry", doc.pos_opening_entry, "custom_pos_job_code")
+        if doc.get("pos_opening_entry") else None
+    )
+
+
 def _build_status_payload(
     user: str, profile, latest_checkin: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -196,10 +214,12 @@ def _build_status_payload(
     block_open_work = _block_open_work_enabled(profile)
     require_clock_in = bool(profile and cint(profile.get("custom_require_clock_in_to_order")) == 1)
     profile_name = profile.get("name") if profile else None
+    job_codes = _profile_job_codes(profile)
 
     if not emp:
         return {
             "available": True,
+            "job_codes": job_codes,
             "has_employee": False,
             "employee": None,
             "employee_name": None,
@@ -234,6 +254,8 @@ def _build_status_payload(
     return {
         "available": True,
         "has_employee": True,
+        "job_codes": job_codes,
+        "job_code": latest.get("custom_pos_job_code") if is_in else None,
         "employee": emp["name"],
         "employee_name": emp.get("employee_name") or emp["name"],
         "is_clocked_in": is_in,
@@ -318,7 +340,7 @@ def get_my_timeclock_status(pos_profile: str | None = None) -> dict[str, Any]:
 
 
 @frappe.whitelist(methods=["POST"])
-def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
+def punch_timeclock(action: str, pos_profile: str, job_code: str | None = None) -> dict[str, Any]:
     """Record a native `Employee Checkin` (`IN` or `OUT`) from the POS header."""
     user = getattr(getattr(frappe, "session", None), "user", None)
     if not user or user == "Guest":
@@ -340,7 +362,7 @@ def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
     outlet_context.assert_outlet_access(pos_profile, user=user)
     profile = frappe.get_doc("POS Profile", pos_profile)
 
-    emp = _resolve_active_employee(user, company=profile.get("company"))
+    emp = _resolve_active_employee(user, company=profile.get("company"), for_update=True)
     if not emp:
         frappe.throw(
             coded_message(
@@ -350,7 +372,7 @@ def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
             frappe.ValidationError,
         )
 
-    latest = _latest_checkin(emp["name"])
+    latest = _latest_checkin(emp["name"], for_update=True)
     is_currently_in = bool(latest and str(latest.get("log_type") or "").upper() == "IN")
 
     if normalized_action == "IN" and is_currently_in:
@@ -381,6 +403,16 @@ def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
                 frappe.ValidationError,
             )
 
+    available_job_codes = _profile_job_codes(profile)
+    if normalized_action == "IN":
+        if (job_code or available_job_codes) and job_code not in available_job_codes:
+            frappe.throw(
+                coded_message("TIMECARD-JOB-CODE", _("Choose a job code configured for this outlet.")),
+                frappe.ValidationError,
+            )
+    else:
+        job_code = latest.get("custom_pos_job_code")
+
     punch_time = now_datetime()
     checkin = frappe.get_doc(
         {
@@ -389,6 +421,7 @@ def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
             "log_type": normalized_action,
             "time": punch_time,
             "device_id": f"POS:{profile.name}",
+            **({"custom_pos_job_code": job_code} if job_code else {}),
         }
     )
 
@@ -416,6 +449,7 @@ def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
             "log_type": normalized_action,
             "time": recorded_time,
             "shift": checkin.get("shift"),
+            "custom_pos_job_code": job_code,
             "device_id": f"POS:{profile.name}",
         },
     )

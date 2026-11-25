@@ -45,6 +45,7 @@ function formatElapsed(minutes?: number): string {
 const TimeclockButton = ({ posProfile, disabled = false, onStatusChange }: TimeclockButtonProps) => {
   const [status, setStatus] = useState<TimeclockStatus | null>(null);
   const [open, setOpen] = useState(false);
+  const [jobCode, setJobCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,6 +79,9 @@ const TimeclockButton = ({ posProfile, disabled = false, onStatusChange }: Timec
   }
 
   const isClockedIn = Boolean(status.is_clocked_in);
+  const jobCodes = status.job_codes ?? [];
+  const needsJobCode = !isClockedIn && jobCodes.length > 0;
+  const jobCodeMissing = needsJobCode && !jobCodes.includes(jobCode);
   const sinceTime = formatClockTime(status.clocked_in_since || status.last_punch_time);
   const hasOpenWork = Boolean(
     status.block_clock_out_with_open_work &&
@@ -85,18 +89,21 @@ const TimeclockButton = ({ posProfile, disabled = false, onStatusChange }: Timec
   );
 
   const handleOpenDialog = () => {
+    setJobCode('');
     setError(null);
     setOpen(true);
     void loadStatus();
   };
 
   const handlePunch = async () => {
-    if (!posProfile || submitting) return;
+    if (!posProfile || submitting || jobCodeMissing) return;
     const action: 'IN' | 'OUT' = isClockedIn ? 'OUT' : 'IN';
     setSubmitting(true);
     setError(null);
     try {
-      const updated = await punchTimeclock(action, posProfile);
+      const updated = needsJobCode
+        ? await punchTimeclock(action, posProfile, jobCode)
+        : await punchTimeclock(action, posProfile);
       setStatus(updated);
       onStatusChange?.(updated);
       showToast.success(
@@ -140,7 +147,7 @@ const TimeclockButton = ({ posProfile, disabled = false, onStatusChange }: Timec
 
       <Dialog open={open} onOpenChange={(next) => !submitting && setOpen(next)}>
         <DialogContent
-          size="md"
+          size="default"
           onClose={() => !submitting && setOpen(false)}
           className="max-h-[90vh] overflow-y-auto"
         >
@@ -167,6 +174,28 @@ const TimeclockButton = ({ posProfile, disabled = false, onStatusChange }: Timec
               <div className="flex items-center justify-between rounded-md border border-border bg-gray-50 px-3 py-2">
                 <span className="text-gray-500">{t('timeclock.shift_label')}</span>
                 <span className="font-medium text-gray-900">{status.shift}</span>
+              </div>
+            )}
+
+            {needsJobCode && (
+              <label className="block space-y-1">
+                <span>{t('timeclock.job_code')}</span>
+                <select
+                  className="w-full rounded-md border border-border bg-background px-3 py-2"
+                  value={jobCode}
+                  disabled={submitting}
+                  onChange={(event) => setJobCode(event.target.value)}
+                >
+                  <option value="">{t('timeclock.select_job_code')}</option>
+                  {jobCodes.map((code) => <option key={code} value={code}>{code}</option>)}
+                </select>
+              </label>
+            )}
+
+            {isClockedIn && status.job_code && (
+              <div className="flex justify-between gap-2 rounded-md border border-border bg-gray-50 px-3 py-2">
+                <span className="text-gray-500">{t('timeclock.job_code')}</span>
+                <span className="font-medium">{status.job_code}</span>
               </div>
             )}
 
@@ -220,7 +249,7 @@ const TimeclockButton = ({ posProfile, disabled = false, onStatusChange }: Timec
             </Button>
             <Button
               type="button"
-              disabled={submitting || !status.has_employee}
+              disabled={submitting || !status.has_employee || jobCodeMissing}
               onClick={handlePunch}
             >
               {submitting

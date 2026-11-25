@@ -157,6 +157,7 @@
     "failed_process_order": "Échec du traitement de la commande",
     "no_active_order": "Aucune commande active trouvée pour cette table",
     "qz_host_not_set": "L'hôte QZ n'est pas configuré",
+    "printer_signing_refused": "La signature d’impression a été refusée. Vérifiez vos droits d’impression et réessayez.",
     "print_failed": "Échec d'impression : {{reason}}",
     "invalid_discount": "Veuillez entrer une valeur de remise valide",
     "discount_exceeds_max": "La remise en pourcentage ne peut pas dépasser 100 %",

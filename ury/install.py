@@ -73,6 +73,7 @@ def after_install():
     # prevent, so it must fail loudly rather than leave the site half-set-up.
     ensure_role_permissions()
     from ury.patches.v2_0 import (
+        setup_pos_config_sweep,
         setup_pos_manager_authorisation,
         setup_pos_modifiers_and_combos,
         setup_pos_tax_and_dayparts,
@@ -84,10 +85,18 @@ def after_install():
     setup_pos_timeclock_tips_fields.execute()
     setup_pos_void_return_reopen.execute()
     setup_pos_modifiers_and_combos.execute()
+    setup_pos_config_sweep.execute()
     from ury.patches.v3_46 import add_floor_lifecycle_fields
 
     add_floor_lifecycle_fields.execute()
 
+
+
+def after_app_install(app_name):
+    if app_name == "hrms":
+        from ury.patches.v2_0.setup_pos_config_sweep import ensure_employee_job_code
+
+        ensure_employee_job_code()
 
 def before_tests():
 	"""frappe.utils.install.before_tests() (the default hook) no-ops

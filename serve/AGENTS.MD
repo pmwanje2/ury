@@ -33,7 +33,7 @@ Do not claim full RN parity or a finished test gate while the frontend is still 
 | Routing | React Router DOM (`basename="/ury/serve"`) |
 | Style | Tailwind + `@ury/ui` theme / preset |
 | API | `frappe-js-sdk` via `@ury/core` |
-| Print transport | `qz-tray` via `@ury/core` `initPrinting` / `printWithQz` |
+| Print transport | `qz-tray` via `@ury/core` `printWithQz` |
 
 Build output: `../ury/public/serve/`. HTML entry copy: `../ury/www/serve.html`.
 
@@ -111,7 +111,7 @@ Entry stack: `AuthGuard` → `ServeRouteGuard` → `AppBoot` → router.
 
 | `print_type` | Mechanism |
 |--------------|-----------|
-| `qz` | `printWithQz(qz_host, html)` after `initPrinting({ signKey })`, then `qz_print_update` |
+| `qz` | `printWithQz(qz_host, html)`, then `qz_print_update` |
 | `network` | `network_printing` / `select_network_printer` — honor Success / error string; already marks printed |
 | `socket` (default) | `ury.ury.api.ury_print.print_pos_page` — realtime `print_{branch}` to desk print stations; marks printed server-side |
 
@@ -120,12 +120,8 @@ Do **not** open `/printview` and then mark printed. Socket transport must call `
 **QZ configuration (supported, no secrets in git)**
 
 1. POS Profile: set `print_type` to `qz` and set `qz_host`.
-2. At app boot (`main.tsx`): call `initPrinting({ signKey })` when a key exists.
-3. Key sources (first match wins):
-   - Env `VITE_QZ_SIGN_KEY` (local/CI secret, not committed)
-   - Optional non-empty `serve/privateKey.ts` (repo stub stays empty)
-4. `@ury/core` loads the public cert from `/assets/ury/files/cert.pem`.
-5. If QZ is not initialized, QZ print fails with a clear config error. Network / socket paths still work.
+2. Configure the server's `qz_private_key` and the allowed roles in POS Print Settings.
+3. Serve the public certificate at `/assets/ury/files/cert.pem`.
 
 Never put private keys in `packages/` or in documentation samples.
 

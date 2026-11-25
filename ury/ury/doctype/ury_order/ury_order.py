@@ -3047,27 +3047,10 @@ def _validate_sync_items_against_menu(
             )
 
 
-def _validate_dine_in_pax(no_of_pax, order_type):
-    """Dine In requires a positive integer guest count."""
-    if order_type != "Dine In":
-        return no_of_pax
+def _validate_dine_in_pax(no_of_pax, order_type, profile=None):
+    from ury.ury_pos.covers import normalize_covers
 
-    try:
-        pax = cint(no_of_pax)
-    except Exception:
-        pax = 0
-
-    # cint("abc") / None / "" -> 0; reject non-positive and non-integral floats.
-    if no_of_pax is None or no_of_pax == "" or pax < 1:
-        frappe.throw(_("Number of guests must be a positive integer for Dine In orders."))
-
-    if isinstance(no_of_pax, float) and no_of_pax != int(no_of_pax):
-        frappe.throw(_("Number of guests must be a positive integer for Dine In orders."))
-
-    if isinstance(no_of_pax, str) and "." in no_of_pax.strip():
-        frappe.throw(_("Number of guests must be a positive integer for Dine In orders."))
-
-    return pax
+    return normalize_covers(no_of_pax, order_type, profile, _frappe=frappe)
 
 
 def _authorize_captain_transfer(invoice):
@@ -4411,6 +4394,22 @@ def sync_order(
         _validate_customer_change(invoice, customer)
         invoice.customer = customer
 
+    effective_order_type = invoice.order_type if collision_merge else (order_type or invoice.order_type)
+    if not collision_merge:
+        pax_value = no_of_pax
+        if pax_value in (None, "") or (effective_order_type != "Dine In" and pax_value in (0, "0")):
+            pax_value = invoice.get("no_of_pax") or (1 if effective_order_type != "Dine In" else None)
+        from ury.ury_pos.covers import parse_covers
+
+        previous_covers = parse_covers(invoice.get("no_of_pax"))
+        if (invoice.name and effective_order_type == invoice.get("order_type")
+                and pos_profile == invoice.get("pos_profile")
+                and previous_covers and previous_covers > 0
+                and parse_covers(pax_value) == previous_covers):
+            validated_pax = previous_covers
+        else:
+            validated_pax = _validate_dine_in_pax(pax_value, effective_order_type, posprofile)
+
     # Privilege gates for changing order type (`order_type_change`) and guest count
     # (`guest_count_change`) on an existing open check (Simphony Opt 7 & Opt 33).
     # Offline Merge Rounds collision reconciliation appends items onto an occupied check
@@ -4464,7 +4463,7 @@ def sync_order(
                 )
 
         prev_pax = cint(invoice.get("no_of_pax") or 0)
-        incoming_pax = cint(no_of_pax) if no_of_pax not in (None, "") else prev_pax
+        incoming_pax = validated_pax
         if no_of_pax not in (None, "") and prev_pax > 0 and incoming_pax != prev_pax:
             _pax_policy = is_company_policy_active(_co)
             if _pax_policy or guest_count_approval_token:
@@ -4513,9 +4512,8 @@ def sync_order(
         invoice.custom_guest_label = ""
     elif guest_label:
         invoice.custom_guest_label = guest_label
-    effective_order_type = invoice.order_type if collision_merge else (order_type or invoice.order_type)
     if not collision_merge:
-        invoice.no_of_pax = _validate_dine_in_pax(no_of_pax, effective_order_type)
+        invoice.no_of_pax = validated_pax
     invoice.pos_profile = pos_profile
     invoice.company = posprofile.company
     invoice.currency = posprofile.currency
@@ -7117,6 +7115,9 @@ def change_order_type(
                     frappe.ValidationError,
                 )
 
+    inv.no_of_pax = _validate_dine_in_pax(
+        no_of_pax if no_of_pax is not None else (inv.get("no_of_pax") or 1), order_type, pos_prof
+    )
     inv.order_type = order_type
     if order_type == "Dine In":
         if table:
@@ -7125,8 +7126,6 @@ def change_order_type(
             inv.custom_restaurant_room = room
         elif table_info is not None:
             inv.custom_restaurant_room = table_info.get("restaurant_room")
-        if no_of_pax is not None:
-            inv.no_of_pax = _validate_dine_in_pax(no_of_pax, order_type)
     else:
         inv.restaurant_table = table or None
         inv.custom_merged_tables = None

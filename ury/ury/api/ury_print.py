@@ -390,19 +390,6 @@ def qz_certificate():
     return qz_key_value
 
 
-# Roles allowed to request QZ Tray signatures. The private key never leaves
-# the server; these users may only ask the server to sign a payload.
-QZ_SIGNING_ROLES = {
-    "Administrator",
-    "System Manager",
-    "URY Admin",
-    "URY Manager",
-    "URY Cashier",
-    # Kitchen station screens print their own KOTs through QZ (Mosaic station printing).
-    "Restaurant Kitchen",
-}
-
-
 def _get_qz_private_key():
     """Read the QZ private key server-side.
 
@@ -433,7 +420,9 @@ def signature_promise(toSign=None):
     if frappe.session.user == "Guest":
         frappe.throw(_("Not permitted"), frappe.PermissionError)
 
-    if not QZ_SIGNING_ROLES.intersection(frappe.get_roles()):
+    settings = frappe.get_single("POS Print Settings")
+    allowed_roles = {role.strip() for role in (settings.qz_signing_roles or "").splitlines() if role.strip()}
+    if not allowed_roles.intersection(frappe.get_roles()):
         frappe.throw(_("Not permitted"), frappe.PermissionError)
 
     if not toSign:

@@ -11,7 +11,6 @@ vi.mock('./i18n', () => ({
 }));
 
 vi.mock('@ury/core', () => ({
-  initPrinting: vi.fn(),
 }));
 
 vi.mock('./App', () => ({

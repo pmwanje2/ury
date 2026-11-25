@@ -295,7 +295,7 @@ src/i18n/
 
 ### What NOT to break
 - **`@ury/core` exports (`call`, `db`, `auth`, …)** — every API file depends on them; do not rename or re-wrap. Shared-package changes affect `frontend/` too (see `../packages/core/AGENTS.MD`).
-- **`main.tsx` `initPrinting({ signKey: privateKey })`** — must run before any QZ print; the signing key stays in `pos/privateKey`, never in `packages/`.
+- **QZ signing** uses the site’s authenticated signing endpoint and the roles allowed in POS Print Settings.
 - **`pos-store.ts` `resetOrderState()`** — called after every successful order submit/payment; must reset all transient order fields.
 - **`main.tsx` init sequence** — `initI18n()` must resolve before `ReactDOM.render()`.
 - **`AuthGuard`** — do not bypass or remove; it protects the entire app.
