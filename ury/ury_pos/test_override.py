@@ -1221,6 +1221,167 @@ class TestOverrideContract(unittest.TestCase):
         self.assertNotIn("other_outlet@example.test", [call.kwargs["user"] for call in manager.call_args_list])
         self.assertEqual(manager.call_count, len(rows))
 
+    def test_locked_external_pin_owner_cannot_clear_their_own_pin(self):
+        api = self.api()
+        user = "manager@example.test"
+        self.frappe.session.user = user
+        manager = MagicMock()
+        self.install_external_pin_hooks(manager)
+        for _ in range(4):
+            self.refused("POS-AUTH-PASSWORD", Invalid, lambda: api.set_my_pin("incorrect", "1357"))
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.set_my_pin("incorrect", "1357"))
+
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.clear_user_pin(user, "Main Till"))
+        manager.assert_not_called()
+        tracker, _, minutes = api._password_tracker(user)
+        self.assertFalse(tracker.is_user_allowed())
+        self.counts.clear()
+        self.assertEqual(api._db_failed_password_count(user, minutes), 5)
+
+    def test_external_manager_clear_requires_an_explicit_outlet_profile(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        manager = MagicMock()
+        self.install_external_pin_hooks(manager)
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.clear_user_pin("manager2@example.test"))
+        manager.assert_not_called()
+
+    def test_manager_hook_without_verifier_refuses_pin_management(self):
+        api = self.api()
+        user = "manager@example.test"
+        self.frappe.session.user = user
+        manager = MagicMock()
+        self.enroll(user, "1357")
+        self.install_external_pin_hooks(manager)
+        del self.hooks["pos_override_pin_verifier"]
+
+        with self.assertRaisesRegex(Invalid, "verification.*configured"):
+            api.set_my_pin("secret-pass-1", "2468")
+        with self.assertRaisesRegex(Invalid, "verification.*configured"):
+            api.clear_user_pin("manager2@example.test", "Main Till")
+        with self.assertRaisesRegex(Invalid, "verification.*configured"):
+            api.my_pin_status()
+        manager.assert_not_called()
+
+    def test_external_pin_list_skips_provider_denials_and_keeps_other_staff(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+
+        def manage(action, *, user):
+            if user == "sysmgr@example.test":
+                raise Denied("Provider denied the protected account")
+            if user == "admin_user@example.test":
+                raise PermissionError("Provider denied the protected account")
+            return {"has_pin": user == "manager2@example.test"}
+
+        self.install_external_pin_hooks(manage)
+        rows = {row["user"]: row["has_pin"] for row in api.list_pin_users("Main Till")}
+        self.assertEqual(rows, {
+            "cashier@example.test": False,
+            "manager@example.test": False,
+            "manager2@example.test": True,
+        })
+
+    def test_external_pin_provider_failure_scrubs_credentials_and_error_details(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        current = "secret-pass-1"
+        submitted = "2468"
+        self.frappe.form_dict = {"pin": submitted, "current_password": current}
+        provider_error = f"Third-party storage failed while processing {submitted}"
+        self.install_external_pin_hooks(MagicMock(side_effect=RuntimeError(provider_error)))
+
+        try:
+            api.set_my_pin(current, submitted)
+        except Exception as caught:
+            self.assertEqual(self.frappe.form_dict, {})
+            self.assertIsInstance(caught, Invalid)
+            self.assertIn("[POS-AUTH-UNAVAILABLE]", str(caught))
+            self.assertNotIn(provider_error, str(caught))
+            self.assertIsNone(caught.__context__)
+            trace = caught.__traceback__
+            while trace:
+                if trace.tb_frame.f_globals.get("__file__") == api.__file__:
+                    frame_repr = repr(trace.tb_frame.f_locals)
+                    self.assertNotIn(submitted, frame_repr)
+                    self.assertNotIn(current, frame_repr)
+                trace = trace.tb_next
+        else:
+            self.fail("An unavailable approval PIN provider must refuse the write.")
+        self.audit.assert_not_called()
+
+    def test_external_pin_manager_can_reverify_the_current_password(self):
+        api = self.api()
+        user = "manager@example.test"
+        self.frappe.session.user = user
+        written = []
+
+        def manage(action, *, user, pin, current_password):
+            self.assertEqual(current_password, "secret-pass-1")
+            written.append((action, user, pin))
+            return {"ok": True}
+
+        self.install_external_pin_hooks(manage)
+        self.assertTrue(api.set_my_pin("secret-pass-1", "2468")["ok"])
+        self.assertEqual(written, [("set", user, "2468")])
+
+    def test_unknown_external_verifier_error_is_unavailable_without_a_pin_strike(self):
+        api = self.api()
+        self.install_external_pin_hooks()
+        verifier = self.hooks["__attr__:custom_app.pin.verify"]
+        for provider_outcome in (RuntimeError("Third-party trace"), {"ok": False, "code": "Third-party code"}):
+            if isinstance(provider_outcome, Exception):
+                verifier.side_effect = provider_outcome
+            else:
+                verifier.side_effect = None
+                verifier.return_value = provider_outcome
+            with self.subTest(provider_outcome=provider_outcome):
+                self.refused("POS-AUTH-UNAVAILABLE", Invalid, lambda: api.authorise(
+                    "Main Till", "void_sent_item", "manager@example.test", "2468",
+                    "POS Invoice", "POS-INV-100", {"amount": 50, "reason": "Guest changed mind"},
+                ))
+        self.assertFalse(any(row.outcome == "Failed PIN" for row in self.store.committed_logs))
+
+    def test_verifier_forwards_company_amount_and_reference_to_floor_authority(self):
+        api = self.api()
+        requester = "cashier@example.test"
+        approver = "manager@example.test"
+        reference = "POS-INV-100"
+        self.store.invoices[reference].update(
+            currency="USD", conversion_rate=3700, rounded_total=25, grand_total=25,
+        )
+        get_value = self.frappe.db.get_value.side_effect
+        self.frappe.db.get_value.side_effect = (
+            lambda doctype, *args, **kwargs: "UGX" if doctype == "Company"
+            else get_value(doctype, *args, **kwargs)
+        )
+
+        # Mirror the Floor Authority inputs forwarded by the context-aware POS hook.
+        floor_authority = MagicMock(return_value={"ok": True})
+
+        def verify(user, pin, pos_profile=None, *, requester=None, privilege=None,
+                   amount=0, currency=None, action=None, reference_doctype="", reference_name=""):
+            return floor_authority({
+                "approver": user, "pos_profile": pos_profile, "requester": requester,
+                "privilege": privilege, "amount": amount, "currency": currency,
+                "action": action, "reference_doctype": reference_doctype,
+                "reference_name": reference_name,
+            })
+
+        self.install_external_pin_hooks()
+        self.hooks["__attr__:custom_app.pin.verify"] = verify
+        claim = {
+            "action": "cancel_check", "amount": 1, "currency": "USD",
+            "requester": "ignored@example.test", "reason": "Guest changed mind",
+        }
+        issued = api.authorise("Main Till", "cancel_check", approver, "2468", "POS Invoice", reference, claim)
+        self.assertEqual(issued["approver"], approver)
+        floor_authority.assert_called_once_with({
+            "approver": approver, "pos_profile": "Main Till", "requester": requester,
+            "privilege": "cancel_check", "amount": 92500, "currency": "UGX",
+            "action": "cancel_check", "reference_doctype": "POS Invoice", "reference_name": reference,
+        })
+
     def test_verifier_only_keeps_legacy_status_and_refuses_pin_writes(self):
         api = self.api()
         user = "manager@example.test"

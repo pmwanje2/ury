@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
-import { initI18n } from '../i18n';
+import { initI18n, t } from '../i18n';
+import { overrideErrorMessage } from '../lib/override-api';
 import ManagerApproval from './ManagerApproval';
 
 const APPROVERS = [
@@ -60,6 +61,30 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it('localizes unrecognized provider errors without showing provider details', () => {
+    const error = new Error('Third-party provider traceback and internal storage error');
+    expect(overrideErrorMessage(error, 'approval_pin.save_failed')).toBe(t('approval_pin.save_failed'));
+  });
+
+  it('gives the dismiss button a 44px touch target', async () => {
+    mockServer();
+    render(
+      <ManagerApproval
+        open
+        posProfile="Main Till"
+        privilege="void_sent_item"
+        reference="POS-INV-001"
+        summaryLines={[]}
+        claim={{}}
+        onApproved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await screen.findByRole('combobox', { name: /manager/i });
+    const dismiss = screen.getByRole('button', { name: t('common.dismiss') });
+    expect([...dismiss.classList]).toEqual(expect.arrayContaining(['h-11', 'w-11']));
   });
 
   it('renders action summary, approver picker, masked PIN pad with >=48px keys, and calls onApproved', async () => {
