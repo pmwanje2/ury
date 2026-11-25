@@ -396,6 +396,16 @@ export interface PreviewOrderTotalsRequest {
     rate?: number;
     item_name?: string;
     reservation_line_key?: string;
+    custom_parent_line_key?: string;
+    custom_line_role?: 'Standard' | 'Modifier' | 'Combo Header' | 'Combo Upcharge';
+    custom_is_modifier?: number;
+    custom_modifier_prefix?: string;
+    custom_modifier_group?: string;
+    custom_modifier_option?: string;
+    custom_modifiers_json?: string;
+    custom_bundle_overrides_json?: string;
+    custom_inherit_parent_routing?: number;
+    custom_hide_unpriced_on_receipt?: number;
   }>;
   no_of_pax?: number;
   invoice_name?: string | null;

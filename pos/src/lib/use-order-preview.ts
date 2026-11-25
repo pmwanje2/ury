@@ -19,6 +19,16 @@ interface UseOrderPreviewOptions {
     rate?: number;
     item_name?: string;
     reservation_line_key?: string;
+    custom_parent_line_key?: string;
+    custom_line_role?: 'Standard' | 'Modifier' | 'Combo Header' | 'Combo Upcharge';
+    custom_is_modifier?: number;
+    custom_modifier_prefix?: string;
+    custom_modifier_group?: string;
+    custom_modifier_option?: string;
+    custom_modifiers_json?: string;
+    custom_bundle_overrides_json?: string;
+    custom_inherit_parent_routing?: number;
+    custom_hide_unpriced_on_receipt?: number;
   }>;
   noOfPax?: number;
   invoiceName?: string | null;
@@ -57,6 +67,14 @@ export function useOrderPreview({
           r.item,
           r.qty,
           r.rate ?? null,
+          r.custom_parent_line_key ?? null,
+          r.custom_line_role ?? null,
+          r.custom_is_modifier ?? 0,
+          r.custom_modifier_group ?? null,
+          r.custom_modifier_option ?? null,
+          r.custom_modifier_prefix ?? null,
+          r.custom_modifiers_json ?? null,
+          r.custom_bundle_overrides_json ?? null,
         ]),
       ),
     [items],

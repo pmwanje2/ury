@@ -4217,6 +4217,7 @@ def _apply_preview_selling_pricing_rules(doc):
             or cint(item.get("custom_price_overridden")) == 1
             or cint(item.get("custom_is_open_item")) == 1
             or cint(item.get("custom_is_complimentary")) == 1
+            or (item.get("custom_line_role") or "") == "Combo Upcharge"
         ):
             continue
         ctx = dict_cls(
@@ -4354,6 +4355,38 @@ def _build_preview_tax_rows(doc, prec: int) -> list[dict]:
     return result
 
 
+_PREVIEW_MODIFIER_COMBO_FIELDS = (
+    "reservation_line_key",
+    "custom_parent_line_key",
+    "custom_line_role",
+    "custom_is_modifier",
+    "custom_modifier_prefix",
+    "custom_modifier_group",
+    "custom_modifier_option",
+    "custom_modifiers_json",
+    "custom_bundle_overrides_json",
+    "custom_inherit_parent_routing",
+    "custom_hide_unpriced_on_receipt",
+)
+
+
+def _has_modifier_or_combo_metadata(rows) -> bool:
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if (
+            cint(row.get("custom_is_modifier")) == 1
+            or bool((row.get("custom_parent_line_key") or "").strip())
+            or bool((row.get("custom_modifier_group") or "").strip())
+            or bool((row.get("custom_modifier_option") or "").strip())
+            or bool((row.get("custom_modifiers_json") or "").strip())
+            or bool((row.get("custom_bundle_overrides_json") or "").strip())
+            or (row.get("custom_line_role") or "").strip() in ("Modifier", "Combo Header", "Combo Upcharge")
+        ):
+            return True
+    return False
+
+
 def _is_privileged_preview_row(row, orig_invoice=None) -> bool:
     from frappe.utils import flt
 
@@ -4416,9 +4449,13 @@ def _append_orig_preview_row(
     for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
         if row.get(tax_field) is not None:
             item_entry[tax_field] = row.get(tax_field)
+    for mod_field in _PREVIEW_MODIFIER_COMBO_FIELDS:
+        if row.get(mod_field) is not None:
+            item_entry[mod_field] = row.get(mod_field)
 
     cloned_row = doc.append("items", item_entry)
-    if is_privileged_row and cloned_row is not None and privileged_snapshots is not None:
+    is_combo_upcharge = (row.get("custom_line_role") or "") == "Combo Upcharge"
+    if (is_privileged_row or is_combo_upcharge) and cloned_row is not None and privileged_snapshots is not None:
         privileged_snapshots[id(cloned_row)] = {
             "price_list_rate": plr,
             "base_price_list_rate": base_plr,
@@ -4427,7 +4464,7 @@ def _append_orig_preview_row(
             "discount_percentage": flt(row.get("discount_percentage")),
             "discount_amount": flt(row.get("discount_amount")),
             "pricing_rules": row.get("pricing_rules"),
-            "ignore_pricing_rule": 1,
+            "ignore_pricing_rule": 1 if is_privileged_row else cint(row.get("ignore_pricing_rule")),
             "custom_price_overridden": cint(row.get("custom_price_overridden")),
             "custom_is_open_item": cint(row.get("custom_is_open_item")),
             "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
@@ -4500,12 +4537,20 @@ def _match_preview_items_to_orig_rows(raw_items, orig_rows):
             continue
         raw_item_name = str(raw.get("item_name") or "").strip()
         raw_rate = raw.get("rate") if raw.get("rate") is not None else raw.get("price")
+        raw_is_mod = cint(raw.get("custom_is_modifier"))
+        raw_parent_key = str(raw.get("custom_parent_line_key") or "").strip()
 
         def _rank(entry):
             o_idx, row = entry
+            mod_miss = 0 if cint(row.get("custom_is_modifier")) == raw_is_mod else 1
+            parent_miss = (
+                0
+                if (not raw_parent_key or str(row.get("custom_parent_line_key") or "").strip() == raw_parent_key)
+                else 1
+            )
             name_miss = 0 if (raw_item_name and str(row.get("item_name") or "").strip() == raw_item_name) else 1
             rate_diff = abs(flt(row.get("rate")) - flt(raw_rate)) if raw_rate is not None else 0.0
-            return (name_miss, rate_diff, o_idx)
+            return (mod_miss, parent_miss, name_miss, rate_diff, o_idx)
 
         best_idx, best_row = min(pool, key=_rank)
         claimed.add(best_idx)
@@ -4678,6 +4723,49 @@ def preview_order_totals(
             else {}
         )
         new_line_price_list = active_price_list or price_list
+        modifier_price_overrides = {}
+        if _has_modifier_or_combo_metadata(items):
+            from ury.ury.api.ury_modifiers import validate_and_normalize_order_items
+
+            rate_precision = 2
+            if callable(getattr(doc, "precision", None)):
+                try:
+                    p = doc.precision("rate")
+                    if isinstance(p, int) and not isinstance(p, bool):
+                        rate_precision = p
+                except Exception:
+                    pass
+            if doc.get("currency"):
+                try:
+                    frac = cint(frappe.db.get_value("Currency", doc.currency, "fraction_units"))
+                    if frac >= 1:
+                        rate_precision = max(0, len(str(frac)) - 1)
+                except Exception:
+                    pass
+            past_item = (
+                [
+                    dict(r.as_dict() if callable(getattr(r, "as_dict", None)) else r)
+                    for r in (orig_invoice.get("items") or [])
+                    if cint(r.get("is_disposable")) != 1
+                ]
+                if orig_invoice is not None
+                else []
+            )
+            preview_menu = resolved.get("menu") or (
+                frappe.db.get_value("URY Menu", {"branch": doc.branch}, "name") if doc.branch else None
+            )
+            items, modifier_price_overrides = validate_and_normalize_order_items(
+                items,
+                past_item,
+                preview_menu,
+                new_line_price_list,
+                doc.branch,
+                doc.company,
+                posting_date=posting_date,
+                customer=effective_customer,
+                currency_precision=rate_precision,
+            )
+
         release_field, released = (None, None)
         if new_line_price_list:
             try:
@@ -4702,8 +4790,12 @@ def preview_order_totals(
                     orig_invoice=orig_invoice,
                 )
                 continue
+            line_key = raw.get("reservation_line_key")
+            mod_override = modifier_price_overrides.get(line_key) if line_key else None
             resolved_rate = None
-            if new_line_price_list:
+            if mod_override and mod_override.get("is_validated_modifier"):
+                resolved_rate = flt(mod_override["rate"])
+            elif new_line_price_list:
                 try:
                     ip = price_valid_on(
                         code, new_line_price_list, posting_date, release_field, released, customer=effective_customer
@@ -4732,7 +4824,29 @@ def preview_order_totals(
                     item_entry[tax_field] = raw.get(tax_field)
                 elif orig_row is not None and orig_row.get(tax_field) is not None and tax_field == "custom_tax_exempt":
                     item_entry[tax_field] = orig_row.get(tax_field)
-            doc.append("items", item_entry)
+            for mod_field in _PREVIEW_MODIFIER_COMBO_FIELDS:
+                if raw.get(mod_field) is not None:
+                    item_entry[mod_field] = raw.get(mod_field)
+            appended = doc.append("items", item_entry)
+            if (
+                (raw.get("custom_line_role") or "") == "Combo Upcharge"
+                and appended is not None
+                and mod_override
+                and mod_override.get("is_validated_modifier")
+            ):
+                privileged_snapshots[id(appended)] = {
+                    "price_list_rate": resolved_rate,
+                    "base_price_list_rate": resolved_rate,
+                    "rate": resolved_rate,
+                    "base_rate": resolved_rate,
+                    "discount_percentage": 0.0,
+                    "discount_amount": 0.0,
+                    "pricing_rules": None,
+                    "ignore_pricing_rule": 0,
+                    "custom_price_overridden": 0,
+                    "custom_is_open_item": 0,
+                    "custom_is_complimentary": 0,
+                }
 
     disc_pct = flt(additional_discount_percentage)
     if disc_pct < 0 or disc_pct > 100:
