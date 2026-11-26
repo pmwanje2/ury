@@ -3887,6 +3887,10 @@ def _qz_dispatch_session():
     return sid
 
 
+def _browser_copy_rendered(record):
+    return record.status == 'BROWSER_DISPATCHING' and not record.render_grant_hash and not record.dispatch_until
+
+
 def _qz_recovery_token(record):
     """A recovery credential grants confirmation or browser fallback, never QZ dispatch."""
     import hmac
@@ -3973,7 +3977,7 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
                 update.update(status='BROWSER_DISPATCHING', render_grant_hash=_lease_hash(grant),
                               dispatch_until=now_datetime() + timedelta(minutes=5))
                 result['render_grant'] = grant
-            elif sid := _qz_dispatch_session():
+            if record.status == 'RESERVED' and (sid := _qz_dispatch_session()):
                 update['qz_session_hash'] = _lease_hash(sid)
             frappe.db.set_value(_COPY_LOG, record.name, update)
             record.status = 'DISPATCHING'
@@ -3982,9 +3986,7 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
                 frappe.throw('Dispatch already started. Check the original till.', frappe.PermissionError)
             frappe.db.set_value(_COPY_LOG, record.name, {'dispatch_token_hash': None, 'dispatch_until': None})
         elif record.status != 'COMPLETED':
-            browser_rendered = (record.status == 'BROWSER_DISPATCHING'
-                                and not record.render_grant_hash and not record.dispatch_until)
-            if record.status != 'QZ_DISPATCHING' and not browser_rendered:
+            if record.status != 'QZ_DISPATCHING' and not _browser_copy_rendered(record):
                 frappe.throw('Start printing and render the browser copy before confirming delivery.', frappe.PermissionError)
             if idempotency_key == f'efris-auto-{invoice}':
                 if _require_fiscal_event(doc) != record.fiscal_event:
@@ -4068,7 +4070,7 @@ def print_bill_copy(
                 if previous and previous.status not in ('RESERVED', 'FAILED', 'CANCELED'):
                     # A replay reports the original outcome without granting another dispatch.
                     result = _copy_result(previous)
-                    if previous.status == 'QZ_DISPATCHING' and requested_delivery != 'network':
+                    if _browser_copy_rendered(previous) or (previous.status == 'QZ_DISPATCHING' and requested_delivery != 'network'):
                         recovery = _qz_recovery_token(previous)
                         if recovery:
                             result['recovery_token'] = recovery
@@ -4291,10 +4293,13 @@ def _record_settlement_fiscal_intent(doc):
 
 def _settlement_fiscal_job(invoice):
     _closed_invoice(invoice, _closed_branch(), for_update=True)
-    return frappe.db.get_value(
-        _COPY_LOG, {'name': f'PENDING-EFRIS-{invoice}', 'invoice': invoice, 'job_owner': frappe.session.user},
-        ['name', 'status'], as_dict=True, for_update=True,
+    job = frappe.db.get_value(
+        _COPY_LOG, {'name': f'PENDING-EFRIS-{invoice}', 'invoice': invoice},
+        ['name', 'status', 'job_owner'], as_dict=True, for_update=True,
     )
+    if job and job.job_owner != frappe.session.user:
+        frappe.throw('Fiscal receipt is reserved for the original cashier.', frappe.PermissionError)
+    return job
 
 
 @frappe.whitelist(methods=['POST'])
@@ -4309,7 +4314,10 @@ def close_unused_fiscal_copy(invoice: str):
 def queue_fiscal_reprint(invoice: str, delivery: str | None = None):
     job = _settlement_fiscal_job(invoice)
     if not job:
-        frappe.throw('No pending fiscal receipt. Request a manual copy from Settled Bills.', frappe.PermissionError)
+        # A missing settlement intent is terminal. An ownership refusal remains retryable.
+        error = frappe.PermissionError('No pending fiscal receipt. Request a manual copy from Settled Bills.')
+        error.http_status_code = 410
+        raise error
     if job.status == 'PENDING_RECEIPT':
         frappe.db.set_value(_COPY_LOG, job.name, {
             'status': 'AWAITING_FDN', 'failure_reason': (delivery or '').strip().lower() or None,

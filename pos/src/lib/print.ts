@@ -96,7 +96,8 @@ export async function deliverReservedCopy(
   profile: { qz_host?: string | null; printer?: string | null; letter_head?: string | null },
   result: PrintBillCopyResult,
 ): Promise<PrintBillCopyResult> {
-  const recovering = result.status === 'QZ_DISPATCHING' && Boolean(result.recovery_token);
+  const rendered = result.status === 'BROWSER_DISPATCHING';
+  const recovering = (rendered || result.status === 'QZ_DISPATCHING') && Boolean(result.recovery_token);
   if (!recovering && result.status !== 'RESERVED') return result;
   const token = recovering ? result.recovery_token : result.dispatch_token;
   if (!token) throw new Error('Client copy dispatch lease is unavailable.');
@@ -120,7 +121,12 @@ export async function deliverReservedCopy(
       throw new Error('Client copy reservation is unavailable.');
     }
     let delivered = false;
-    if (recovering) {
+    if (recovering && rendered) {
+      if (!window.confirm(`Did the browser print COPY #${result.copy_number}? Check the receipt before confirming.`)) {
+        throw new Error('Copy delivery is still pending.');
+      }
+      delivered = true;
+    } else if (recovering) {
       delivered = confirmPrinted();
       if (!delivered && !window.confirm('Print this copy in the browser? Cancel retains it for later confirmation.')) {
         throw new Error('Copy delivery is still pending.');

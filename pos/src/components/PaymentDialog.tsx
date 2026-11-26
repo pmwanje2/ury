@@ -1057,7 +1057,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         });
         if (efrisOutcome.outcome === 'timed_out') {
           await queuePendingFiscalReprint({
-            invoice,
+            invoice, cashier: user?.name,
             partnerInvoice: order?.custom_merged_pos_invoice ?? null,
             posProfile: storePosProfile,
           });

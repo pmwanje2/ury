@@ -68,7 +68,7 @@ export function cashierOutbox(profile: OfflineProfile, user: OfflineUser): Offli
       print: stationPrint,
       onSettled: async ({ invoice, entry }) => {
         if (entry.settlement?.fiscal_receipt_requested === 0) return;
-        await triggerPostReplayFiscalPrint({ invoice, posProfile: profile });
+        await triggerPostReplayFiscalPrint({ invoice, posProfile: profile, cashier: user.name });
       },
     });
     users.set(user, queue);
