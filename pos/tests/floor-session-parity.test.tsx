@@ -276,7 +276,7 @@ it('admits a stay-signed-in user once the cold-boot outbox check finds no rows',
   expect(boundary.logout).not.toHaveBeenCalled();
 });
 
-vi.mock('../src/lib/logout-store', () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {} }));
+vi.mock('../src/lib/logout-store', () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {}, readGeneration: async () => 0, writeGeneration: async () => {} }));
 
 it('withholds stale hook rows from the panel when the current tab belongs to another user', () => {
   setFloorSessionMarker('other@example.com', false);

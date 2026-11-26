@@ -42,6 +42,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  document.cookie = 'ury_floor_generation=; Max-Age=0; Path=/pos; SameSite=Strict; Secure';
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   document.cookie = 'ury_floor_logout_failed=; Max-Age=0; Path=/pos; SameSite=Strict; Secure';
@@ -231,4 +232,115 @@ it('sets and expires the fallback cookie with Secure on HTTPS', async () => {
     expect(value).toContain('SameSite=Strict');
     expect(value?.toLowerCase().split(';').map(attribute => attribute.trim())).toContain('secure');
   }
+});
+
+async function passwordLogin(user: string) {
+  vi.spyOn(core.auth, 'loginWithUsernamePassword').mockResolvedValue({ message: 'Logged In' } as never);
+  vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(user);
+  const form = render(<FloorPinPad usernameOnly />);
+  fireEvent.change(form.getByLabelText('Username'), { target: { value: user } });
+  fireEvent.change(form.getByLabelText('Password'), { target: { value: 'test password' } });
+  fireEvent.submit(form.getByLabelText('Password').closest('form')!);
+  await waitFor(() => expect(hasFloorSessionMarker(user)).toBe(true));
+  form.unmount();
+}
+
+it.each(['logout broadcast', 'login broadcast', 'poll', 'focus', 'visibility', 'cookie-only focus'])(
+  'locks a suspended cashier on %s after another tab has cleared the logout failure by signing in',
+  async signal => {
+    if (signal === 'cookie-only focus') {
+      await readLogoutMarker(); // Create the database before making it read-only.
+      refuseMarkerTransactions('readwrite');
+    }
+    const messages: MessageEvent[] = [];
+    let receive: ((event: MessageEvent) => void) | undefined;
+    class SuspendedChannel {
+      onmessage?: (event: MessageEvent) => void;
+      constructor(readonly name: string) {
+        if (name === 'ury-floor-logout') receive ??= event => this.onmessage?.(event);
+      }
+      postMessage(data: unknown) {
+        if (this.name === 'ury-floor-logout') messages.push(new MessageEvent('message', { data }));
+      }
+      close() {}
+    }
+    await passwordLogin(state.user.name);
+    const cashierTab = window.name;
+    const confirmation = sessionStorage.getItem('userAuth')!;
+    vi.stubGlobal('BroadcastChannel', SuspendedChannel);
+    const timers = vi.spyOn(window, 'setInterval');
+    const view = render(<AuthGuard><main>Suspended cashier workspace</main></AuthGuard>);
+    await screen.findByText('Suspended cashier workspace');
+
+    // The suspended window retains its private storage while A and B share only origin storage.
+    window.name = '';
+    sessionStorage.clear();
+    const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
+    await expect(clearCashierStorage(true)).rejects.toThrow();
+    const logoutEvent = messages.at(-1);
+    messages.length = 0;
+    window.name = '';
+    sessionStorage.clear();
+    await passwordLogin('replacement@example.test');
+    const loginEvent = messages.at(-1);
+    expect(await readLogoutMarker()).toBe(false);
+    expect(document.cookie).not.toContain('ury_floor_logout_failed=');
+    window.name = cashierTab;
+    sessionStorage.clear();
+    sessionStorage.setItem('userAuth', confirmation);
+
+    await act(async () => {
+      if (signal.endsWith('broadcast')) {
+        const event = signal === 'login broadcast' ? loginEvent : logoutEvent;
+        expect(event).toBeDefined();
+        receive!(event!);
+      } else if (signal === 'poll') {
+        for (const [wake, ms] of timers.mock.calls) if (ms === 5000) await (wake as () => void)();
+      } else if (signal === 'visibility') document.dispatchEvent(new Event('visibilitychange'));
+      else window.dispatchEvent(new Event('focus'));
+    });
+    await screen.findByLabelText('Password');
+    expect(screen.queryByText('Suspended cashier workspace')).toBeNull();
+    expect(hasFloorSessionMarker(state.user.name)).toBe(false);
+    expect(logout).toHaveBeenCalledTimes(1);
+    view.unmount();
+    render(<AuthGuard><main>Suspended cashier workspace</main></AuthGuard>);
+    await screen.findByLabelText('Password');
+    expect(screen.queryByText('Suspended cashier workspace')).toBeNull();
+  },
+);
+
+it('rotates the persistent generation on logout and verified login and binds confirmation to it', async () => {
+  vi.restoreAllMocks(); // All three origin stores accept writes in this case.
+  const cookie = vi.spyOn(document, 'cookie', 'set');
+  const generation = () => localStorage.getItem('ury_floor_generation');
+  await passwordLogin(state.user.name);
+  const first = generation();
+  expect(first).toBeTruthy();
+  expect(String(JSON.parse(sessionStorage.getItem('userAuth')!).generation)).toBe(first);
+  vi.spyOn(core, 'logout').mockResolvedValue(false);
+  await expect(clearCashierStorage(true)).rejects.toThrow();
+  const revoked = generation();
+  expect(revoked).toBeTruthy();
+  expect(revoked).not.toBe(first);
+  await passwordLogin('replacement@example.test');
+  const next = generation();
+  expect(next).toBeTruthy();
+  expect(next).not.toBe(revoked);
+  expect(String(JSON.parse(sessionStorage.getItem('userAuth')!).generation)).toBe(next);
+  expect(document.cookie).toContain('ury_floor_generation=' + next);
+  for (const value of [first, revoked, next]) {
+    const attributes = cookie.mock.calls.find(([line]) => line.startsWith('ury_floor_generation=' + value + ';'))?.[0];
+    expect(attributes).toContain('Path=/pos');
+    expect(attributes).toContain('SameSite=Strict');
+    expect(attributes).toMatch(/; Secure/i);
+  }
+  // Removing just the two mirrors still leaves the latest generation in IndexedDB.
+  localStorage.removeItem('ury_floor_generation');
+  document.cookie = 'ury_floor_generation=; Path=/pos; Max-Age=0; SameSite=Strict; Secure';
+  const record = JSON.parse(sessionStorage.getItem('userAuth')!);
+  sessionStorage.setItem('userAuth', JSON.stringify({ ...record, user: state.user.name, generation: first }));
+  render(<AuthGuard><main>Old workspace</main></AuthGuard>);
+  await screen.findByLabelText('Password');
+  expect(screen.queryByText('Old workspace')).toBeNull();
 });

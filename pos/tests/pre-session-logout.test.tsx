@@ -134,7 +134,9 @@ describe('pre-session logout', () => {
     const sessionBefore = { ...sessionStorage };
     await act(async () => button('Logout').click());
     expect(location.href).toBe('/pos');
-    expect({ ...localStorage }).toEqual({ ...localBefore, ury_floor_logout_failed: state.user.name });
+    expect({ ...localStorage }).toEqual({
+      ...localBefore, ury_floor_logout_failed: state.user.name, ury_floor_generation: expect.any(String),
+    });
     expect({ ...sessionStorage }).toEqual(sessionBefore);
     sessionStorage.clear(); // A new tab has no copy of the failed tab's session storage.
     expect(hasFloorLogoutFailureMarker()).toBe(true);

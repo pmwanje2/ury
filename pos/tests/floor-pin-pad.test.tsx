@@ -409,4 +409,4 @@ describe('floor session isolation', () => {
   });
 });
 
-vi.mock('../src/lib/logout-store', () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {} }));
+vi.mock('../src/lib/logout-store', () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {}, readGeneration: async () => 0, writeGeneration: async () => {} }));

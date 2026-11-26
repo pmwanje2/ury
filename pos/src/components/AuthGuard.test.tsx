@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import AuthGuard from "./AuthGuard";
 
-vi.mock("../lib/logout-store", () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {} }));
+vi.mock("../lib/logout-store", () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {}, readGeneration: async () => 0, writeGeneration: async () => {} }));
 const mockUseRootStore = vi.fn();
 
 vi.mock("../store/root-store", () => ({
