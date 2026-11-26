@@ -70,7 +70,9 @@ export default function ApprovalPinDialog({
   const submission = useRef<AbortController | null>(null);
   useEffect(() => () => submission.current?.abort(), [open]);
   const canManageHere = status && status.reauth?.mode !== 'unavailable' && !isPinManagedExternally(status);
-  const showStaffTab = Boolean(canManagePins && posProfile && canManageHere && !loading);
+  const staffManagementAvailable = status && (status.can_manage_staff_pins ?? !status.external_verifier);
+  const showStaffTab = Boolean(canManagePins && posProfile && staffManagementAvailable);
+  const viewingStaff = showStaffTab && tab === 'staff';
 
   useEffect(() => {
     if (!open) {
@@ -84,7 +86,7 @@ export default function ApprovalPinDialog({
   }, [open]);
 
   useEffect(() => {
-    if (!open || tab !== 'staff' || !posProfile || !canManagePins) return;
+    if (!open || !viewingStaff || !posProfile) return;
     let cancelled = false;
     setStaffLoading(true);
     setError(null);
@@ -101,7 +103,7 @@ export default function ApprovalPinDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, tab, posProfile, canManagePins]);
+  }, [open, viewingStaff, posProfile]);
 
   const handleSavePin = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -149,7 +151,7 @@ export default function ApprovalPinDialog({
   };
 
   const handleClearStaffPin = async (member: PinUserStatus) => {
-    if (!posProfile) return;
+    if (!viewingStaff || !posProfile) return;
     setClearingUser(member.user);
     setError(null);
     setSuccess(null);
@@ -214,7 +216,7 @@ export default function ApprovalPinDialog({
           </div>
         )}
 
-        {tab === 'self' ? (
+        {!viewingStaff ? (
           <form onSubmit={handleSavePin}>
             <div className="space-y-4 px-6 pb-5">
               {loading ? (

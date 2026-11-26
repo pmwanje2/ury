@@ -2437,12 +2437,20 @@ def _floor_rpc(script, credentials=None):
 
 
 def _floor_enrollment():
+    # Only Kamra's approval verifier delegates to these SiteOps scripts.
+    # Other providers own their enrollment through their companion manager.
+    if _pin_hook_path("pos_override_pin_verifier") != "kamra.authz.verify_pos_override_pin":
+        return None, None
+    _external_pin_verifier()  # A configured but unresolvable verifier cannot enroll.
     script = _floor_script("siteops_doa.my_floor_pin_status")
     if script is None:
         return None, None
     state = _floor_rpc(script)
     if state.get("store") != "siteops_floor_pin":
         return None, None
+    # Kamra falls back to its cashier store when neither authority RPC is enabled.
+    if not (_floor_script("siteops_doa.verify_floor_authority") or _floor_script("siteops_doa.verify_floor_pin")):
+        return state, None
     return state, _floor_script("siteops_doa.set_my_floor_pin")
 
 
@@ -2479,6 +2487,7 @@ def my_pin_status() -> dict[str, Any]:
             **{key: bool(state.get(key)) for key in ("has_pin", "must_reset", "locked")},
             "external_verifier": True,
             "can_manage_here": setter is not None,
+            "can_manage_staff_pins": _external_pin_manager() is not None,
             "reauth": _floor_reauth() if setter else {"mode": "unavailable"},
         }
     manager = _external_pin_manager()
@@ -2487,16 +2496,18 @@ def my_pin_status() -> dict[str, Any]:
             **_external_pin_status(manager, user),
             "external_verifier": True,
             "can_manage_here": True,
+            "can_manage_staff_pins": True,
             "reauth": {"mode": "password"},
         }
     if _external_pin_verifier() is not None:
-        return {"has_pin": True, "external_verifier": True, "can_manage_here": False}
+        return {"has_pin": True, "external_verifier": True, "can_manage_here": False, "can_manage_staff_pins": False}
     return {
         "has_pin": _has_override_pin(user),
         "must_reset": False,
         "locked": False,
         "external_verifier": False,
         "can_manage_here": True,
+        "can_manage_staff_pins": True,
         "reauth": {"mode": "password"},
     }
 
@@ -2636,6 +2647,13 @@ def _can_manage_outlet_pins(caller: str, profile) -> bool:
     )
 
 
+def _staff_pin_manager():
+    manager = _external_pin_manager()
+    if manager is None and _external_pin_verifier() is not None:
+        _refuse_external_pin_management()
+    return manager
+
+
 @frappe.whitelist(methods=["POST"])
 def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
     """Allow a manager to clear another staff member's PIN for a scoped till."""
@@ -2659,9 +2677,7 @@ def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
             frappe.PermissionError,
         )
 
-    manager = _external_pin_manager()
-    if manager is None and _external_pin_verifier() is not None:
-        _refuse_external_pin_management()
+    manager = _staff_pin_manager()
 
     if caller.casefold() == target.casefold():
         _refuse(
@@ -2715,7 +2731,7 @@ def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
             "Only a manager for this till can view staff approval PIN status.",
             frappe.PermissionError,
         )
-    manager = _external_pin_manager()
+    manager = _staff_pin_manager()
     enrolled_users = _users_with_override_pin() if manager is None else set()
     users = frappe.get_all(
         "User",

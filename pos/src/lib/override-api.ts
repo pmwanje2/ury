@@ -52,6 +52,7 @@ interface PinStatus {
 export interface MyPinStatus extends PinStatus {
   external_verifier: boolean;
   can_manage_here?: boolean;
+  can_manage_staff_pins?: boolean;
   reauth?: FloorPinProvider | { mode: 'password' | 'unavailable' };
 }
 
