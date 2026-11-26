@@ -18,6 +18,7 @@
   "copy_slot",
   "dispatch_token_hash",
   "dispatch_until",
+  "render_grant_hash",
   "fiscal_event"
  ],
  "fields": [
@@ -111,6 +112,13 @@
    "fieldname": "dispatch_until",
    "label": "Dispatch Lease Expires",
    "fieldtype": "Datetime",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "render_grant_hash",
+   "label": "Browser Render Grant Hash",
+   "fieldtype": "Data",
    "hidden": 1,
    "read_only": 1
   },

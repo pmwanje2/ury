@@ -1013,6 +1013,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         });
       } else {
         const settlement = await submitSettlementOfflineAware({
+          fiscalReceiptRequested: effectivePrintInvoice ? 1 : 0,
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
           amount: totalTendered, due: amountDue, discount: totalDiscount, tip: tipAmount,
@@ -1062,15 +1063,16 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           });
         }
         try {
-          if (efrisOutcome.outcome === 'fiscalised') {
-            await call.post('ury.ury_pos.api.close_unused_fiscal_copy', { invoice });
-          }
           await printOrder({
             orderId: invoice,
             posProfile: storePosProfile,
             printFormat: resolvePrintFormat(order || {}, storePosProfile.print_format),
             skipStatusUpdate: true,
           });
+          if (efrisOutcome.outcome === 'fiscalised') {
+            await call.post('ury.ury_pos.api.close_unused_fiscal_copy', { invoice })
+              .catch(error => console.warn('Could not retire fiscal copy intent', error));
+          }
         } catch (printErr: unknown) {
           console.error('Print failed:', printErr);
           const reason = (printErr instanceof Error ? printErr.message : '') || parseFrappeError(printErr) || 'Unknown error';

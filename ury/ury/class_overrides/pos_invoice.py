@@ -354,6 +354,7 @@ class CustomPOSInvoice(POSInvoice):
 		else:
 			# Never trust client-supplied copy_timestamp or non-integer copy_number from serialized doc payloads.
 			self.copy_timestamp = None
+			self.copy_number = None
 
 		# Frappe printview also accepts a serialized document. Authorize the saved check.
 		if self.name and frappe.db.exists("POS Invoice", self.name):
@@ -364,22 +365,16 @@ class CustomPOSInvoice(POSInvoice):
 				partner = frappe.get_doc("POS Invoice", saved.custom_merged_pos_invoice, check_permission="read")
 				check_split_target_access(partner, "read")
 				self.ury_print_partner = partner
-			if not is_internal_copy and saved.docstatus == 1:
-				logged = cint(
-					frappe.db.get_value(
-						"URY Bill Reprint Log",
-						{"invoice": self.name},
-						"copy_number",
-						order_by="copy_number desc",
-					)
-				)
-				requested = cint((form_dict if isinstance(form_dict, dict) else {}).get("copy_number"))
-				if logged > 0 and 1 <= requested <= logged:
-					self.copy_number = requested
-				else:
-					self.copy_number = logged or 1
-		elif not is_internal_copy:
-			self.copy_number = cint(getattr(self, "copy_number", None)) or 1
+		if not is_internal_copy and isinstance(form_dict, dict) and (
+			"URY Bill Copy" in (form_dict.get("format"), form_dict.get("print_format")) or form_dict.get("render_grant")
+		):
+			from ury.ury_pos.api import _consume_browser_render_grant
+
+			if form_dict.get("doc") and form_dict["doc"] != "POS Invoice":
+				frappe.throw(_("Open the saved receipt copy from the till."), frappe.PermissionError)
+			self.copy_number = _consume_browser_render_grant(
+				self.name, cint(form_dict.get("copy_number")), form_dict.get("render_grant")
+			)
 		super().before_print(settings)
 		if flt(getattr(self, "outstanding_amount", 0)) > 0:
 			# The native POS receipt renders terms. Add the balance to this print-only copy.

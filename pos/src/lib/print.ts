@@ -105,6 +105,7 @@ export async function deliverReservedCopy(
       const response = await call.post('ury.ury_pos.api.begin_bill_copy_dispatch', { ...attempt, transport });
       if (response?.message?.status !== 'DISPATCHING') throw new Error('Copy dispatch was not authorized.');
       dispatchStarted = true;
+      return response.message;
     } catch (error) {
       claimError = true;
       throw error;
@@ -118,12 +119,10 @@ export async function deliverReservedCopy(
     if (result.delivery === 'qz') {
       if (!result.html) throw new Error('Authorized QZ copy is unavailable.');
       try {
-        await printWithQz(profile.qz_host || 'localhost', result.html, profile.printer, () => begin('qz'));
+        await printWithQz(profile.qz_host || 'localhost', result.html, profile.printer, async () => { await begin('qz'); });
         delivered = true;
       } catch (error) {
         if (error instanceof Error && error.name === 'QzSigningRefusedError') {
-          // The signing service refused before QZ could submit the signed job.
-          dispatchStarted = false;
           throw error;
         }
         if (claimError) throw error;
@@ -140,7 +139,11 @@ export async function deliverReservedCopy(
       const { queryString } = buildLetterheadParams(profile.letter_head);
       const url = result.print_url ||
         `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(invoice)}&format=URY%20Bill%20Copy${queryString}&trigger_print=1&copy_number=${result.copy_number}`;
-      await confirmBrowserDelivery(url, () => begin('browser'));
+      await confirmBrowserDelivery(url, async () => {
+        const { render_grant } = await begin('browser');
+        if (!render_grant) throw new Error('Browser copy authorization is unavailable.');
+        return url + '&render_grant=' + encodeURIComponent(render_grant);
+      });
     }
   } catch (error) {
     if (!dispatchStarted && !claimError) {
@@ -210,10 +213,6 @@ export async function printOrder({
   const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
   const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
   const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
-  if (print_type === 'qz') {
-    await confirmBrowserDelivery(url);
-  } else {
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }
+  await confirmBrowserDelivery(url);
   return 'socket';
 }

@@ -85,6 +85,7 @@ export interface OfflineOrder {
   mode_of_payment?: string; order_type: string; table?: string; room?: string; comments?: string | null;
 }
 export interface OfflineSettlement {
+  fiscal_receipt_requested?: 0 | 1;
   kind: 'cash' | 'mobile-money' | 'offline';
   mode_of_payment: string;
   amount: number;
@@ -95,6 +96,14 @@ export interface OfflineSettlement {
   custom_tender_amount?: number;
   needs_online_approval?: boolean;
 }
+function storedTender(tender: OfflineSettlement): OfflineSettlement {
+  return {
+    ...tender,
+    reference: tender.reference?.trim(),
+    fiscal_receipt_requested: tender.fiscal_receipt_requested ?? 1,
+  };
+}
+
 export interface OfflineEntry {
   sequence?: number; owner: string; profile: string; client_order_id: string; outage_id: string;
   order: OfflineOrder; rounds: OfflineRound[]; settlement?: OfflineSettlement; bill_printed?: boolean;
@@ -386,7 +395,7 @@ export class OfflineOutbox {
       if (!entry || entry.state !== 'pending' || entry.next_round) throw new Error('Only an offline order awaiting replay can be settled here.');
       if (entry.settlement) throw new Error('This order already has a settlement.');
       if (!Number.isFinite(tender.amount) || tender.amount < entry.rounds[entry.rounds.length - 1].expected_total) throw new Error('Tender must cover the provisional bill total.');
-      entry.settlement = { ...tender, reference: tender.reference?.trim() };
+      entry.settlement = storedTender(tender);
       forgetOpenTableCheck(this.options.user.name, entry.order.table);
       if (tender.reference) entry.order.comments = [entry.order.comments, `Offline payment reference (${tender.mode_of_payment}): ${tender.reference.trim()}`].filter(Boolean).join('\n');
       await save(entry);
@@ -407,7 +416,7 @@ export class OfflineOutbox {
       const existing = (await this.list()).find((row) => row.client_order_id === input.clientOrderId);
       if (existing) {
         if (!existing.settlement) {
-          existing.settlement = { ...input.settlement, reference: input.settlement.reference?.trim() };
+          existing.settlement = storedTender(input.settlement);
           existing.bill_printed = true;
           if (input.invoice) existing.server_invoice = existing.server_invoice || input.invoice;
           await save(existing);
@@ -425,7 +434,7 @@ export class OfflineOutbox {
           waiter: this.options.user.name, items: [], no_of_pax: 1, invoice: null, last_invoice: null,
           order_type: input.orderType || 'Take Away', table: input.table || undefined },
         rounds: [{ round_id: input.roundId, items: [], captured_at: new Date().toISOString(), expected_total: input.settlement.amount, offline_printed: 1 }],
-        settlement: { ...input.settlement, reference: input.settlement.reference?.trim() },
+        settlement: storedTender(input.settlement),
       };
       await save(entry);
       return entry;
@@ -518,6 +527,7 @@ export class OfflineOutbox {
               round_id: entry.rounds[entry.rounds.length - 1].round_id,
               payments: [paymentRow],
               offline_replay: 1,
+              fiscal_receipt_requested: entry.settlement.fiscal_receipt_requested ?? 1,
               ...(entry.offline_approval ? { offline_approval: entry.offline_approval, offline_reason: entry.offline_reason || '' } : {}),
               ...(entry.settlement.room_number ? { room_number: entry.settlement.room_number } : {}),
             });

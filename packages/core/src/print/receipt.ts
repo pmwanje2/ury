@@ -1,7 +1,7 @@
 export { prepareReceipt, completeReceipt, dispatchReceipt } from '../../../../ury/public/js/receipt-delivery.js';
 
-export async function confirmBrowserDelivery(url: string, beforeNavigate?: () => Promise<void>): Promise<void> {
-  const initialUrl = beforeNavigate ? 'about:blank' : url;
+export async function confirmBrowserDelivery(url: string, authorizeUrl?: () => Promise<string>): Promise<void> {
+  const initialUrl = authorizeUrl ? 'about:blank' : url;
   let popup = window.open(initialUrl, '_blank');
   if (!popup) {
     // The QZ attempt may have outlived browser user activation. An actual click
@@ -33,10 +33,9 @@ export async function confirmBrowserDelivery(url: string, beforeNavigate?: () =>
     });
   }
   popup.opener = null;
-  if (beforeNavigate) {
+  if (authorizeUrl) {
     try {
-      await beforeNavigate();
-      popup.location.replace(url);
+      popup.location.replace(await authorizeUrl());
     } catch (error) {
       popup.close();
       throw error;
