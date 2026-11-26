@@ -166,6 +166,15 @@ describe('Staff PINs dialog', () => {
     }
   });
 
+  it('offers only revocation for ineligible staff with a lingering PIN', async () => {
+    const StaffPinsDialog = await dialog('StaffPinsDialog');
+    fixtures.callGet.mockResolvedValue({ message: [{ user: 'former', full_name: 'Former waiter', has_pin: true, can_issue: false }] });
+    await render(<StaffPinsDialog posProfile="POS-1" open onOpenChange={vi.fn()} />);
+    expect(button('Revoke PIN')).toBeDefined();
+    expect(container.textContent).toContain('Revocation only');
+    expect(container.textContent).not.toContain('New PIN');
+  });
+
   it('loads staff with pin_staff and shows an issued PIN once without storing it', async () => {
     const StaffPinsDialog = await dialog('StaffPinsDialog');
     fixtures.callGet.mockResolvedValue({

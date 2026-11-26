@@ -258,7 +258,10 @@ class TestFloorPin(unittest.TestCase):
 			with self.subTest(writer=writer):
 				self.profile.applicable_for_users = [Doc(user=self.user if writer else "another")]
 				self.frappe.has_permission.side_effect = lambda dt, mode, doc, user=None: user is None or (writer and doc is self.profile)
-				self.assertEqual(api.pin_staff(self.profile.name), [])
+				rows = api.pin_staff(self.profile.name)
+				self.assertEqual([row["user"] for row in rows], [self.user] if writer else [])
+				if writer:
+					self.assertFalse(rows[0]["can_issue"])
 				self.assertEqual(api.pin_staff(other.name)[0]["user"], self.user)
 				self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user, self.profile.name))
 				self.refused("URY_FLOOR_PIN_REFUSED", Unauthenticated, self.sign_in)
@@ -346,8 +349,15 @@ class TestFloorPin(unittest.TestCase):
 		result = self.api().pin_staff(self.profile.name)
 
 		self.assertEqual(result, [
-			{"user": "waiter@example.test", "full_name": "Amina Waiter", "has_pin": True},
-			{"user": "second-waiter@example.test", "full_name": "Brian Waiter", "has_pin": False},
+			{"user": "waiter@example.test", "full_name": "Amina Waiter", "has_pin": True, "can_issue": True},
+			{"user": "second-waiter@example.test", "full_name": "Brian Waiter", "has_pin": False, "can_issue": True},
+		])
+
+	def test_pin_staff_includes_disabled_branch_member_only_with_a_stored_pin(self):
+		self.frappe.get_all.side_effect = lambda dt, filters=None, **kw: [] if (filters or {}).get("enabled") else [self.user]
+		self.frappe.db.get_value.side_effect = lambda dt, user, field: 0 if field == "enabled" else "digest"
+		self.assertEqual(self.api().pin_staff(self.profile.name), [
+			{"user": self.user, "full_name": "Waiter", "can_issue": False, "has_pin": True},
 		])
 
 	def test_pin_staff_has_pin_flag_never_returns_hash(self):

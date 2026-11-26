@@ -38,7 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   sessionStorage.clear();
-  localStorage.setItem('userAuth', 'true');
+  sessionStorage.setItem('userAuth', 'waiter@example.test');
   localStorage.setItem('ury_language', 'fr');
   sessionStorage.setItem('posProfile', '{"name":"POS-1"}');
   replacement = vi.fn();
@@ -61,7 +61,7 @@ it('clears the tab, disconnects QZ and returns to the pad after a logout failure
   const { floorSignOut } = await floorSession();
   await floorSignOut();
   expect(boundary.logout).toHaveBeenCalledOnce();
-  expect(localStorage.getItem('userAuth')).toBeNull();
+  expect(sessionStorage.getItem('userAuth')).toBeNull();
   expect(sessionStorage.getItem('posProfile')).toBeNull();
   expect(localStorage.getItem('ury_language')).toBe('fr');
   expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
@@ -76,7 +76,7 @@ it('treats a logout that resolves false as failed and sets the failed-logout mar
   await floorSignOut();
   expect(boundary.logout).toHaveBeenCalledOnce();
   expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
-  expect(localStorage.getItem('userAuth')).toBeNull();
+  expect(sessionStorage.getItem('userAuth')).toBeNull();
   expect(sessionStorage.getItem('posProfile')).toBeNull();
   expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
   expect(replacement).toHaveBeenCalledExactlyOnceWith('/pos/order');
@@ -90,7 +90,7 @@ it('clears a stale failed-logout marker when logout succeeds', async () => {
   expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
   expect(replacement).toHaveBeenCalledExactlyOnceWith('/pos/order');
   expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
-  expect(localStorage.getItem('userAuth')).toBeNull();
+  expect(sessionStorage.getItem('userAuth')).toBeNull();
 });
 
 it('treats a configured stay-signed-in role as exempt and anything else as not', async () => {
@@ -135,6 +135,6 @@ it('preserves the session while offline orders await sync', async () => {
   const { floorSignOut } = await floorSession();
   await expect(floorSignOut()).resolves.toBe('blocked');
   expect(boundary.logout).not.toHaveBeenCalled();
-  expect(localStorage.getItem('userAuth')).toBe('true');
+  expect(sessionStorage.getItem('userAuth')).toBe('waiter@example.test');
   expect(replacement).not.toHaveBeenCalled();
 });

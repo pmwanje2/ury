@@ -6,6 +6,16 @@ import AuthGuard from '../src/components/AuthGuard';
 
 // Theme T4 (fork #70): idle sign-out on a paired floor tablet, configured on POS Profile.
 
+const reprint = vi.hoisted(() => vi.fn());
+vi.mock('../src/offline/use-outbox', () => ({
+  useOutbox: (profile: { name?: string } | null, user: { name: string }) => ({
+    queue: { reprint }, offline: false, replaying: false,
+    rows: profile?.name === 'Till' && user.name === 'waiter@example.com' ? [{
+      sequence: 1, client_order_id: 'queued', order: { customer: 'Guest' }, rounds: [{ expected_total: 12, offline_printed: 0 }], state: 'pending',
+    }] : [],
+  }),
+}));
+
 const guard = vi.hoisted(() => vi.fn(async (run: () => Promise<void>) => run()));
 vi.mock('../src/offline/outbox', async (original) => ({
   ...await original<typeof import('../src/offline/outbox')>(), withEmptyOutbox: guard,
@@ -58,7 +68,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'floor_pad', { configurable: true, value: { paired: true, till_open: true } });
   localStorage.clear();
   sessionStorage.clear();
-  localStorage.setItem('userAuth', 'true');
+  sessionStorage.setItem('userAuth', 'waiter@example.com');
   boundary.auth.user = { name: 'waiter@example.com', roles: ['URY Captain'] };
   boundary.auth.posProfile = { floor_idle_signout_seconds: 60, custom_floor_stay_signed_in_roles: [] };
   boundary.logout.mockResolvedValue(undefined);
@@ -177,7 +187,7 @@ it('preserves the session while offline orders await sync', async () => {
   render(<AuthGuard><div>POS</div></AuthGuard>);
   await act(async () => vi.advanceTimersByTimeAsync(60000));
   expect(boundary.logout).not.toHaveBeenCalled();
-  expect(localStorage.getItem('userAuth')).toBe('true');
+  expect(sessionStorage.getItem('userAuth')).toBe('waiter@example.com');
   expect(replacement).not.toHaveBeenCalled();
 });
 
@@ -197,13 +207,18 @@ it.each([false, true])('retries deferred idle sign-out unless activity resumes (
 });
 
 it('locks identity switching on cold boot until the existing outbox drains', async () => {
-  localStorage.removeItem('userAuth');
+  sessionStorage.removeItem('userAuth');
+  boundary.auth.posProfile = { name: 'Till', ury_offline_capture: 1 };
   guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
   render(<AuthGuard><div>Protected POS</div></AuthGuard>);
   await act(async () => {});
   expect(container.querySelector('form, [aria-label="4-digit PIN"]')).toBeNull();
   expect(container.textContent).not.toContain('Protected POS');
   expect(container.querySelector('[role=status]')).not.toBeNull();
+  const print = container.querySelector<HTMLButtonElement>('[data-client-order="queued"] button');
+  expect(print).not.toBeNull();
+  await act(async () => print!.click());
+  expect(reprint).toHaveBeenCalledWith('queued', 'kot');
   expect(boundary.logout).not.toHaveBeenCalled();
   await act(async () => vi.advanceTimersByTimeAsync(10000));
   expect(boundary.logout).toHaveBeenCalledOnce();

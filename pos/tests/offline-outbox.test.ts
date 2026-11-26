@@ -386,3 +386,26 @@ test.each(['capture', 'settle', 'gateway settlement', 'reprint'])('%s honors the
   expect(await q.list()).toEqual([pending]);
   expect(print).not.toHaveBeenCalled();
 });
+
+test('serializes login with capture and allows pending orders only for their exact owner', async () => {
+  const q = await outbox();
+  const { withOutboxLogin } = await import('../src/offline/outbox');
+  const login = vi.fn();
+  await withOutboxLogin(null, login);
+  await q.capture(data, 100);
+  for (const other of [null, 'another@example.com']) {
+    await expect(withOutboxLogin(other, login)).rejects.toThrow();
+  }
+  await withOutboxLogin(user.name, login);
+  expect(login.mock.calls).toEqual([[false], [true]]);
+});
+
+test('lets the authenticated owner retry a reviewed order after correcting its cause', async () => {
+  const q = await outbox();
+  const row = await q.capture(data, 100);
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json('Rejected', 417));
+  await q.replay();
+  expect((await q.list())[0].state).toBe('review');
+  await q.retryReviewed(row.client_order_id);
+  expect(await q.list()).toEqual([]);
+});
