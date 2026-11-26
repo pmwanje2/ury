@@ -1113,6 +1113,69 @@ class TestOverrideContract(unittest.TestCase):
             self.hooks["pos_override_pin_manager"] = ["custom_app.old", "", None, "custom_app.pin.manage"]
             self.hooks["__attr__:custom_app.pin.manage"] = manager
 
+    def install_horizontal_store(self, setter=None):
+        self.frappe.session.user = "manager@example.test"
+        scripts = {"siteops_doa.my_floor_pin_status": MagicMock(script="siteops_floor_pin")}
+        scripts["siteops_doa.my_floor_pin_status"].execute_method.side_effect = lambda: self.frappe.response.update(
+            message={"store": "siteops_floor_pin", "has_pin": False})
+        if setter:
+            scripts["siteops_doa.set_my_floor_pin"] = MagicMock()
+            scripts["siteops_doa.set_my_floor_pin"].execute_method.side_effect = setter
+        original_lookup = self.frappe.db.get_value.side_effect
+        self.frappe.db.get_value.side_effect = lambda dt, filters, *args, **kw: (
+            filters["api_method"] if filters["api_method"] in scripts and filters["disabled"] == 0 else None
+        ) if dt == "Server Script" else original_lookup(dt, filters, *args, **kw)
+        original_get_doc = self.frappe.get_doc.side_effect
+        self.frappe.get_doc.side_effect = lambda dt, *args, **kw: (
+            scripts[args[0]] if dt == "Server Script" else original_get_doc(dt, *args, **kw))
+        self.frappe.response = {"message": "outer"}
+        self.frappe.local.form_dict = self.frappe.form_dict
+        self.descriptor = dict(mode="identity_provider", purpose="floor_pin", start="example.begin", label="SSO")
+        self.hooks["approval_pin_reauth"] = [None, "bad//path", "missing.provider", "example.descriptor"]
+        self.hooks["__attr__:example.descriptor"] = lambda: self.descriptor
+
+    def test_horizontal_descriptor_fallback(self):
+        self.install_horizontal_store(lambda: None)
+        self.assertEqual(self.api().my_pin_status()["reauth"], self.descriptor)
+        self.hooks["approval_pin_reauth"].pop()
+        self.assertEqual(self.api().my_pin_status()["reauth"], {"mode": "password"})
+
+    def test_horizontal_missing_setter_disables_enrollment(self):
+        self.install_horizontal_store()
+        self.assertFalse(self.api().my_pin_status()["can_manage_here"])
+        with self.assertRaises(Invalid):
+            self.api().set_my_pin("secret-pass-1", "2468")
+
+    def test_horizontal_checked_transport_is_consumed_once(self):
+        seen = []
+        def setter():
+            seen.append(self.frappe.local.form_dict.copy())
+            self.frappe.response["message"] = {"ok": True}
+        self.install_horizontal_store(setter)
+        key = "siteops_floor_pin_transport"
+        outer = self.frappe.form_dict
+        for marker in (("POST",), None, ["POST"]):
+            if marker:
+                outer[key] = marker
+            self.assertTrue(self.api().set_my_pin(pin_secret="2468")["ok"])
+            self.assertIs(self.frappe.local.form_dict, outer)
+            self.assertNotIn(key, outer)
+            self.assertEqual(self.frappe.response, {"message": "outer"})
+        self.assertEqual(seen, [{"pin": "2468", key: ("POST",)}, {"pin": "2468"}, {"pin": "2468"}])
+
+    def test_horizontal_unverified_proof_refusals_are_sanitized(self):
+        tags = iter(["REQUIRED", "EXPIRED"])
+        def setter():
+            self.assertNotIn("preverified", self.frappe.local.form_dict)
+            raise RuntimeError("sensitive detail [SITEOPS-DOA-STEPUP-" + next(tags) + "]")
+        self.install_horizontal_store(setter)
+        for _ in range(2):
+            self.frappe.form_dict.update(pin_secret="2468", preverified=True)
+            with self.assertRaisesRegex(Invalid, "Confirm your identity") as raised:
+                self.api().set_my_pin()
+            self.assertIsNone(raised.exception.__context__)
+            self.assertNotIn("sensitive detail", str(raised.exception))
+
     def test_external_pin_status_reports_enrollment_reset_and_lock(self):
         user = "manager@example.test"
         self.frappe.session.user = user
@@ -1121,7 +1184,7 @@ class TestOverrideContract(unittest.TestCase):
 
         self.assertEqual(self.api().my_pin_status(), {
             "has_pin": False, "must_reset": True, "locked": True,
-            "external_verifier": True, "can_manage_here": True,
+            "external_verifier": True, "can_manage_here": True, "reauth": {"mode": "password"},
         })
         manager.assert_called_once_with("status", user=user)
 
@@ -1130,7 +1193,7 @@ class TestOverrideContract(unittest.TestCase):
         self.enroll(self.frappe.session.user, "2468")
         self.assertEqual(self.api().my_pin_status(), {
             "has_pin": True, "must_reset": False, "locked": False,
-            "external_verifier": False, "can_manage_here": True,
+            "external_verifier": False, "can_manage_here": True, "reauth": {"mode": "password"},
         })
 
     def test_external_pin_set_checks_password_and_format_then_writes_only_to_manager(self):
