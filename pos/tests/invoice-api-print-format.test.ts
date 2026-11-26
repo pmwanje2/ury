@@ -269,6 +269,30 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     expect(call.post).not.toHaveBeenCalledWith(expect.stringContaining('begin_bill_copy_dispatch'), expect.anything());
   });
 
+  it('flushes an expired unused fiscal grant with one new browser render for copy #1', async () => {
+    const { queuePendingFiscalReprint, flushPendingFiscalReprints } = await import('../src/lib/efris-print');
+    document.cookie = 'user_id=cashier-a; path=/';
+    localStorage.clear();
+    const invoice = 'EXPIRED';
+    const profile = makeProfile({print_type: 'qz'});
+    vi.mocked(call.get).mockResolvedValue({message: {fdn: 'FDN-9'}});
+    vi.mocked(call.post).mockImplementation(async method => {
+      if (method.endsWith('print_bill_copy')) return {message: {status: 'BROWSER_DISPATCHING', copy_number: 1,
+        recovery_action: 'renew_browser', recovery_token: 'owner-session'}};
+      if (method.endsWith('begin_bill_copy_dispatch')) return {message: {status: 'DISPATCHING', render_grant: 'fresh-grant'}};
+      if (method.endsWith('confirm_bill_copy')) return {message: {status: 'COMPLETED'}};
+      return {message: {status: 'AWAITING_FDN'}};
+    });
+    await queuePendingFiscalReprint({invoice, posProfile: profile});
+    await flushPendingFiscalReprints(profile);
+    expect(navigate).toHaveBeenCalledWith(expect.stringMatching(/copy_number=1.*render_grant=fresh-grant/));
+    const attempt = {invoice, idempotency_key: 'efris-auto-EXPIRED', dispatch_token: 'owner-session'};
+    expect(call.post).toHaveBeenCalledWith('ury.ury_pos.api.begin_bill_copy_dispatch', {...attempt, transport: 'browser'});
+    expect(call.post).toHaveBeenCalledWith('ury.ury_pos.api.confirm_bill_copy', attempt);
+    expect(printWithQz).not.toHaveBeenCalled();
+    expect(localStorage.getItem('ury_pending_fiscal_reprints:cashier-a')).toBeNull();
+  });
+
   it('keeps POS open and requires confirmation when a numbered QZ copy falls back', async () => {
     vi.mocked(call.post).mockImplementation(async method => method.endsWith('begin_bill_copy_dispatch') ? { message: {status: 'DISPATCHING', render_grant: 'one-use'} } : ({ message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'qz', copy_number: 4,
       html: 'COPY #4', print_url: '/printview?copy_number=4' } }));

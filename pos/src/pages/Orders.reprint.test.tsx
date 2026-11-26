@@ -7,6 +7,8 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Orders from "./Orders";
+import SettledBills from "./SettledBills";
+import { clearAppStorage } from "../../../packages/core/src/storage";
 import * as printLib from "../lib/print";
 import { call, printWithQz } from "@ury/core";
 import type { PosProfileCombined } from "../lib/pos-profile-api";
@@ -83,7 +85,7 @@ const mockPosProfile = {
 } as unknown as PosProfileCombined;
 
 vi.mock("../store/pos-store", () => ({
-  usePOSStore: () => ({ posProfile: mockPosProfile }),
+  usePOSStore: Object.assign(() => ({ posProfile: mockPosProfile }), { getState: () => ({ posProfile: mockPosProfile }) }),
 }));
 
 vi.mock("react-router-dom", () => ({
@@ -93,7 +95,7 @@ vi.mock("react-router-dom", () => ({
 }));
 
 vi.mock("@ury/core", () => ({
-  getSessionUser: () => "cashier@example.com",
+  getSessionUser: () => mockRootState.ordersOwner,
   formatCurrency: (amount: number) => `UGX ${amount}`,
   normalizeFrappeTime: (time?: string) => time || "2026-11-23 12:00:00",
   parseFrappeError: (err: unknown, fallback?: string) => (err instanceof Error ? err.message : fallback),
@@ -138,6 +140,7 @@ vi.mock("../lib/table-utils", () => ({
 
 vi.mock("../i18n", () => ({
   t: (key: string) => key,
+  tData: (key: string) => key,
 }));
 
 vi.mock("../components/OrderStatusSidebar", () => ({ default: () => <div /> }));
@@ -149,6 +152,9 @@ vi.mock("../components/HoldFireControls", () => ({ default: () => <div /> }));
 describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
+    mockRootState.ordersOwner = "cashier@example.com";
+    document.cookie = "user_id=cashier%40example.com; path=/";
     mockRootState.selectedStatus = "Recently Paid";
     mockRootState.selectedOrder.status = "Paid";
     mockRootState.selectedOrder.docstatus = 1;
@@ -208,6 +214,89 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
       { invoice: "POS-INV-00024", idempotency_key: "k-qz-1", dispatch_token: "attempt-1" });
     expect(vi.mocked(call.post).mock.invocationCallOrder.at(-1)).toBeGreaterThan(vi.mocked(printWithQz).mock.invocationCallOrder[0]);
     expect(res.copy_number).toBe(3);
+  });
+
+  it.each(["Orders", "Settled Bills"])("%s recovers copy #1 after reload and isolates cashier sessions", async page => {
+    const { name } = mockRootState.selectedOrder;
+    const bill = { ...mockRootState.selectedOrder, pos_profile: "Till", items: [], taxes: [], payments: [] };
+    vi.mocked(call.get).mockResolvedValue({message: [bill]});
+    const boot = {receipt_copy_session: "login-one"};
+    vi.stubGlobal("frappe", {boot});
+    const requests: string[] = [];
+    const numbers = new Map<string, number>();
+    const confirms: string[] = [];
+    const navigate = vi.fn();
+    const open = vi.spyOn(window, "open").mockReturnValue({closed: true, location: {replace: navigate}} as unknown as Window);
+    const printed = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const mount = async () => {
+      const view = render(page === "Orders" ? <Orders /> : <SettledBills />);
+      if (page === "Settled Bills") {
+        fireEvent.click(screen.getByRole("button", {name: "Search"}));
+        fireEvent.click(await screen.findByRole("button", {name: new RegExp(name)}));
+      }
+      return view;
+    };
+    const click = () => fireEvent.click(screen.getByRole("button", {name: /order\.print_receipt|print copy|retry copy/i}));
+    await vi.mocked(call.post).withImplementation(async (method, args) => {
+      const key = args.idempotency_key;
+      if (method.endsWith("confirm_bill_copy")) {
+        confirms.push(key);
+        return { message: {status: "COMPLETED"} };
+      }
+      if (method.endsWith("begin_bill_copy_dispatch")) return {message: {status: "DISPATCHING", render_grant: "once"}};
+      requests.push(key);
+      if (numbers.has(key)) return {message: {status: "BROWSER_DISPATCHING", recovery_token: "confirm-only", copy_number: numbers.get(key)}};
+      const number = numbers.size + 1;
+      numbers.set(key, number);
+      return {message: {status: "RESERVED", delivery: "browser", copy_number: number, dispatch_token: "lease"}};
+    }, async () => {
+      let view = await mount();
+      click();
+      await waitFor(() => expect(printed).toHaveBeenCalledTimes(1));
+      view.unmount();
+
+      printed.mockReturnValue(true);
+      view = await mount();
+      click();
+      await waitFor(() => expect(confirms).toHaveLength(1));
+      expect(requests[1]).toBe(requests[0]);
+      expect(numbers.size).toBe(1);
+      expect(navigate).toHaveBeenCalledTimes(1);
+      view.unmount();
+
+      printed.mockReturnValue(false);
+      view = await mount();
+      click();
+      await waitFor(() => expect(printed).toHaveBeenCalledTimes(3));
+      expect(requests[2]).not.toBe(requests[0]);
+      view.unmount();
+
+      mockRootState.ordersOwner = "second@example.com";
+      document.cookie = "user_id=second%40example.com; path=/";
+      view = await mount();
+      click();
+      await waitFor(() => expect(printed).toHaveBeenCalledTimes(4));
+      expect(requests[3]).not.toBe(requests[2]);
+      view.unmount();
+
+      clearAppStorage();
+      view = await mount();
+      click();
+      await waitFor(() => expect(printed).toHaveBeenCalledTimes(5));
+      expect(requests[4]).not.toBe(requests[3]);
+      view.unmount();
+
+      // A fresh login in another tab need not run this tab's logout cleanup.
+      boot.receipt_copy_session = "login-two";
+      view = await mount();
+      click();
+      await waitFor(() => expect(printed).toHaveBeenCalledTimes(6));
+      expect(requests[5]).not.toBe(requests[4]);
+      view.unmount();
+    });
+    open.mockRestore();
+    printed.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it("still uses printOrder for a draft guest check (not print_bill_copy)", async () => {

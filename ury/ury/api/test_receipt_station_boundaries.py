@@ -468,6 +468,51 @@ class SiteContracts(TestCase):
         for _ in range(2):
             self.assertEqual(api.confirm_bill_copy(invoice, key, proof)["status"], "COMPLETED")
 
+    def test_only_original_session_renews_expired_unconsumed_fiscal_grant(self):
+        from datetime import timedelta
+        from frappe.utils import now_datetime
+        from ury.ury_pos import api
+
+        invoice, key, copy = self.fiscal_reservation("browser")
+        lease = copy["dispatch_token"]
+        first = api.begin_bill_copy_dispatch(invoice, key, lease, "browser")["render_grant"]
+        replay = lambda: api.print_bill_copy(invoice, key, delivery="browser")
+        self.assertNotIn("recovery_token", replay())
+        future = now_datetime() + timedelta(minutes=6)
+        with patch("frappe.utils.now_datetime", return_value=future):
+            with patch.dict(frappe.session, sid="another-till"):
+                self.assertNotIn("recovery_token", replay())
+                with self.assertRaises(frappe.PermissionError):
+                    api.begin_bill_copy_dispatch(invoice, key, lease, "browser")
+            with patch.dict(frappe.session, user="another-cashier"):
+                with patch.object(api, "_closed_invoice", return_value=frappe._dict(name=invoice)):
+                    self.assertNotIn("recovery_token", replay())
+            pending = replay()
+            self.assertEqual(pending["copy_number"], 1)
+            self.assertEqual(pending.get("recovery_action"), "renew_browser")
+            proof = pending["recovery_token"]
+            with self.assertRaises(frappe.PermissionError):
+                api.begin_bill_copy_dispatch(invoice, key, proof, "qz")
+            def renew():
+                try:
+                    return api.begin_bill_copy_dispatch(invoice, key, proof, "browser")["render_grant"]
+                except frappe.PermissionError:
+                    return None
+            grants = [grant for grant in self.overlap(renew) if grant]
+            self.assertEqual(len(grants), 1)
+            self.assertNotEqual(first, grants[0])
+            with self.assertRaises(frappe.PermissionError):
+                self.render_copy(invoice, 1, first)
+            self.assertIn("COPY #1", self.render_copy(invoice, 1, grants[0]))
+        with patch("frappe.utils.now_datetime", return_value=future + timedelta(minutes=6)):
+            rendered = replay()
+            self.assertNotEqual(rendered.get("recovery_action"), "renew_browser")
+            with self.assertRaises(frappe.PermissionError):
+                api.begin_bill_copy_dispatch(invoice, key, rendered["recovery_token"], "browser")
+            self.assertEqual(api.confirm_bill_copy(invoice, key, rendered["recovery_token"])["status"], "COMPLETED")
+        frappe.db.rollback()  # Read the committed attempt count from a fresh snapshot.
+        self.assertEqual(frappe.db.count(api._COPY_LOG, {"invoice": invoice, "attempt": [">", 0]}), 1)
+
     def test_registration_distinguishes_missing_intent_from_another_cashiers_job(self):
         from ury.ury_pos import api
 
