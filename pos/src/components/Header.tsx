@@ -22,7 +22,7 @@ import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { call, resolveBrand, isPrintStatusDisabled } from '@ury/core';
+import { resolveBrand, isPrintStatusDisabled } from '@ury/core';
 import { clearCashierStorage } from '../offline/cashier';
 import { useOutbox } from '../offline/use-outbox';
 import { showToast } from '@ury/ui';
@@ -30,7 +30,7 @@ import { PrinterStatusButton } from './PrinterWatch';
 import PairTabletDialog from './PairTabletDialog';
 import StaffPinsDialog from './StaffPinsDialog';
 import TillCashDialog from './TillCashDialog';
-import ApprovalPinDialog from './ApprovalPinDialog';
+import { useApprovalPin } from './ApprovalPinProvider';
 import OutletSwitcher from './OutletSwitcher';
 import TimeclockButton from './TimeclockButton';
 import ShiftReportDialog from './ShiftReportDialog';
@@ -66,30 +66,12 @@ const Header = () => {
   const [showStaffPins, setShowStaffPins] = useState(false);
   const [showPairTablet, setShowPairTablet] = useState(false);
   const [showTillCash, setShowTillCash] = useState(false);
-  const [showApprovalPin, setShowApprovalPin] = useState(false);
+  const { openDialog, canManagePins } = useApprovalPin();
   const [showShiftReport, setShowShiftReport] = useState(false);
-  const [canManagePins, setCanManagePins] = useState(false);
   const posProfileName = posProfile?.name;
   const cashMovementsEnabled = Number(posProfile?.enable_cash_movements) === 1;
   const activeBusinessDate = posProfile?.active_business_date || null;
   const shiftReportAvailable = Boolean(posProfile?.shift_report_available);
-
-  // Floor tablet setup follows native POS Profile write permission; fail closed.
-  useEffect(() => {
-    let cancelled = false;
-    setCanManagePins(false);
-    if (!posProfileName) return () => { cancelled = true; };
-    call.get('frappe.client.has_permission', {
-      doctype: 'POS Profile', docname: posProfileName, perm_type: 'write',
-    }).then((response) => {
-      if (!cancelled) {
-        setCanManagePins((response as { message?: { has_permission?: unknown } })?.message?.has_permission === true);
-      }
-    }).catch(() => {
-      if (!cancelled) setCanManagePins(false);
-    });
-    return () => { cancelled = true; };
-  }, [posProfileName]);
 
   // Determine placeholder and handlers based on route
   let searchPlaceholder = t('header.search_placeholder_default');
@@ -308,14 +290,16 @@ const Header = () => {
                     <Monitor className="w-4 h-4 me-3" />
                     {t('header.switch_to_dashboard')}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    onClick={() => { setShowUserMenu(false); setShowApprovalPin(true); }}
-                  >
-                    <KeyRound className="w-4 h-4 me-3" />
-                    {t('header.my_approval_pin')}
-                  </Button>
+                  {user?.name && user.name !== 'Guest' && user.name !== 'Administrator' && (
+                    <Button
+                      variant="ghost"
+                      className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                      onClick={() => { setShowUserMenu(false); openDialog(); }}
+                    >
+                      <KeyRound className="w-4 h-4 me-3" />
+                      {t('header.my_approval_pin')}
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
@@ -409,12 +393,6 @@ const Header = () => {
         posOpeningEntry={posProfile?.active_opening_entry}
       />
     )}
-    <ApprovalPinDialog
-      open={showApprovalPin}
-      onOpenChange={setShowApprovalPin}
-      posProfile={posProfileName}
-      canManagePins={canManagePins}
-    />
     {canManagePins && posProfileName && (
       <>
         <StaffPinsDialog open={showStaffPins} onOpenChange={setShowStaffPins} />

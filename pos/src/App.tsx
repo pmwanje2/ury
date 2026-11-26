@@ -71,7 +71,7 @@ function RegisterRoute() {
 function App() {
   const user = useRootStore((state) => state.user);
   const {
-    initializeApp
+    initializeApp, posProfile
   } = usePOSStore();
   const chatRef = useRef<ChatWidgetHandle>(null);
   const aiEnabled = useAiSettings();
@@ -132,7 +132,7 @@ function App() {
                   <ChatWidgetRefProvider chatRef={chatRef}>
                     <Routes>
                       <Route element={<AppLayout />}>
-                        <Route index element={<Navigate to={provisional ? "/register" : homePath(user)} replace />} />
+                        <Route index element={<Navigate to={provisional ? "/register" : homePath(user, posProfile)} replace />} />
                         <Route path="/dashboard" element={<Dashboard />} />
                         <Route path="/register" element={<RegisterRoute />} />
                         <Route path="/tables" element={<Table />} />

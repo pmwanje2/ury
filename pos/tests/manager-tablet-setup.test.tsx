@@ -1,3 +1,4 @@
+import { ApprovalPinProvider } from '../src/components/ApprovalPinProvider';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
@@ -107,7 +108,7 @@ function setInput(input: HTMLInputElement, value: string) {
 }
 
 async function openManagerMenu() {
-  await render(<MemoryRouter initialEntries={['/dashboard']}><Header /></MemoryRouter>);
+  await render(<MemoryRouter initialEntries={['/dashboard']}><ApprovalPinProvider><Header /></ApprovalPinProvider></MemoryRouter>);
   await settle();
   await act(async () => button('Manager').click());
   await settle();

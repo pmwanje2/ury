@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
 import { initI18n, t } from '../i18n';
-import ApprovalPinDialog from './ApprovalPinDialog';
+import PinDialog, { type ApprovalPinDialogProps } from './ApprovalPinDialog';
+import { useMyPinStatus } from '../lib/use-my-pin-status';
+
+function ApprovalPinDialog(props: Omit<ApprovalPinDialogProps, 'pinStatus'>) {
+  const status = useMyPinStatus(props.open);
+  return <PinDialog {...props} pinStatus={status} />;
+}
 
 describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
   beforeEach(async () => {
@@ -95,7 +101,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     const user = userEvent.setup();
     render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
 
-    await user.click(await screen.findByRole('button', { name: /staff pins/i }));
+    await user.click(await screen.findByRole('button', { name: /clear staff approval pins/i }));
 
     expect(await screen.findByText('Bob Supervisor')).toBeInTheDocument();
     expect(screen.getByText('Grace Cashier')).toBeInTheDocument();
@@ -122,7 +128,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
 
     const { rerender } = render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /staff pins/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /clear staff approval pins/i })).not.toBeInTheDocument();
     });
 
     // When built-in store is active and password is wrong, show neutral POS-AUTH-PASSWORD message
@@ -156,7 +162,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
 
     expect(await screen.findByText('Reset required')).toBeInTheDocument();
     expect(screen.getByText('Locked')).toBeInTheDocument();
-    expect(screen.queryByText(/property.s cashier PIN store/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/property manages approval PINs externally/)).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/current password/i), 'MySecretPass1!');
     await user.type(screen.getByLabelText(/new approval pin/i), '4826');
     await user.type(screen.getByLabelText(/confirm approval pin/i), '4826');
@@ -185,7 +191,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     const user = userEvent.setup();
     render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
 
-    await user.click(await screen.findByRole('button', { name: 'Staff PINs' }));
+    await user.click(await screen.findByRole('button', { name: 'Clear staff approval PINs' }));
     expect(await screen.findByText('Locked')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /clear pin/i }));
 

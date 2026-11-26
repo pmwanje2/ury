@@ -14,7 +14,7 @@ it('names the configured site during POS startup', () => {
 
 it('offers Desk on small displays without a vendor name', () => {
   render(<ScreenSizeDialog />);
-  expect(screen.getByRole('button', { name: /open desk/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /open back office/i })).toBeInTheDocument();
   expect(screen.queryByText(/ury|frappe|erpnext/i)).toBeNull();
 });
 
