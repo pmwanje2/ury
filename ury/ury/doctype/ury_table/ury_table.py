@@ -11,7 +11,8 @@ class URYTable(Document):
         # modified unchanged. A Desk form can therefore carry stale floor state.
         previous = self.get_doc_before_save()
         if previous:
-            for field in ("occupied", "custom_table_state", "custom_dirty_since", "latest_invoice_time", "seating_checks"):
+            for field in ("occupied", "custom_table_state", "custom_dirty_since", "latest_invoice_time",
+                          "seating_checks", "merged_with"):
                 self.set(field, previous.get(field))
         else:
             self.seating_checks = "[]"

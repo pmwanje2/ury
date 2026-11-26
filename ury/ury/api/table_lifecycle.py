@@ -3,7 +3,7 @@ from frappe import _
 from frappe.utils import cint, now_datetime
 
 from ury.brand import coded_message
-from ury.ury.api.seating_membership import update_members
+from ury.ury.api.seating_membership import record_table_transfer, update_members
 
 ON_SETTLEMENT = "On Settlement (Hospitality Default)"
 _POLICY_FIELDS = [
@@ -105,6 +105,7 @@ def update_tables_after_transfer(source, destination, invoice):
     policy = table_policy(invoice.branch)
     hold = policy.get("custom_table_release_trigger") == ON_SETTLEMENT
     state = "Check Printed" if hold and cint(invoice.get("invoice_printed")) else "Seated"
+    record_table_transfer(frappe, invoice, source, destination)
     set_table_state(destination, state, since=invoice.creation, check=invoice.name)
     update_members(frappe, source, remove=[invoice.name])
 

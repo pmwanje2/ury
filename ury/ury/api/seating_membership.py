@@ -1,5 +1,6 @@
 """Current party's checks on a restaurant table. NULL means the roster predates tracking."""
 import json
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from ury.ury.api.kitchen_ticket_history import CANCELLATIONS, current_ticket_owner
@@ -21,6 +22,61 @@ def _legacy_seating_start(clock, drafts):
     return start - timedelta(days=1) if start > now else start
 
 
+def _transfer_arrivals(frappe, names, table, since):
+    """Arrival is the recorded change of table, independent of the invoice's opening time."""
+    if not names:
+        return {}
+    rows = frappe.get_all(
+        "Version", filters={"ref_doctype": "POS Invoice", "docname": ("in", names),
+                            "creation": (">=", since), "data": ("like", '%"restaurant_table"%')},
+        fields=["docname", "creation", "data"], order_by="creation asc",
+    )
+    arrivals = {}
+    for row in rows:
+        try:
+            data = json.loads(row.data)
+        except (TypeError, ValueError, RecursionError):
+            continue
+        changes = data.get("changed") if isinstance(data, dict) else None
+        if isinstance(changes, list) and any(
+            isinstance(edit, list) and len(edit) == 3 and edit[0] == "restaurant_table" and edit[2] == table
+            for edit in changes
+        ):
+            arrivals[row.docname] = row.creation
+    return arrivals
+
+
+def record_table_transfer(frappe, invoice, source, destination):
+    # save() normally writes this Version. Direct floor updates can use db_set(),
+    # which skips versioning. Keep the same evidence in the transfer transaction.
+    saved = frappe.db.get_all("POS Invoice", filters={"name": invoice.name, "restaurant_table": destination},
+                              pluck="modified")
+    if saved and not _transfer_arrivals(frappe, [invoice.name], destination, saved[0]):
+        frappe.get_doc({
+            "doctype": "Version", "ref_doctype": "POS Invoice", "docname": invoice.name,
+            "data": json.dumps({"changed": [["restaurant_table", source, destination]]}),
+        }).insert(ignore_permissions=True)
+
+
+def _split_family(checks, seeds):
+    # A parent can be off-table. Use it as a relationship key, but only add
+    # actual on-table records to the roster. Keep group and parent keys distinct.
+    links = defaultdict(set)
+    for check in checks:
+        keys = [("parent", check.name), ("parent", check.custom_split_from), ("group", check.custom_split_group)]
+        for key in keys:
+            if key[1]:
+                links[key].add(check.name)
+                links[check.name].add(key)
+    visited = set(seeds)
+    pending = list(visited)
+    while pending:
+        neighbors = links[pending.pop()] - visited
+        visited.update(neighbors)
+        pending.extend(neighbors)
+    return {name for name in visited if isinstance(name, str)}
+
+
 def _legacy_checks(frappe, table):
     """Recover drafts, seated reservation bindings and effective owners of kitchen work at this table."""
     from ury.ury.api.table_reservation import open_checks_on
@@ -34,36 +90,40 @@ def _legacy_checks(frappe, table):
     )
     seated = {row.pos_invoice for row in reservations if row.status == "Seated"}
     departed = {row.pos_invoice for row in reservations if row.status in ("Completed", "Cancelled")}
-    tickets = frappe.get_all(
-        "URY KOT",
-        filters={"restaurant_table": table.name, "docstatus": 1, "type": ("not in", CANCELLATIONS)},
-        fields=["name", "invoice"],
+    paid = frappe.get_all(
+        "POS Invoice", filters={"docstatus": 1, "status": "Paid", "restaurant_table": table.name},
+        fields=["name", "creation", "custom_split_from", "custom_split_group"],
     )
-    ledgers = {}
-    owners = {current_ticket_owner(frappe, row.name, row.invoice, ledgers=ledgers).name for row in tickets}
-    owners.discard(None)
-    if owners:
-        paid = frappe.get_all(
-            "POS Invoice",
-            filters={"name": ("in", sorted(owners)), "docstatus": 1, "status": "Paid",
-                     "restaurant_table": table.name},
-            fields=["name", "creation", "custom_split_from", "custom_split_group"],
+    paid = [row for row in paid if row.name not in departed]
+    if not paid:
+        return checks | seated
+
+    clock = table.get("latest_invoice_time")
+    if clock is None:
+        clock = frappe.db.get_value("URY Table", table.name, "latest_invoice_time")
+    start = _legacy_seating_start(clock, drafts)
+    if start is None:
+        tickets = frappe.get_all(
+            "URY KOT",
+            filters={"restaurant_table": table.name, "docstatus": 1, "type": ("not in", CANCELLATIONS)},
+            fields=["name", "invoice"],
         )
-        # The dashboard's table projection omits the clock. Fetch it only for
-        # legacy recovery; normal seating membership never depends on a timestamp.
-        clock = table.get("latest_invoice_time")
-        if clock is None:
-            clock = frappe.db.get_value("URY Table", table.name, "latest_invoice_time")
-        start = _legacy_seating_start(clock, drafts)
-        roots = {draft.custom_split_from or draft.name for draft in drafts}
-        groups = {draft.custom_split_group for draft in drafts if draft.custom_split_group}
-        for check in paid:
-            if check.name in departed:
-                continue
-            same_bill = (check.custom_split_from or check.name) in roots or check.custom_split_group in groups
-            if start is None or same_bill or (check.creation and check.creation >= start):
-                checks.add(check.name)
-    return checks | seated
+        ledgers = {}
+        owners = {current_ticket_owner(frappe, row.name, row.invoice, ledgers=ledgers).name for row in tickets}
+        checks.update(row.name for row in paid if row.name in owners)
+    else:
+        # The floor clock identifies the check that opened the seating. For
+        # transferred checks the seating began when it arrived at this table.
+        clock_checks = [row.name for row in [*drafts, *paid] if row.creation and
+                        row.creation.time() == start.time() and row.creation <= start]
+        arrivals = _transfer_arrivals(frappe, clock_checks, table.name, start)
+        if arrivals:
+            anchor = max(arrivals, key=arrivals.get)
+            checks.add(anchor)
+            start = arrivals[anchor]
+        checks.update(row.name for row in paid if row.creation and row.creation >= start)
+
+    return _split_family([*drafts, *paid], checks | seated)
 
 
 def table_checks(frappe, table):
