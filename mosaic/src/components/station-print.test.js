@@ -686,3 +686,48 @@ test("a stalled first connection reports a trust timeout without dispatching", a
   assert.deepEqual(await result, { printed: false, code: "QZ_TRUST_TIMEOUT" });
   assert.equal(bridge.calls.prints.length, 0);
 });
+
+test("hostless Mosaic connections always request TLS", async () => {
+  const bridge = qzDouble({ active: false });
+  bridge.qz.websocket.connect = vi.fn();
+  const { printer } = await makePrinter({ qzDouble: bridge });
+  await printer.listPrinters();
+  assert.deepEqual(bridge.qz.websocket.connect.mock.calls, [[{ usingSecure: true }]]);
+});
+
+test("a timed-out certificate cannot connect late or block the next attempt", async () => {
+  vi.useFakeTimers();
+  onTestFinishedRealTimers();
+  const bridge = qzDouble({ active: false });
+  bridge.qz.websocket.connect = vi.fn();
+  const call = callDouble();
+  const get = call.get;
+  let release;
+  let acquisitions = 0;
+  call.get = (method, args) => {
+    if (method.endsWith("qz_certificate") && ++acquisitions === 1) {
+      return new Promise(resolve => { release = resolve; });
+    }
+    return get(method, args);
+  };
+  const { printer } = await makePrinter({ call, qzDouble: bridge });
+  const first = printer.process(ticket("CERT-STALL"));
+  await vi.advanceTimersByTimeAsync(60000);
+  assert.equal((await first).code, "QZ_TRUST_TIMEOUT");
+  const second = printer.retry();
+  await vi.advanceTimersByTimeAsync(0);
+  assert.equal(acquisitions, 2);
+  assert.equal((await second)[0].printed, true);
+  release({ message: "-----BEGIN CERTIFICATE-----late" });
+  await vi.advanceTimersByTimeAsync(0);
+  assert.equal(bridge.qz.websocket.connect.mock.calls.length, 1);
+});
+
+test("invalid site certificate reports QZ_CERT_ERROR before opening a socket", async () => {
+  const call = callDouble();
+  const original = call.get;
+  call.get = (method, args) => method.endsWith("qz_certificate")
+    ? Promise.resolve({ message: null }) : original(method, args);
+  const { printer } = await makePrinter({ call, qzDouble: qzDouble({ active: false }) });
+  assert.equal((await printer.process(ticket("BAD-CERT"))).code, "QZ_CERT_ERROR");
+});

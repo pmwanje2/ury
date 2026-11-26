@@ -525,3 +525,23 @@ class TestMarkInvoicePrinted(FrappeTestCase):
 			{"invoice_printed": 1, "custom_printing_time": "2026-11-03 10:15:00"},
 			update_modified=False,
 		)
+
+
+class TestReceiptDelivery(BillPrintTestCase):
+	def test_only_confirmed_delivery_triggers_effects_and_duplicate_commit_is_safe(self):
+		from ury.ury.api import ury_print as api
+		from uuid import uuid4
+		invoice = "Fixture-" + uuid4().hex
+		frappe.get_doc({"doctype": "POS Invoice", "name": invoice}).db_insert()
+		doc = _ordinary_invoice()
+		doc.docstatus = 1
+		# A synthetic invoice exercises the delivery ledger without creating a fiscal sale.
+		with patch.object(api, "_receipt_invoice", return_value=doc, create=True), patch.object(api, "_record_delivered_bill", return_value={"status": "Success"}, create=True) as effects:
+			request_id = str(uuid4())
+			first = api.prepare_receipt_delivery(invoice, request_id)
+			self.assertEqual(api.prepare_receipt_delivery(invoice, request_id), first)
+			effects.assert_not_called()
+			result = api.complete_receipt_delivery(invoice, first["delivery_id"])
+			self.assertEqual(result["status"], "Success")
+			api.complete_receipt_delivery(invoice, first["delivery_id"])
+			effects.assert_called_once()

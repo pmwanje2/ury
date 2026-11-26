@@ -74,6 +74,7 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(printWithQz).mockReset();
     vi.stubGlobal('open', openSpy);
   });
 
@@ -113,16 +114,40 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     };
   }
 
-  it('offers browser receipt delivery when the local tray cannot connect', async () => {
-    vi.mocked(printWithQz).mockRejectedValueOnce(new Error('QZ_NOT_RUNNING'));
-    vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
-    const delivery = await printOrder({ orderId: 'INV-1', posProfile: makeProfile({
-      print_type: 'qz', printer: 'Front Desk',
-    }) });
+  it('prepares before dispatch and commits only a delivered receipt', async () => {
+    const events: string[] = [];
+    vi.mocked(call.post).mockImplementation(async (method: string) => {
+      events.push(method.split('.').pop()!);
+      return { message: { delivery_id: 'receipt-1' } };
+    });
+    vi.mocked(printWithQz).mockImplementation(async () => { events.push('dispatch'); });
+    const params = { orderId: 'INV-1', posProfile: makeProfile({ print_type: 'qz', printer: 'Front Desk' }) };
+    await printOrder(params);
+    expect(events).toEqual(['prepare_receipt_delivery', 'dispatch', 'complete_receipt_delivery']);
     expect(printWithQz).toHaveBeenCalledWith('localhost', expect.any(String), 'Front Desk');
-    expect(delivery).toBe('socket');
+    events.length = 0;
+    vi.mocked(printWithQz).mockRejectedValueOnce(new Error('QZ_NOT_RUNNING'));
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+    await expect(printOrder(params)).rejects.toThrow('QZ_NOT_RUNNING');
+    expect(events).toEqual(['prepare_receipt_delivery']);
+  });
+
+  it('records fallback delivery only when the cashier confirms the browser receipt printed', async () => {
+    vi.mocked(call.post).mockResolvedValue({ message: { delivery_id: 'receipt-2' } });
+    vi.mocked(printWithQz).mockRejectedValue(new Error('QZ_NOT_RUNNING'));
+    const popup = { closed: true, opener: window };
+    openSpy.mockReturnValue(popup);
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const params = { orderId: 'INV-2', posProfile: makeProfile({ print_type: 'qz' }) };
+    await expect(printOrder(params)).rejects.toThrow();
+    expect(call.post).not.toHaveBeenCalledWith(expect.stringContaining('complete_receipt_delivery'), expect.anything());
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await expect(printOrder(params)).resolves.toBe('socket');
     expect(openSpy.mock.lastCall?.[0]).toContain('trigger_print=1');
-    expect(call.post).toHaveBeenCalledTimes(1);
+    expect(call.post).toHaveBeenCalledWith(expect.stringContaining('complete_receipt_delivery'), {
+      invoice: 'INV-2', delivery_id: 'receipt-2',
+    });
+    vi.mocked(printWithQz).mockResolvedValue(undefined);
   });
 
   it('uses configured letterhead and defaults to Merged POS Invoice Format when print_format is empty or unsafe', async () => {

@@ -202,13 +202,27 @@ class TestURYKOTDisplaySEC06(FrappeTestCase):
 class TestLegacyStationSettings(FrappeTestCase):
     def test_legacy_department_does_not_block_valid_device_update(self):
         from ury.ury.api import ury_kot_display as api
-        unit = MagicMock(department=None)
-        unit.flags.ignore_mandatory = False
-        def save():
-            if not unit.flags.ignore_mandatory:
-                raise frappe.MandatoryError("department")
-        unit.save.side_effect = save
-        with patch.object(api.frappe, "request", None), patch.object(api.frappe, "get_doc", return_value=unit), patch.object(api.frappe, "has_permission", return_value=True), patch.object(api, "is_kitchen_admin", return_value=True), patch.object(api, "_extract_station_device_config"):
+        unit = frappe.get_doc({"doctype": "URY Production Unit", "name": "Kitchen", "branch": "East",
+                               "company": "Alpha", "production": "Kitchen"})
+        with patch.object(api.frappe, "request", None), patch.object(api.frappe, "get_doc", return_value=unit), patch.object(api.frappe, "has_permission", return_value=True), patch.object(api, "is_kitchen_admin", return_value=True), patch.object(api.frappe.db, "get_value", return_value="Alpha"), patch.object(api, "_extract_station_device_config"), patch.object(unit, "save", side_effect=unit._validate_mandatory):
             api.save_station_device_config("Kitchen", {"enabled": True, "printer": "Kitchen", "printFormat": "KOT"})
-        self.assertEqual(unit.custom_primary_printer, "Kitchen")
-        unit.save.assert_called_once()
+            self.assertEqual(unit.custom_primary_printer, "Kitchen")
+            child = MagicMock()
+            child._get_missing_mandatory_fields.return_value = [("custom_required", "Missing required child field")]
+            with patch.object(unit, "get_all_children", return_value=[child]), self.assertRaisesRegex(frappe.MandatoryError, "custom_required"):
+                api.save_station_device_config("Kitchen", {})
+
+    def test_restricted_kitchen_admin_cannot_read_or_write_legacy_station_of_other_company(self):
+        from ury.ury.api import ury_kot_display as api
+        unit = MagicMock(branch="East", company=None, department="Kitchen")
+        unit.get.side_effect = lambda key: getattr(unit, key, None)
+        permissions = {"Company": [frappe._dict(doc="Beta", applicable_for=None)]}
+        with patch("frappe.core.doctype.user_permission.user_permission.get_user_permissions", return_value=permissions), patch.object(api.frappe, "get_doc", return_value=unit), patch.object(api.frappe.db, "get_value", return_value="Alpha"), patch.object(api.frappe, "has_permission", return_value=True), patch.object(api, "is_kitchen_admin", return_value=True), patch.object(api, "_extract_station_device_config"):
+            for operation in [lambda: api.get_station_device_config("Kitchen"), lambda: api.save_station_device_config("Kitchen", {})]:
+                with self.subTest(operation=operation), self.assertRaises(frappe.PermissionError):
+                    operation()
+
+    def test_legacy_command_mode_is_read_as_standard(self):
+        from ury.ury.api import ury_kot_display as api
+        with patch.object(frappe.db, "get_value", return_value={"custom_command_mode": "old-driver"}):
+            self.assertEqual(api._extract_station_device_config("Kitchen")["commandMode"], "standard")
