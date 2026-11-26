@@ -12,6 +12,7 @@ import { useOutbox } from '../src/offline/use-outbox';
 import { clearFloorLogoutFailureMarker, confirmVerifiedLogin, currentFloorGeneration, floorSignOut, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
 import * as logoutStore from '../src/lib/logout-store';
 import { readLogoutMarker, writeLogoutMarker } from '../src/lib/logout-store';
+import { isFloorSessionConfirmedForTab } from '../src/lib/floor-tab';
 import FloorPinPad from '../src/components/FloorPinPad';
 import { testLocks } from './offline-locks';
 
@@ -276,6 +277,9 @@ it.each(['logout broadcast', 'login broadcast', 'poll', 'focus', 'visibility', '
     // The suspended window retains its private storage while A and B share only origin storage.
     window.name = '';
     sessionStorage.clear();
+    const otherTab = render(<AuthGuard><main>Other cashier workspace</main></AuthGuard>);
+    await screen.findByText('Other cashier workspace');
+    otherTab.unmount();
     const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
     await expect(clearCashierStorage(true)).rejects.toThrow();
     const logoutEvent = messages.at(-1);
@@ -421,14 +425,30 @@ it('withholds a scheduled private retry when the durable generation cannot be re
   expect(screen.queryByText('Cashier workspace')).toBeNull();
 });
 
-it.each(['Switch Waiter', 'till logout'])('refuses %s queued behind a replacement login', async action => {
-  await passwordLogin(state.user.name);
+it.each([
+  ['confirmed', 'Switch Waiter'], ['confirmed', 'till logout'],
+  ['initial stay-role', 'till logout'], ['existing stay-role', 'Switch Waiter'],
+  ['lost stay-role snapshot', 'till logout'], ['malformed stay-role snapshot', 'till logout'],
+])('refuses %s workspace %s queued behind a replacement login', async (admission, action) => {
+  if (admission === 'confirmed') {
+    await passwordLogin(state.user.name);
+  } else {
+    vi.stubGlobal('floor_pad', { paired: true, till_open: true });
+    if (admission === 'existing stay-role') await logoutStore.writeGeneration('0000000000000001:previous');
+    const workspace = render(<AuthGuard><main>Stay-role workspace</main></AuthGuard>);
+    await screen.findByText('Stay-role workspace');
+    expect(isFloorSessionConfirmedForTab(state.user.name)).toBe(false);
+    if (admission === 'lost stay-role snapshot') sessionStorage.clear();
+    if (admission === 'malformed stay-role snapshot') sessionStorage.setItem('ury_floor_observed_generation', '{');
+    workspace.unmount();
+  }
   const restoreA = saveTab();
   const generationA = await currentFloorGeneration();
   expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
 
   const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
   const markerWrites = vi.spyOn(logoutStore, 'writeLogoutMarker');
+  const generationWrites = vi.spyOn(logoutStore, 'writeGeneration');
   const lockRequests = vi.spyOn(navigator.locks, 'request');
   let resumeLogin!: () => void;
   const paused = new Promise<void>(resolve => { resumeLogin = resolve; });
@@ -458,12 +478,19 @@ it.each(['Switch Waiter', 'till logout'])('refuses %s queued behind a replacemen
   expect(generationB).not.toBe(generationA);
   expect(logout).not.toHaveBeenCalled();
   expect(markerWrites).not.toHaveBeenCalled();
+  expect(generationWrites.mock.calls).toEqual([[generationB]]); // Only the verified login rotated it.
   expect(await currentFloorGeneration()).toBe(generationB);
   expect(hasFloorSessionMarker(state.user.name)).toBe(false);
   const gate = render(<AuthGuard><main>Stale workspace</main></AuthGuard>);
   await screen.findByLabelText('Password');
   gate.unmount();
   restoreB();
+  const previous = state.user;
+  state.user = { ...previous, name: cashierB };
+  try {
+    render(<AuthGuard><main>Replacement workspace</main></AuthGuard>);
+    await screen.findByText('Replacement workspace');
+  } finally { state.user = previous; }
   expect(hasFloorSessionMarker(cashierB)).toBe(true);
   expect(logout).not.toHaveBeenCalled();
 });
@@ -508,4 +535,15 @@ it('locks a private retry without Web Locks until verified sign-in', async () =>
   showGuard();
   await screen.findByText('Cashier workspace');
   expect(logout).toHaveBeenCalledTimes(1);
+});
+
+it.each(['', '0000000000000001:previous'])('permits stay-role logout at its unchanged admission generation (%s)', async generation => {
+  vi.stubGlobal('floor_pad', { paired: true, till_open: true });
+  if (generation) await logoutStore.writeGeneration(generation);
+  render(<AuthGuard><main>Stay-role workspace</main></AuthGuard>);
+  await screen.findByText('Stay-role workspace');
+  expect(isFloorSessionConfirmedForTab(state.user.name)).toBe(false);
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
+  await clearCashierStorage(true);
+  expect(logout).toHaveBeenCalledOnce();
 });

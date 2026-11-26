@@ -2,6 +2,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as logoutStore from '../src/lib/logout-store';
 import { hasFloorLogoutFailureMarker } from '../src/lib/floor-session';
 import { showToast } from '@ury/ui';
 import { initI18n } from '../src/i18n';
@@ -125,6 +126,8 @@ describe('pre-session logout', () => {
   });
 
   it.each(['HTTP', 'network'])('keeps storage and allows retry after %s logout failure', async (failure) => {
+    // The durable read succeeds; this fixture persists generations in local storage.
+    vi.spyOn(logoutStore, 'readGeneration').mockResolvedValue(undefined);
     const toast = vi.spyOn(showToast, 'error');
     await render();
     if (failure === 'HTTP') request.mockResolvedValueOnce({ ok: false, status: 403 });
@@ -137,9 +140,15 @@ describe('pre-session logout', () => {
     expect({ ...localStorage }).toEqual({
       ...localBefore, ury_floor_logout_failed: state.user.name, ury_floor_generation: expect.any(String),
     });
-    expect({ ...sessionStorage }).toEqual(sessionBefore);
+    expect({ ...sessionStorage }).toEqual({
+      ...sessionBefore,
+      ury_floor_observed_generation: JSON.stringify({ tabId: window.name, generation: localStorage.getItem('ury_floor_generation') }),
+    });
+    const failedTab = Object.entries(sessionStorage);
     sessionStorage.clear(); // A new tab has no copy of the failed tab's session storage.
     expect(hasFloorLogoutFailureMarker()).toBe(true);
+    // Retry from the original control with the failed tab's own state.
+    for (const [key, value] of failedTab) sessionStorage.setItem(key, value);
     expect(toast).toHaveBeenCalledWith('Failed to logout. Please try again.');
     expect(button('Logout').disabled).toBe(false);
     await act(async () => button('Logout').click());

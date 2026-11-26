@@ -45,6 +45,9 @@ const context: Context = {
 };
 
 beforeEach(async () => {
+  localStorage.clear();
+  sessionStorage.clear();
+  document.cookie = 'ury_floor_generation=; Max-Age=0; Path=/pos';
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   await initI18n('en');
   vi.mocked(core.logout).mockReset();
