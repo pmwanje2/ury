@@ -13,6 +13,7 @@ import {
   needsFloorReconciliation,
   hasFloorLogoutFailureMarker,
   hasFloorSessionMarker,
+  hasRecoveryConfirmation,
   isFloorPadActive,
   isStaySignedIn,
   useFloorIdle,
@@ -29,7 +30,6 @@ interface Props {
 function RecoveryOutbox({ profile, user }: { profile: OfflineProfile | null; user: OfflineUser }) {
   const [otherProfiles, setOtherProfiles] = useState<OfflineProfile[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [reauthenticate, setReauthenticate] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -52,9 +52,6 @@ function RecoveryOutbox({ profile, user }: { profile: OfflineProfile | null; use
       {profile && <OutboxPanel posProfile={profile} user={user} />}
       {otherProfiles.map((outlet) => <OutboxPanel key={outlet.name} posProfile={outlet} user={user} />)}
       {loadFailed && <Button variant="outline" onClick={() => setAttempt(attempt + 1)}>{t('floor_pin.retry_outbox')}</Button>}
-      {reauthenticate ? <FloorPinPad usernameOnly /> : (
-        <Button variant="link" onClick={() => setReauthenticate(true)}>{t('floor_pin.owner_sign_in')}</Button>
-      )}
     </div>
   );
 }
@@ -68,6 +65,14 @@ function ColdBootSignOut({ profile, user, passwordOnly }: { profile: OfflineProf
 
   if (state === 'signed_out' || state === 'logout_failed') return <FloorPinPad usernameOnly={passwordOnly || state === 'logout_failed'} />;
   if (state === 'checking') return <Spinner message={t('common.loading')} />;
+  if (!hasRecoveryConfirmation(user.name) || hasFloorLogoutFailureMarker()) {
+    return (
+      <>
+        <p role="status" className="px-6 py-3 text-center">{t('floor_pin.owner_required')}</p>
+        <FloorPinPad recoveryOwner={user.name} usernameOnly={passwordOnly} />
+      </>
+    );
+  }
   return <RecoveryOutbox profile={profile} user={user} />;
 }
 
@@ -104,8 +109,13 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   useFloorIdle(showFloorPad || logoutFailed || recovery ? null : user, posProfile);
 
   useEffect(() => {
+    const onLogoutMarker = (event: StorageEvent) => {
+      if (event.key === 'ury_floor_logout_failed') window.location.reload();
+    };
+    window.addEventListener('storage', onLogoutMarker);
     // Start auth check
     checkAuth();
+    return () => window.removeEventListener('storage', onLogoutMarker);
   }, [checkAuth]);
 
   // Once we have a user, fetch POS profile

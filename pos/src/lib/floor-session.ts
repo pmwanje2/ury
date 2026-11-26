@@ -1,11 +1,12 @@
 import { withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
+import { v4 as uuid } from 'uuid';
 import { useEffect } from 'react';
-import { disconnectQzPrinter, logout, watchIdle } from '@ury/core';
+import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
 
 // Tab marker: this tab signed in through the floor pad (PIN or username).
 const FLOOR_SESSION_MARKER = 'userAuth';
-// Same-tab marker: the last server logout failed, so do not loop sign-outs.
+// Origin-wide because all tabs share the server session cookie.
 const FLOOR_LOGOUT_FAILED_MARKER = 'ury_floor_logout_failed';
 const FLOOR_HOME = '/pos/order';
 // Cleared on sign-out: the previous user's cached profile and lookups.
@@ -44,27 +45,40 @@ export function isFloorPadActive(): boolean {
   return pad.paired === true && pad.till_open === true;
 }
 
-export function hasFloorSessionMarker(user: string): boolean {
+const RECOVERY_MARKER = 'ury_floor_reconcile';
+
+function currentTabId(): string {
+  if (!/^ury-floor-tab:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(window.name)) {
+    window.name = 'ury-floor-tab:' + uuid();
+  }
+  return window.name;
+}
+
+function confirmedInTab(key: string, user: string): boolean {
   try {
-    return sessionStorage.getItem(FLOOR_SESSION_MARKER) === user;
+    const record = JSON.parse(sessionStorage.getItem(key) || 'null');
+    return !!user && record?.user === user && record.tabId === currentTabId();
   } catch {
     return false;
   }
 }
 
+export function hasFloorSessionMarker(user: string): boolean {
+  return confirmedInTab(FLOOR_SESSION_MARKER, user);
+}
+
+export function hasRecoveryConfirmation(user: string): boolean {
+  return confirmedInTab(RECOVERY_MARKER, user);
+}
+
 export function setFloorSessionMarker(user: string, recovery: boolean): void {
-  if (recovery) {
-    sessionStorage.setItem('ury_floor_reconcile', user);
-    sessionStorage.removeItem(FLOOR_SESSION_MARKER);
-  } else {
-    sessionStorage.setItem(FLOOR_SESSION_MARKER, user);
-    sessionStorage.removeItem('ury_floor_reconcile');
-  }
+  sessionStorage.removeItem(recovery ? FLOOR_SESSION_MARKER : RECOVERY_MARKER);
+  sessionStorage.setItem(recovery ? RECOVERY_MARKER : FLOOR_SESSION_MARKER, JSON.stringify({ user, tabId: currentTabId() }));
 }
 
 export function needsFloorReconciliation(): boolean {
   try {
-    return !!sessionStorage.getItem('ury_floor_reconcile');
+    return !!sessionStorage.getItem(RECOVERY_MARKER);
   } catch {
     return true;
   }
@@ -72,15 +86,19 @@ export function needsFloorReconciliation(): boolean {
 
 export function hasFloorLogoutFailureMarker(): boolean {
   try {
-    return sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) === 'true';
+    if (localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)) return true;
+    if (!sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)) return false;
+    // Migrate failures written by earlier POS bundles.
+    localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, getSessionUser() || 'true');
+    return true;
   } catch {
-    // An unreadable logout marker cannot confirm that the previous session ended.
     return true;
   }
 }
 
 export function clearFloorLogoutFailureMarker(): void {
   sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER);
+  localStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER);
 }
 
 export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
@@ -145,6 +163,12 @@ export async function floorSignOut(stillRequested?: () => boolean): Promise<Sign
 
 async function endFloorSession(): Promise<SignOutResult> {
   const retrying = hasFloorLogoutFailureMarker();
+  // Persist before the network request: the tab may close while logout is in flight.
+  try {
+    localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, getSessionUser() || localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) || 'true');
+  } catch {
+    try { sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true'); } catch { /* Still attempt server logout. */ }
+  }
   let logoutFailed = false;
   try {
     // @ury/core logout() resolves false when the server logout failed.
@@ -153,8 +177,7 @@ async function endFloorSession(): Promise<SignOutResult> {
     logoutFailed = true;
   } finally {
     try {
-      if (logoutFailed) sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true');
-      else clearFloorLogoutFailureMarker();
+      if (!logoutFailed) clearFloorLogoutFailureMarker();
     } catch {
       // A blocked marker must not interrupt sign-out.
     }

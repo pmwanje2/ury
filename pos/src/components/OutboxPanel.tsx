@@ -6,6 +6,9 @@ import { currencyFractionDigits, formatCurrency, parseFrappeError } from '@ury/c
 import {
   canCaptureOfflineOrder,
   canSettleOffline,
+  canRecoverOfflineOrder,
+  canRecoverOfflineTender,
+  offlineCaptureEnabled,
   exceedsOfflineTenderLimit,
   offlineCompanyAmount,
   type OfflineProfile,
@@ -29,6 +32,7 @@ function PendingOrder({
   profile,
   currencyCode,
   canSettle,
+  canReprintBill,
   disabled,
 }: {
   row: OfflineEntry;
@@ -37,6 +41,7 @@ function PendingOrder({
   profile: OfflineProfile | null;
   currencyCode?: string;
   canSettle: boolean;
+  canReprintBill: boolean;
   disabled: boolean;
 }) {
   const [busy, setBusy] = useState(false);
@@ -88,7 +93,7 @@ function PendingOrder({
               ({t('offline.pending_manager_pin')})
             </span>
           )}
-          {!row.bill_printed && canSettle && (
+          {!row.bill_printed && canReprintBill && (
             <Button
               size="sm"
               className="ms-2"
@@ -248,7 +253,8 @@ export default function OutboxPanel({ posProfile, user, currency }: {
                   profile={posProfile}
                   currencyCode={currencyCode}
                   canSettle={canSettle}
-                  disabled={replaying || queue.sessionBlocked || !canCaptureOrder}
+                  canReprintBill={canRecoverOfflineTender(posProfile, user)}
+                  disabled={replaying || queue.sessionBlocked || !canRecoverOfflineOrder(posProfile, user, row.order.order_type)}
                 />
               ))}
           </ul>
@@ -262,6 +268,27 @@ export default function OutboxPanel({ posProfile, user, currency }: {
                 {row.client_order_id.slice(0, 8)} ·{' '}
                 {parseFrappeError({ _server_messages: row.reason }, row.reason || '')}
               </span>
+              {!offlineCaptureEnabled(posProfile) && (
+                <details>
+                  <summary>{row.order.customer || row.order.table} · {formatAmount(row.rounds[row.rounds.length - 1].expected_total)}</summary>
+                  <ul>{row.rounds.flatMap((round) => round.items.map((item, index) => (
+                    <li key={round.round_id + ':' + index}>{item.qty} × {item.item_name} · {formatAmount(item.rate)}</li>
+                  )))}</ul>
+                  {row.settlement && <p>{row.settlement.mode_of_payment} · {formatAmount(row.settlement.amount)} {row.settlement.reference}</p>}
+                </details>
+              )}
+              {!offlineCaptureEnabled(posProfile) && queue && !offline &&
+                canRecoverOfflineOrder(posProfile, user, row.order.order_type) && (!row.settlement || canRecoverOfflineTender(posProfile, user)) && (
+                <Button size="sm" variant="outline" disabled={replaying} onClick={() => {
+                  const receipt = window.prompt(t('offline.invoice_prompt', {
+                    order: row.client_order_id, customer: row.order.customer || row.order.table || '',
+                    amount: formatAmount(row.rounds[row.rounds.length - 1].expected_total),
+                    tender: row.settlement?.mode_of_payment || '',
+                  }));
+                  if (receipt?.trim()) void queue.resolveReviewed(row.client_order_id, receipt)
+                    .catch((error) => showToast.error(parseFrappeError(error, t('offline.invoice_mismatch'))));
+                }}>{t('offline.reconcile_invoice')}</Button>
+              )}
               {!row.needs_approval && queue && !offline && (
                 <Button size="sm" variant="outline" disabled={replaying} onClick={() => {
                   void queue.retryReviewed(row.client_order_id).catch((error) => showToast.error(parseFrappeError(error, t('offline.retry_unavailable'))));

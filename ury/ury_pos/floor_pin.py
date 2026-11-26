@@ -253,14 +253,14 @@ def pin_staff(pos_profile):
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
-def sign_in(pin):
+def sign_in(pin, expected_user=None):
 	# Scrub before rate_limit too: even a rate-limited request must not log its PIN.
 	frappe.form_dict.pop("pin", None)
-	return _sign_in(pin)
+	return _sign_in(pin, expected_user)
 
 
 @rate_limit(limit=60, seconds=60)
-def _sign_in(pin):
+def _sign_in(pin, expected_user=None):
 	device = _device()
 	if not device:
 		_sign_in_refused("URY_FLOOR_DEVICE_NOT_PAIRED", "Sign in with username to pair this tablet.")
@@ -280,7 +280,7 @@ def _sign_in(pin):
 	if (isinstance(pin, str) and policy["min_length"] <= len(pin) <= policy["max_length"]
 			and re.fullmatch(r"[0-9]+", pin)):
 		user = frappe.db.get_value("User", {"custom_floor_pin_hash": _digest("ury-floor-pin-v1", pin), "enabled": 1}, "name")
-	if not user or not _eligible(user, profile):
+	if not user or (expected_user is not None and user != expected_user) or not _eligible(user, profile):
 		short.add_failure_attempt()
 		day.add_failure_attempt()
 		add_authentication_log(f"Floor PIN refused on tablet '{escape(label)}'", "Guest", status="Failed")

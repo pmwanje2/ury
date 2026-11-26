@@ -31,7 +31,7 @@ async function signedIn(owner?: string) {
   window.location.reload();
 }
 
-export default function FloorPinPad({ offline = false, usernameOnly = false }: { offline?: boolean; usernameOnly?: boolean }) {
+export default function FloorPinPad({ offline = false, usernameOnly = false, recoveryOwner }: { offline?: boolean; usernameOnly?: boolean; recoveryOwner?: string }) {
   const { min_length: minLength = 4, max_length: maxLength = 4 } = getFloorPad();
   const fixedLength = minLength === maxLength;
   const [pin, setPin] = useState('');
@@ -61,13 +61,13 @@ export default function FloorPinPad({ offline = false, usernameOnly = false }: {
 
   const submitPin = async (value: string) => {
     try {
-      await withOutboxLogin(null, async () => {
+      await withOutboxLogin(recoveryOwner ?? null, async () => {
         try {
           const result = await call.post<{ message?: { csrf_token?: string } }>(
-            'ury.ury_pos.floor_pin.sign_in', { pin: value },
+            'ury.ury_pos.floor_pin.sign_in', recoveryOwner ? { pin: value, expected_user: recoveryOwner } : { pin: value },
           );
           if (result?.message?.csrf_token) window.csrf_token = result.message.csrf_token;
-          await signedIn();
+          await signedIn(recoveryOwner);
         } catch (reason) {
           const message = parseFrappeError(reason, '');
           const refusal = REFUSAL_COPY.find(([code]) => message.includes(code));
@@ -113,7 +113,7 @@ export default function FloorPinPad({ offline = false, usernameOnly = false }: {
       const identity = challenge?.username ?? username.trim();
       await withOutboxLogin(identity, async (pending) => {
         // Keep the recovery gate across reloads, even if session verification loses connectivity.
-        if (pending) sessionStorage.setItem('ury_floor_reconcile', identity);
+        if (pending) sessionStorage.setItem('ury_floor_reconcile', 'pending');
         const result = await auth.loginWithUsernamePassword(
           challenge ? { tmp_id: challenge.tmp_id, otp } : { username: identity, password },
         );
