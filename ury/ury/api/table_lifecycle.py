@@ -1,6 +1,6 @@
 import frappe
 from frappe import _
-from frappe.utils import cint, now_datetime
+from frappe.utils import cint, get_datetime, now_datetime
 
 from ury.brand import coded_message
 from ury.ury.api.seating_membership import record_table_transfer, update_members
@@ -48,7 +48,10 @@ def assert_table_seatable(table, branch):
             dirty_table_error()
 
 
-def set_table_state(table, state, *, since=None, clear_cluster=False, check=None):
+def set_table_state(table, state, *, since=None, clear_cluster=False, check=None, continuing_visit=False):
+    locked = frappe.db.sql(
+        "SELECT occupied FROM `tabURY Table` WHERE name = %s FOR UPDATE", (table,), pluck=True
+    )
     occupied = state in ("Seated", "Check Printed")
     values = {"custom_table_state": state, "occupied": int(occupied)}
     if occupied and check:
@@ -66,6 +69,23 @@ def set_table_state(table, state, *, since=None, clear_cluster=False, check=None
     if clear_cluster:
         values["merged_with"] = None
     frappe.db.set_value("URY Table", table, values, update_modified=False)
+    if locked == [int(not occupied)]:
+        diff = {"changed": [["occupied", int(not occupied), int(occupied)]]}
+        if occupied and continuing_visit:
+            # A transfer off this table found checks or a seated reservation still here.
+            diff["continuing_visit"] = True
+        if occupied and since and not check:
+            # Normal order sync supplies the opening invoice's creation time.
+            matches = [row.name for row in open_checks_on([table]) if row.creation == get_datetime(since)]
+            if len(matches) == 1:
+                check = matches[0]
+        if occupied and check:
+            # The invoice transfer receipt can precede the table write in the same transaction.
+            diff["updater_reference"] = {"doctype": "POS Invoice", "docname": check}
+        frappe.get_doc({
+            "doctype": "Version", "ref_doctype": "URY Table", "docname": table,
+            "data": frappe.as_json(diff),
+        }).insert(ignore_permissions=True)
 
 
 def open_checks_on(tables):
@@ -117,7 +137,7 @@ def update_tables_after_transfer(source, destination, invoice):
         state = "Seated"
     else:
         state = "Dirty" if cint(policy.get("custom_enable_bussing_state")) else "Available"
-    set_table_state(source, state)
+    set_table_state(source, state, continuing_visit=True)
 
 
 def on_check_closed(doc, method=None):

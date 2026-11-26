@@ -51,21 +51,29 @@ def _occupancy_boundary(frappe, table):
                     vacant = (0, "0", None, "")
                     seated = (1, "1")
                     if (before in vacant and after in seated) or (before in seated and after in vacant):
-                        return row.creation
+                        data = json.loads(row.data)
+                        if after in seated and data.get("continuing_visit") is True:
+                            continue
+                        reference = data.get("updater_reference")
+                        opener = (reference.get("docname") if after in seated and isinstance(reference, dict)
+                                  and reference.get("doctype") == "POS Invoice" else None)
+                        return row.creation, opener
                 if field == "custom_dirty_since" and not before and after:
-                    return row.creation
+                    return row.creation, None
         if len(rows) < 32:
-            return dirty_since
+            return dirty_since, None
         offset += len(rows)
 
 
-def _transfer_arrivals(frappe, names, table, since):
+def _transfer_arrivals(frappe, names, table, since=None):
     """Arrival is the recorded change of table, independent of the invoice's opening time."""
     if not names:
         return {}
+    filters = {"ref_doctype": "POS Invoice", "docname": ("in", names), "data": ("like", '%"restaurant_table"%')}
+    if since is not None:
+        filters["creation"] = (">=", since)
     rows = frappe.get_all(
-        "Version", filters={"ref_doctype": "POS Invoice", "docname": ("in", names),
-                            "creation": (">=", since), "data": ("like", '%"restaurant_table"%')},
+        "Version", filters=filters,
         fields=["docname", "creation", "data"], order_by="creation asc",
     )
     arrivals = {}
@@ -137,25 +145,27 @@ def _legacy_checks(frappe, table):
     reservations = frappe.get_all(
         "URY Table Reservation",
         filters={"reserved_table": table.name, "pos_invoice": ("is", "set")},
-        fields=["status", "pos_invoice", "reserved_at"],
+        fields=["status", "pos_invoice", "modified"],
     )
     seated = {row.pos_invoice for row in reservations if row.status == "Seated"}
     departed = {row.pos_invoice for row in reservations if row.status in ("Completed", "Cancelled")}
     paid = frappe.get_all(
         "POS Invoice", filters={"docstatus": 1, "status": "Paid"},
         or_filters={"restaurant_table": table.name, "custom_merged_tables": ("like", f"%{table.name}%")},
-        fields=["name", "creation", "restaurant_table", "custom_merged_tables", "custom_split_from", "custom_split_group"],
+        fields=["name", "creation", "modified", "restaurant_table", "custom_merged_tables", "custom_split_from",
+                "custom_split_group", "invoice_printed", "custom_printing_time"],
     )
-    paid = [row for row in paid if row.name not in departed and table.name in invoice_tables(row)]
-    boundary = _occupancy_boundary(frappe, table.name)
+    on_table = [row for row in paid if table.name in invoice_tables(row)]
+    paid = [row for row in on_table if row.name not in departed]
+    boundary, opener = _occupancy_boundary(frappe, table.name)
     if boundary is not None:
         # A known occupancy episode takes precedence over scheduled reservations,
         # split relationships and the opening time of the latest check.
         candidates = [*drafts, *paid]
         arrivals = _transfer_arrivals(frappe, [row.name for row in candidates], table.name, boundary)
-        return {
-            row.name for row in candidates
-            if row.name in arrivals or (row.creation and row.creation >= boundary)
+        return checks | {
+            row.name for row in paid
+            if row.name == opener or row.name in arrivals or (row.creation and row.creation >= boundary)
         }
 
     if not paid:
@@ -179,13 +189,28 @@ def _legacy_checks(frappe, table):
         # time of a check that arrived at this table much later.
         clock_checks = {row.name for row in [*drafts, *paid] if row.creation and
                         row.creation.time() == start.time() and row.creation <= start}
-        visits = [row.reserved_at for row in reservations if row.status == "Seated" and row.reserved_at]
-        window = min([start, *visits])
-        arrivals = _transfer_arrivals(frappe, sorted(checks | {row.name for row in paid}), table.name, window)
-        anchors = [arrivals[name] for name in clock_checks if name in arrivals]
+        # A booking can precede the previous party's release. A seated
+        # reservation's last update is evidence of activity on this visit.
+        visits = [row.modified for row in reservations if row.status == "Seated" and row.modified]
+        transfers = _transfer_arrivals(frappe, sorted(checks | {row.name for row in paid}), table.name)
+        anchors = [transfers[name] for name in clock_checks if name in transfers]
         if anchors:
             start = max(anchors)
-            window = min([start, *visits])
+        printed = {row.name: row.custom_printing_time or row.modified for row in on_table if row.invoice_printed}
+        prior_prints = {name: when for name, when in printed.items() if when and when < start}
+        if prior_prints:
+            # Some legacy print adapters only set invoice_printed. Settlement's
+            # modified time supplies the last known close if no print time exists.
+            release = max(prior_prints.values())
+            return checks | {
+                row.name for row in paid if row.name not in prior_prints
+                and (transfers.get(row.name, row.creation) > release or
+                     (not row.invoice_printed and row.modified >= start))
+            }
+        window = min([start, *visits])
+        arrivals = {name: when for name, when in transfers.items() if when >= window}
+        checks.update(row.name for row in paid if not row.invoice_printed and
+                      row.name in transfers and row.modified >= start)
         checks.update(row.name for row in paid if row.creation and row.creation >= start)
 
         # A directly restored occupied flag can coexist with the last party's
