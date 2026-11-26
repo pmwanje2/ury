@@ -21,6 +21,44 @@ def _legacy_seating_start(clock, drafts):
     return start - timedelta(days=1) if start > now else start
 
 
+def _version_changes(raw):
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, RecursionError):
+        return
+    changes = data.get("changed") if isinstance(data, dict) else None
+    if isinstance(changes, list):
+        yield from (edit for edit in changes if isinstance(edit, list) and len(edit) == 3)
+
+
+def _occupancy_boundary(frappe, table):
+    """Find the latest recorded release or seating, even on sites without roster Versions."""
+    dirty_since = frappe.db.get_value("URY Table", table, "custom_dirty_since")
+    filters = {"ref_doctype": "URY Table", "docname": table}
+    if dirty_since:
+        filters["creation"] = (">=", dirty_since)
+
+    offset = 0
+    while True:
+        rows = frappe.get_all(
+            "Version", filters=filters,
+            or_filters=[["data", "like", '%"occupied"%'], ["data", "like", '%"custom_dirty_since"%']],
+            fields=["creation", "data"], order_by="creation desc, name desc", start=offset, page_length=32,
+        )
+        for row in rows:
+            for field, before, after in _version_changes(row.data):
+                if field == "occupied":
+                    vacant = (0, "0", None, "")
+                    seated = (1, "1")
+                    if (before in vacant and after in seated) or (before in seated and after in vacant):
+                        return row.creation
+                if field == "custom_dirty_since" and not before and after:
+                    return row.creation
+        if len(rows) < 32:
+            return dirty_since
+        offset += len(rows)
+
+
 def _transfer_arrivals(frappe, names, table, since):
     """Arrival is the recorded change of table, independent of the invoice's opening time."""
     if not names:
@@ -32,15 +70,7 @@ def _transfer_arrivals(frappe, names, table, since):
     )
     arrivals = {}
     for row in rows:
-        try:
-            data = json.loads(row.data)
-        except (TypeError, ValueError, RecursionError):
-            continue
-        changes = data.get("changed") if isinstance(data, dict) else None
-        if isinstance(changes, list) and any(
-            isinstance(edit, list) and len(edit) == 3 and edit[0] == "restaurant_table" and edit[2] == table
-            for edit in changes
-        ):
+        if any(field == "restaurant_table" and after == table for field, _, after in _version_changes(row.data)):
             arrivals[row.docname] = row.creation
     return arrivals
 
@@ -117,6 +147,17 @@ def _legacy_checks(frappe, table):
         fields=["name", "creation", "restaurant_table", "custom_merged_tables", "custom_split_from", "custom_split_group"],
     )
     paid = [row for row in paid if row.name not in departed and table.name in invoice_tables(row)]
+    boundary = _occupancy_boundary(frappe, table.name)
+    if boundary is not None:
+        # A known occupancy episode takes precedence over scheduled reservations,
+        # split relationships and the opening time of the latest check.
+        candidates = [*drafts, *paid]
+        arrivals = _transfer_arrivals(frappe, [row.name for row in candidates], table.name, boundary)
+        return {
+            row.name for row in candidates
+            if row.name in arrivals or (row.creation and row.creation >= boundary)
+        }
+
     if not paid:
         return checks | seated
 
