@@ -205,8 +205,12 @@ export async function assertOutboxEmpty(): Promise<void> {
   });
   if (count) throw new Error('Offline outbox has pending or Needs review items. Reconcile them before logout or till close.');
 }
+export function hasWebLocks(): boolean {
+  return typeof navigator !== 'undefined' && typeof navigator.locks?.request === 'function';
+}
+
 const exclusive = <T,>(run: () => Promise<T>): Promise<T> => {
-  if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(LOCK, run);
+  if (hasWebLocks()) return navigator.locks.request(LOCK, run);
   return Promise.reject(new Error('This browser cannot lock the offline outbox across tabs. Offline capture is unavailable.'));
 };
 // Capture, replay, and identity changes share the same cross-tab lock.
@@ -216,14 +220,14 @@ export async function withOutboxLogin(user: string | null, login: (pending: bool
     if (rows.some((row) => !user || row.owner !== user)) throw new Error(t('floor_pin.owner_required'));
     await login(rows.length > 0);
   };
-  if (typeof navigator !== 'undefined' && navigator.locks) await exclusive(guarded);
+  if (hasWebLocks()) await exclusive(guarded);
   else await guarded();
 }
 
 export async function withEmptyOutbox(run: () => Promise<void>): Promise<void> {
   const emptyRun = async () => { await assertOutboxEmpty(); await run(); };
-  // Capture/replay fail closed without Web Locks, so an empty browser can still log out.
-  if (typeof navigator !== 'undefined' && navigator.locks) await exclusive(emptyRun);
+  // The local-only logout still checks for orders that need reconciliation.
+  if (hasWebLocks()) await exclusive(emptyRun);
   else await emptyRun();
 }
 export async function purgeEmptyOutbox(): Promise<void> {

@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { readGeneration, writeGeneration, readLogoutMarker, writeLogoutMarker } from './logout-store';
-import { withEmptyOutbox } from '../offline/outbox';
+import { hasWebLocks, withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
 import { boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
 export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
@@ -222,10 +222,10 @@ function lockLogoutTab(): false {
 
 export async function logoutWithFloorMarker(stillRequested?: () => boolean): Promise<boolean | undefined> {
   // Check the caller after acquiring the same lock used by verified login.
+  if (!hasWebLocks()) return lockLogoutTab();
   const bound = boundTabGeneration();
   if (bound === null) return lockLogoutTab();
   const privateRetry = sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER);
-  if (privateRetry !== null && !navigator.locks) return lockLogoutTab();
 
   // Without a snapshot, only a pristine origin (or a matching private retry) can log out.
   const expected = bound ?? privateRetry ?? '';
