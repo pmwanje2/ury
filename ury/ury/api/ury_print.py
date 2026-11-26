@@ -202,7 +202,7 @@ def select_network_printer(
     reason=None,
     reason_note=None,
 ):
-    invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
+    invoice_doc = frappe.get_doc("POS Invoice", invoice_id, for_update=True)
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
@@ -213,12 +213,13 @@ def select_network_printer(
         validate_efris_readiness(invoice_doc, throw=True)
     from ury.ury_pos.floor_actions import authorize_and_count_bill_print
 
+    pos_profile = getattr(invoice_doc, "pos_profile", None) or pos_profile
     reprint_meta = authorize_and_count_bill_print(
         invoice_id,
         approval_token=approval_token,
         reason=reason,
         reason_note=reason_note,
-        pos_profile=pos_profile or getattr(invoice_doc, "pos_profile", None),
+        pos_profile=pos_profile,
     )
 
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")

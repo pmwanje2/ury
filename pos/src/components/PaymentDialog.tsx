@@ -1053,6 +1053,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           partnerInvoice: order?.custom_merged_pos_invoice ?? null,
           timeoutSeconds: resolveEfrisPrintWaitSeconds(storePosProfile.efris_print_wait_seconds),
         });
+        if (efrisOutcome.outcome === 'timed_out') {
+          await queuePendingFiscalReprint({
+            invoice,
+            partnerInvoice: order?.custom_merged_pos_invoice ?? null,
+            posProfile: storePosProfile,
+          });
+        }
         try {
           await printOrder({
             orderId: invoice,
@@ -1064,13 +1071,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           console.error('Print failed:', printErr);
           const reason = (printErr instanceof Error ? printErr.message : '') || parseFrappeError(printErr) || 'Unknown error';
           showToast.error(t('payment.receipt_print_failed', { reason }));
-        }
-        if (efrisOutcome.outcome === 'timed_out') {
-          await queuePendingFiscalReprint({
-            invoice,
-            partnerInvoice: order?.custom_merged_pos_invoice ?? null,
-            posProfile: storePosProfile,
-          });
         }
       }
       showToast.success(t('payment.success', { amount: formatMoney(totalTendered) }));

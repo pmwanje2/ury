@@ -32,6 +32,7 @@ export interface OfflineProfile extends DefaultCustomerConfig {
   room_charge_modes?: string[];
   print_type?: string;
   qz_host?: string | null;
+  printer?: string | null;
   print_format?: string | null;
   efris_print_wait_seconds?: number;
 }

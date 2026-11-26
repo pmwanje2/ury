@@ -15,7 +15,10 @@
   "attempt",
   "retry_of",
   "request_key",
-  "copy_slot"
+  "copy_slot",
+  "dispatch_token_hash",
+  "dispatch_until",
+  "fiscal_event"
  ],
  "fields": [
   {
@@ -96,6 +99,27 @@
    "read_only": 1,
    "unique": 1,
    "hidden": 1
+  },
+  {
+   "fieldname": "dispatch_token_hash",
+   "label": "Dispatch Token Hash",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "dispatch_until",
+   "label": "Dispatch Lease Expires",
+   "fieldtype": "Datetime",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "fiscal_event",
+   "label": "Verified Fiscal Event",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "read_only": 1
   }
  ],
  "permissions": [

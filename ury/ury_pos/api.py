@@ -3758,6 +3758,7 @@ def _is_retryable_copy_race_error(exc: Exception) -> bool:
 
 _COPY_LOG_LOOKUP_FIELDS = [
     'name', 'print_job_id', 'invoice', 'status', 'failure_reason', 'attempt', 'copy_number', 'printer', 'job_owner',
+    'dispatch_token_hash', 'dispatch_until', 'fiscal_event',
 ]
 _DISABLED_REPRINT_OWNER_REASON = 'Requester account is disabled; reprint from Settled Bills.'
 
@@ -3828,24 +3829,102 @@ def _copy_request_key(invoice, idempotency_key):
     return sha256(json.dumps([invoice, idempotency_key]).encode()).hexdigest()
 
 
-@frappe.whitelist(methods=['POST'])
-def confirm_bill_copy(invoice: str, idempotency_key: str):
+def _fiscal_statuses(doc):
+    """Read the authoritative fiscal provider for the invoice and its linked bill."""
+    try:
+        from uganda_compliance.efris.efris_queue import get_efris_status
+    except ImportError:
+        return []
+    primary = get_efris_status('POS Invoice', doc.name) or {}
+    events = [primary]
+    partner = getattr(doc, 'custom_merged_pos_invoice', None)
+    if partner:
+        linked = get_efris_status('POS Invoice', partner) or {}
+        if linked.get('efris_status') or linked.get('fdn'):
+            events.append(linked)
+    return events
+
+
+def _issued_fiscal_event(events):
+    from hashlib import sha256
+
+    fdns = []
+    for event in events:
+        fdn = str(event.get('fdn') or '').strip()
+        status = str(event.get('efris_status') or '').strip().lower()
+        if not fdn or status in ('pending', 'failed', 'cancelled', 'rejected'):
+            return None
+        fdns.append(fdn)
+    return sha256(json.dumps(fdns).encode()).hexdigest() if fdns else None
+
+
+def _require_fiscal_event(doc):
+    pending = frappe.db.get_value(
+        _COPY_LOG, {'name': f'PENDING-EFRIS-{doc.name}', 'invoice': doc.name,
+                    'job_owner': frappe.session.user, 'status': 'AWAITING_FDN'},
+        'name', for_update=True,
+    )
+    event = _issued_fiscal_event(_fiscal_statuses(doc)) if pending else None
+    if not event:
+        frappe.throw('Automatic fiscal copy is unavailable. Request a manual copy from Settled Bills.', frappe.PermissionError)
+    return event
+
+
+def _lease_hash(token):
+    from hashlib import sha256
+    return sha256(token.encode()).hexdigest()
+
+
+def _new_copy_lease():
+    from secrets import token_urlsafe
+    from frappe.utils import now_datetime
+
+    token = token_urlsafe(32)
+    return token, {'dispatch_token_hash': _lease_hash(token), 'dispatch_until': now_datetime() + timedelta(minutes=5)}
+
+
+def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, delivered):
+    from secrets import compare_digest
     from ury.ury_pos.privileged_auth import assert_not_offline_replay
 
     assert_not_offline_replay()
-    _closed_invoice(invoice, _closed_branch())
-    record = frappe.db.get_value(
-        _COPY_LOG, {'invoice': invoice, 'request_key': _copy_request_key(invoice, idempotency_key),
-                    'job_owner': frappe.session.user},
-        ['name', 'status', 'printer', 'copy_number'], as_dict=True, order_by='attempt desc', for_update=True,
-    )
-    if not record or record.printer or record.status not in ('RESERVED', 'COMPLETED'):
-        frappe.throw('No client copy reservation for this request.', frappe.PermissionError)
-    if record.status == 'RESERVED':
-        frappe.db.set_value(_COPY_LOG, record.name, 'status', 'COMPLETED')
-        if idempotency_key == f'efris-auto-{invoice}':
-            _mark_pending_fiscal_reprint_dispatched(invoice)
-    return {'status': 'COMPLETED', 'copy_number': record.copy_number, 'print_job_id': record.name}
+    key = _copy_request_key(invoice, idempotency_key)
+    branch = _closed_branch()
+    # The request may already have a MariaDB snapshot. Start a short serialized
+    # transaction, then lock the parent before the attempt and fiscal queue rows.
+    with _IsolatedCopyLogDB(invoice) as claim_db:
+        doc = _closed_invoice(invoice, branch, for_update=True)
+        record = frappe.db.get_value(
+            _COPY_LOG, {'invoice': invoice, 'request_key': key, 'job_owner': frappe.session.user},
+            _COPY_LOG_LOOKUP_FIELDS, as_dict=True, order_by='attempt desc', for_update=True,
+        )
+        if not record or record.printer or record.status not in ('RESERVED', 'COMPLETED'):
+            frappe.throw('No client copy reservation for this request.', frappe.PermissionError)
+        if not dispatch_token or not compare_digest(record.dispatch_token_hash or '', _lease_hash(dispatch_token)):
+            frappe.throw('This print attempt no longer owns the copy.', frappe.PermissionError)
+        if record.status == 'RESERVED':
+            if delivered:
+                if idempotency_key == f'efris-auto-{invoice}':
+                    if _require_fiscal_event(doc) != record.fiscal_event:
+                        frappe.throw('Fiscal receipt changed before delivery confirmation.', frappe.PermissionError)
+                    _mark_pending_fiscal_reprint_dispatched(invoice)
+                record.status = 'COMPLETED'
+                frappe.db.set_value(_COPY_LOG, record.name, {'status': record.status, 'dispatch_until': None})
+            else:
+                frappe.db.set_value(_COPY_LOG, record.name, {'dispatch_token_hash': None, 'dispatch_until': None})
+        if claim_db is not None:
+            claim_db.commit()
+        return {'status': record.status, 'copy_number': record.copy_number, 'print_job_id': record.name}
+
+
+@frappe.whitelist(methods=['POST'])
+def confirm_bill_copy(invoice: str, idempotency_key: str, dispatch_token: str):
+    return _finish_copy_attempt(invoice, idempotency_key, dispatch_token, delivered=True)
+
+
+@frappe.whitelist(methods=['POST'])
+def release_bill_copy(invoice: str, idempotency_key: str, dispatch_token: str):
+    return _finish_copy_attempt(invoice, idempotency_key, dispatch_token, delivered=False)
 
 
 @frappe.whitelist(methods=['POST'])
@@ -3884,6 +3963,7 @@ def print_bill_copy(
     transport = None
     record = None
     replayed = None
+    dispatch_token = None
     number = 0
     job_id = ''
     chosen_printer = printer
@@ -3896,11 +3976,26 @@ def print_bill_copy(
                 frappe.db.savepoint(savepoint)
             try:
                 previous = _find_previous_copy_log(invoice, key, owner, idempotency_key, is_auto_fiscal)
-                if previous and previous.status not in ('FAILED', 'CANCELED'):
-                    if is_auto_fiscal and previous.status in ('SUBMITTED', 'COMPLETED'):
-                        _mark_pending_fiscal_reprint_dispatched(invoice)
-                        if claim_db is not None:
-                            claim_db.commit()
+                if previous and previous.status not in ('RESERVED', 'FAILED', 'CANCELED'):
+                    # A replay reports the original outcome without granting another dispatch.
+                    return _copy_result(previous)
+
+                fiscal_event = _require_fiscal_event(doc) if is_auto_fiscal else None
+                if previous and previous.status == 'RESERVED':
+                    from frappe.utils import get_datetime, now_datetime
+
+                    if previous.job_owner != owner:
+                        frappe.throw('The client copy is reserved by another cashier.', frappe.PermissionError)
+                    active = previous.dispatch_until and get_datetime(previous.dispatch_until) > now_datetime()
+                    if requested_delivery == 'network' or active:
+                        return {'status': 'IN_FLIGHT', 'copy_number': previous.copy_number,
+                                'failure_reason': 'Copy already reserved for client printing. Check the original till.'}
+                    if previous.fiscal_event and fiscal_event != previous.fiscal_event:
+                        frappe.throw('The reserved fiscal receipt has changed.', frappe.PermissionError)
+                    dispatch_token, lease = _new_copy_lease()
+                    frappe.db.set_value(_COPY_LOG, previous.name, dict(lease, fiscal_event=fiscal_event))
+                    if claim_db is not None:
+                        claim_db.commit()
                     replayed = previous
                     break
 
@@ -3935,8 +4030,8 @@ def print_bill_copy(
 
                 # Enforce free closed-copy cap (`custom_max_free_closed_copies`, default 0 on configured profiles)
                 # and `reprint_bill` privilege / Manager PIN + reason on every manual copy beyond the free cap.
-                # Automatic EFRIS post-fiscalisation dispatches (`efris-auto-<invoice>`) are exempt.
-                if not previous and not is_auto_fiscal:
+                # The verified pending fiscal event authorizes one automatic copy.
+                if not previous and not fiscal_event:
                     raw_profile = _doc_get(doc, 'pos_profile')
                     raw_max_free = (
                         frappe.db.get_value('POS Profile', raw_profile, 'custom_max_free_closed_copies')
@@ -3986,6 +4081,10 @@ def print_bill_copy(
                     'retry_of': previous.name if previous else None,
                     'status': 'RESERVED' if transport in ('browser', 'qz') else 'SUBMITTING',
                 }
+                record['fiscal_event'] = fiscal_event
+                if transport in ('browser', 'qz'):
+                    dispatch_token, lease = _new_copy_lease()
+                    record.update(lease)
                 frappe.get_doc(record).insert(ignore_permissions=True)
                 if claim_db is not None:
                     claim_db.commit()
@@ -4009,17 +4108,15 @@ def print_bill_copy(
                     continue
                 raise
 
-    if replayed is not None:
-        if replayed.status == 'RESERVED':
-            if requested_delivery == 'network':
-                # The scheduler must leave client reservations for the reserving till.
-                return _copy_result(replayed)
-            if replayed.job_owner != owner:
-                frappe.throw('The client copy is reserved by another cashier.', frappe.PermissionError)
-        return _copy_result(replayed, doc=doc, delivery=requested_delivery)
-
-    if transport in ('browser', 'qz'):
-        return _copy_result(record, doc=doc, delivery=transport)
+    if dispatch_token:
+        try:
+            result = _copy_result(replayed or record, doc=doc, delivery=requested_delivery or transport)
+        except Exception:
+            # No printable payload left the server. Return the attempt for immediate retry.
+            _finish_copy_attempt(invoice, idempotency_key, dispatch_token, delivered=False)
+            raise
+        result['dispatch_token'] = dispatch_token
+        return result
     doc.copy_timestamp = frappe.utils.now()
     doc.copy_number = number
     doc._ury_copy_render = _COPY_RENDER_MARKER
@@ -4080,9 +4177,17 @@ def print_bill_copy(
 def queue_fiscal_reprint(invoice: str, delivery: str | None = None):
     """Queue an automatic COPY #n reprint once URA EFRIS issues the FDN."""
     branch = _closed_branch()
-    _closed_invoice(invoice, branch)
+    doc = _closed_invoice(invoice, branch)
     job_id = f'PENDING-EFRIS-{invoice}'
     if not frappe.db.exists(_COPY_LOG, job_id):
+        # An online invoice already issued with an FDN cannot acquire a new
+        # automatic copy by asking to be queued after settlement. Offline captures
+        # can receive their first fiscal number before the till reconnects.
+        events = _fiscal_statuses(doc)
+        if not any(event.get('efris_status') or event.get('fdn') for event in events) or (
+            _issued_fiscal_event(events) and not getattr(doc, 'ury_offline_captured_at', None)
+        ):
+            frappe.throw('No pending fiscal receipt. Request a manual copy from Settled Bills.', frappe.PermissionError)
         record = {
             'doctype': _COPY_LOG,
             'name': job_id,

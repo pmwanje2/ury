@@ -6,7 +6,7 @@ from frappe import _
 from frappe.model.document import Document
 
 from ury.brand import coded_message
-from .station_scope import station_company, prune_station_shares
+from .station_scope import station_company, prune_station_shares, transaction_scope
 from ury.ury.api.ury_kot_routing import RoutingError, validate_failover_chain
 
 
@@ -20,7 +20,9 @@ class URYProductionUnit(Document):
     def validate_share(self, share):
         # Group-wide shares cannot be limited to the station's company.
         current = frappe.db.get_value(self.doctype, self.name, ["company", "branch"], as_dict=True, for_update=True)
-        if share.everyone or not share.user or not current or not station_company(current, share.user, for_update=True):
+        if share.everyone or not share.user or not current or not station_company(
+            current, for_update=True, permissions=transaction_scope(share.user)
+        ):
             frappe.throw(_("Station sharing requires a user in the owning branch and company."), frappe.PermissionError)
 
     def on_update(self):

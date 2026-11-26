@@ -30,7 +30,10 @@ export interface PendingFiscalReprintEntry {
   queuedAt: string;
 }
 
-export type ReprintPosProfile = Pick<Partial<PosProfileCombined>, 'print_type' | 'qz_host' | 'efris_print_wait_seconds'>;
+export type ReprintPosProfile = Pick<Partial<PosProfileCombined>, 'print_type' | 'qz_host' | 'printer' | 'efris_print_wait_seconds'> & {
+  qz_receipt_queue?: string | null;
+  custom_qz_receipt_queue?: string | null;
+};
 
 export function resolveEfrisPrintWaitSeconds(raw: unknown): number {
   if (raw === undefined || raw === null || raw === '') {
@@ -195,6 +198,23 @@ export async function queuePendingFiscalReprint({
   }
 }
 
+function copyProfile(profile: ReprintPosProfile) {
+  return {
+    print_type: profile.print_type ?? 'socket',
+    qz_host: profile.qz_host ?? null,
+    printer: profile.printer || profile.qz_receipt_queue || profile.custom_qz_receipt_queue || null,
+  };
+}
+
+async function dispatchFiscalCopy(invoice: string, profile: ReprintPosProfile) {
+  // Local queueing can succeed while the server is offline. Re-registering the
+  // same invoice is idempotent and preserves a previously fulfilled fiscal job.
+  await call.post(QUEUE_REPRINT_METHOD, { invoice, delivery: deliveryForProfile(profile) });
+  return printBillCopy({
+    orderId: invoice, posProfile: copyProfile(profile), idempotencyKey: `efris-auto-${invoice}`,
+  });
+}
+
 let flushing = false;
 
 export async function flushPendingFiscalReprints(posProfile?: ReprintPosProfile | null): Promise<void> {
@@ -208,11 +228,7 @@ export async function flushPendingFiscalReprints(posProfile?: ReprintPosProfile 
       const current = await evaluateInvoiceGroup(entry.invoice, entry.partnerInvoice);
       if (current.state === 'fiscalised') {
         try {
-          const result = await printBillCopy({
-            orderId: entry.invoice,
-            posProfile: { print_type: posProfile.print_type ?? 'socket', qz_host: posProfile.qz_host ?? null },
-            idempotencyKey: `efris-auto-${entry.invoice}`,
-          });
+          const result = await dispatchFiscalCopy(entry.invoice, posProfile);
           showToast?.success?.(
             t('payment.fiscal_reprint_printed', {
               invoice: entry.invoice,
@@ -251,12 +267,12 @@ export async function triggerPostReplayFiscalPrint({
     await queuePendingFiscalReprint({ invoice, partnerInvoice, posProfile });
     return;
   }
+  if (outcome.outcome === 'not_applicable') {
+    await printBillCopy({ orderId: invoice, posProfile: copyProfile(posProfile), idempotencyKey: `offline-copy-${invoice}` });
+    return;
+  }
   try {
-    await printBillCopy({
-      orderId: invoice,
-      posProfile: { print_type: posProfile.print_type ?? 'socket', qz_host: posProfile.qz_host ?? null },
-      idempotencyKey: `efris-auto-${invoice}`,
-    });
+    await dispatchFiscalCopy(invoice, posProfile);
   } catch {
     await queuePendingFiscalReprint({ invoice, partnerInvoice, posProfile });
   }

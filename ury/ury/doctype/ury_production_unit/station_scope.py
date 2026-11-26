@@ -11,7 +11,7 @@ def _allowed(permissions, doctype):
             if row.get("applicable_for") in (None, "", "URY Production Unit")}
 
 
-def _transaction_scope(user):
+def transaction_scope(user):
     """Read station restrictions without publishing pending User Permission changes to Redis."""
     scope = {}
     if user in ("Administrator", "Guest"):
@@ -81,7 +81,7 @@ def prune_station_shares(stations=None, user=None):
     for share in shares:
         unit = frappe.db.get_value("URY Production Unit", share.share_name, ["company", "branch"], as_dict=True, for_update=True)
         if share.user and share.user not in scopes:
-            scopes[share.user] = _transaction_scope(share.user)
+            scopes[share.user] = transaction_scope(share.user)
         if share.everyone or not share.user or not unit or not station_company(unit, permissions=scopes[share.user]):
             frappe.db.delete("DocShare", {"name": share.name})
 
