@@ -9,7 +9,7 @@ it.each([
   [['System Manager'], '/orders'],
   [['URY Captain', 'URY Cashier'], '/orders'],
   [['URY Captain', 'URY Manager'], '/orders'],
-  [['URY Captain', 'Desk User'], '/orders'],
+  [['URY Captain', 'Desk User'], '/order'],
 ])('routes %j to %s', (roles, path) => {
   expect(homePath({ name: 'operator', roles: roles as string[] })).toBe(path);
 });

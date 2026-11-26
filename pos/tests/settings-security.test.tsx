@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import { ApprovalPinProvider } from '../src/components/ApprovalPinProvider';
 import Settings from '../src/pages/Settings';
 
 const { permission, status } = vi.hoisted(() => ({ permission: vi.fn(), status: vi.fn() }));
@@ -16,13 +18,19 @@ vi.mock('../src/store/pos-store', () => ({
 vi.mock('../src/lib/override-api', async (original) => ({ ...await original<object>(), getMyPinStatus: status }));
 vi.mock('../src/components/POSCloseFlow', () => ({ default: () => null }));
 
+function renderSettings() {
+  return render(<MemoryRouter initialEntries={['/settings']}><ApprovalPinProvider>
+    <Settings />
+  </ApprovalPinProvider></MemoryRouter>);
+}
+
 beforeEach(() => {
   permission.mockReset().mockResolvedValue({ message: { has_permission: true } });
   status.mockReset().mockResolvedValue({ has_pin: true, must_reset: true, locked: true });
 });
 
 it('shows personal status and opens both approval PIN tabs for a manager', async () => {
-  render(<Settings />);
+  renderSettings();
   expect(screen.getByRole('heading', { name: /security/i })).toBeVisible();
   expect(screen.queryByText(/coming soon/i)).toBeNull();
   for (const badge of ['Approval PIN set', 'Reset required', 'Locked']) {
@@ -31,11 +39,11 @@ it('shows personal status and opens both approval PIN tabs for a manager', async
   fireEvent.click(screen.getByRole('button', { name: /my approval pin/i }));
   const dialog = within(await screen.findByRole('dialog'));
   expect(await dialog.findByText('Current password')).toBeVisible();
-  expect(await dialog.findByText('Staff PINs')).toBeVisible();
+  expect(await dialog.findByText('Clear staff approval PINs')).toBeVisible();
 });
 
 it.each(['Staff PINs', 'Pair this tablet'])('opens the authorized %s dialog', async (name) => {
-  render(<Settings />);
+  renderSettings();
   fireEvent.click(await screen.findByRole('button', { name }));
   expect(await screen.findByRole('dialog', { name })).toBeVisible();
 });
@@ -44,7 +52,7 @@ it.each([false, '1', 'error'])('fails closed for permission result %j', async (r
   if (result === 'error') permission.mockRejectedValue(new Error('offline'));
   else permission.mockResolvedValue({ message: { has_permission: result } });
   status.mockResolvedValue({ has_pin: false });
-  render(<Settings />);
+  renderSettings();
   await waitFor(() => expect(permission).toHaveBeenCalledWith('frappe.client.has_permission',
     { doctype: 'POS Profile', docname: 'Till A', perm_type: 'write' }));
   expect(await screen.findByText('No approval PIN set')).toBeVisible();
