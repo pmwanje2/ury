@@ -395,7 +395,7 @@ const Header = () => {
     )}
     {canManagePins && posProfileName && (
       <>
-        <StaffPinsDialog open={showStaffPins} onOpenChange={setShowStaffPins} />
+        {showStaffPins && <StaffPinsDialog key={posProfileName} posProfile={posProfileName} open onOpenChange={setShowStaffPins} />}
         <PairTabletDialog open={showPairTablet} onOpenChange={setShowPairTablet} posProfile={posProfileName} />
       </>
     )}

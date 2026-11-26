@@ -13,7 +13,7 @@ export function useTillLogout() {
     setLoggingOut(true);
     try {
       await clearCashierStorage(true);
-      window.location.href = '/login?redirect-to=%2Fpos';
+      window.location.href = '/pos/order';
     } catch (error) {
       showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
       logoutPending.current = false;

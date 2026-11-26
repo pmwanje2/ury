@@ -106,8 +106,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   }
 
   if (!user) {
-    // The checkAuth function will handle the redirect to login
-    return null;
+    return <FloorPinPad usernameOnly />;
   }
 
   if (requiresOutletSelection && !posProfile) {

@@ -27,7 +27,7 @@ function signedIn() {
   window.location.reload();
 }
 
-export default function FloorPinPad({ offline = false }: { offline?: boolean }) {
+export default function FloorPinPad({ offline = false, usernameOnly = false }: { offline?: boolean; usernameOnly?: boolean }) {
   const { min_length: minLength = 4, max_length: maxLength = 4 } = getFloorPad();
   const fixedLength = minLength === maxLength;
   const [pin, setPin] = useState('');
@@ -101,7 +101,7 @@ export default function FloorPinPad({ offline = false }: { offline?: boolean }) 
           <img src="/assets/ury/Images/maximus-mark.svg" alt="Maximus POS" className="h-8 w-auto" />
         </div>
         {offline && <p role="status" className="mb-4 text-center">{t('floor_pin.offline_notice')}</p>}
-        {!usernameForm ? (
+        {!usernameForm && !usernameOnly ? (
           <div className="space-y-6 text-center">
             <h1 className="text-2xl font-semibold text-gray-900">{t('floor_pin.title')}</h1>
             <p className="text-gray-600">
@@ -157,9 +157,9 @@ export default function FloorPinPad({ offline = false }: { offline?: boolean }) 
             </div>
             {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
             <Button type="submit" className="w-full" disabled={busy}>{t('floor_pin.sign_in')}</Button>
-            <Button type="button" variant="link" className="w-full" onClick={() => { setUsernameForm(false); setError(''); }}>
+            {!usernameOnly && <Button type="button" variant="link" className="w-full" onClick={() => { setUsernameForm(false); setError(''); }}>
               {t('floor_pin.back_to_pin')}
-            </Button>
+            </Button>}
           </form>
         )}
       </div>

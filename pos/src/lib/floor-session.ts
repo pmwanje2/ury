@@ -1,3 +1,5 @@
+import { withEmptyOutbox } from '../offline/outbox';
+import { showToast } from '@ury/ui';
 import { useEffect } from 'react';
 import { disconnectQzPrinter, logout, watchIdle } from '@ury/core';
 
@@ -92,6 +94,14 @@ export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | 
  * waiter never inherits the previous user's tab state.
  */
 export async function floorSignOut(): Promise<void> {
+  try {
+    await withEmptyOutbox(endFloorSession);
+  } catch (error) {
+    showToast.error(String(error instanceof Error ? error.message : error));
+  }
+}
+
+async function endFloorSession(): Promise<void> {
   let logoutFailed = false;
   try {
     // @ury/core logout() resolves false when the server logout failed.

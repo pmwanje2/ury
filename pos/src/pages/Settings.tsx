@@ -42,7 +42,7 @@ function SecurityControls({ userName, posProfileName }: { userName: string; posP
               <Button variant="outline" onClick={() => setDialog('pair')}>{t('header.pair_tablet')}</Button>
             </div>
           </CardContent>
-          <StaffPinsDialog open={dialog === 'staff'} onOpenChange={close} />
+          {dialog === 'staff' && <StaffPinsDialog key={posProfileName} posProfile={posProfileName} open onOpenChange={close} />}
           <PairTabletDialog open={dialog === 'pair'} onOpenChange={close} posProfile={posProfileName} />
         </Card>
       )}
