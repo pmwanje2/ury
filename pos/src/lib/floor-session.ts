@@ -2,7 +2,7 @@ import { v4 as uuid } from 'uuid';
 import { readGeneration, writeGeneration, readLogoutMarker, writeLogoutMarker } from './logout-store';
 import { withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
-import { boundTabGeneration, clearTabConfirmation, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
+import { boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
 export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
 import { useEffect } from 'react';
 import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
@@ -223,21 +223,20 @@ function lockLogoutTab(): false {
 export async function logoutWithFloorMarker(stillRequested?: () => boolean): Promise<boolean | undefined> {
   // Check the caller after acquiring the same lock used by verified login.
   const bound = boundTabGeneration();
-  if (bound === null) return false;
+  if (bound === null) return lockLogoutTab();
   const privateRetry = sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER);
   if (privateRetry !== null && !navigator.locks) return lockLogoutTab();
 
-  let current: string | undefined;
-  if (bound !== undefined || privateRetry !== null) {
-    current = await currentFloorGeneration().catch(() => undefined);
-    // A pre-generation tab can still explicitly log out on browsers without IndexedDB.
-    const observed = current ?? (bound === '' ? newestGeneration(undefined) : undefined);
-    if (bound !== undefined && bound !== observed) return lockLogoutTab();
-    if (privateRetry !== null) {
-      if (current === undefined) return lockLogoutTab();
-      if (revokeStaleLogoutRetry(current, privateRetry)) return false;
-    }
+  // Without a snapshot, only a pristine origin (or a matching private retry) can log out.
+  const expected = bound ?? privateRetry ?? '';
+  const current = await currentFloorGeneration().catch(() =>
+    expected === '' && typeof indexedDB === 'undefined' ? newestGeneration(undefined) : undefined,
+  );
+  if (privateRetry !== null) {
+    if (current === undefined) return lockLogoutTab();
+    if (revokeStaleLogoutRetry(current, privateRetry)) return false;
   }
+  if (expected !== current) return lockLogoutTab();
 
   // Activity may cancel an idle logout while its generation is being read.
   if (stillRequested && !stillRequested()) return undefined;
@@ -260,7 +259,6 @@ export async function logoutWithFloorMarker(stillRequested?: () => boolean): Pro
       catch { /* Still attempt server logout if the browser also refuses cookies. */ }
     }
   }
-  current ??= await currentFloorGeneration().catch(() => newestGeneration(undefined));
   let generation: string | undefined;
   try { generation = await rotateGeneration(current); } catch { /* Still attempt server logout. */ }
   try {
@@ -270,9 +268,11 @@ export async function logoutWithFloorMarker(stillRequested?: () => boolean): Pro
     }
   } catch { /* The origin-wide failure markers still protect accessible storage. */ }
   announceSessionChange('logout', generation);
-  try {
-    if (await logout() === false) return false;
-  } catch {
+  if (await logout().catch(() => false) === false) {
+    // A retry from this control belongs to the generation its own logout attempt created.
+    try {
+      if (generation) observeTabGeneration(generation);
+    } catch { /* Without a snapshot a retry will lock locally if the origin has advanced. */ }
     return false;
   }
   // The server session has ended. Attempt each cleanup even if the durable store is unavailable.

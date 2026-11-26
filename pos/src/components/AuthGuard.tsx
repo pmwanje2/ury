@@ -7,7 +7,7 @@ import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
 import OutboxPanel from './OutboxPanel';
 import { assertOutboxEmpty, onOutboxMembershipChange, queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
-import { boundTabGeneration, clearTabConfirmation, revokeTabConfirmation } from '../lib/floor-tab';
+import { boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation } from '../lib/floor-tab';
 import { getPosProfileFull } from '../lib/pos-profile-api';
 import {
   retryFloorSignOut,
@@ -142,6 +142,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   useEffect(() => {
     let active = true;
     let locked = false;
+    let admitted = false;
     const lockTab = () => {
       locked = true;
       try { revokeTabConfirmation(); } catch { /* Still close the mounted workspace. */ }
@@ -156,14 +157,20 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
         if (revokeStaleLogoutRetry(generation)) {
           locked = true;
           setGate('revoked');
-        } else if (bound !== undefined && bound !== generation) {
+        } else if (bound === undefined ? admitted : bound !== generation) {
           // Another tab can already own the server cookie. Only lock this workspace.
           lockTab();
         } else if (failed) {
           locked = true;
           setGate('failed');
           clearTabConfirmation();
-        } else setGate('ready');
+          observeTabGeneration(generation);
+        } else {
+          // Bind before mounting any workspace control, including an unconfirmed stay-role layout.
+          if (bound === undefined) observeTabGeneration(generation);
+          admitted = true;
+          setGate('ready');
+        }
       } catch {
         if (active) lockTab();
       }
