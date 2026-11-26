@@ -1,6 +1,7 @@
+/** @vitest-environment-options {"url":"https://register.test/pos/order/table/T1"} */
 import { BroadcastChannel as NodeChannel } from 'node:worker_threads';
-import { IDBFactory } from 'fake-indexeddb';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { IDBDatabase, IDBFactory } from 'fake-indexeddb';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as core from '@ury/core';
 import AuthGuard from '../src/components/AuthGuard';
@@ -8,7 +9,9 @@ import OutboxPanel from '../src/components/OutboxPanel';
 import { cashierOutbox, clearCashierStorage } from '../src/offline/cashier';
 import { onOutboxMembershipChange } from '../src/offline/outbox';
 import { useOutbox } from '../src/offline/use-outbox';
-import { setFloorSessionMarker } from '../src/lib/floor-session';
+import { clearFloorLogoutFailureMarker, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+import { readLogoutMarker, writeLogoutMarker } from '../src/lib/logout-store';
+import FloorPinPad from '../src/components/FloorPinPad';
 import { testLocks } from './offline-locks';
 
 const state = vi.hoisted(() => ({
@@ -37,7 +40,12 @@ beforeEach(() => {
   vi.spyOn(window, 'open').mockReturnValue(null);
 });
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  document.cookie = 'ury_floor_logout_failed=; Max-Age=0; Path=/pos; SameSite=Strict; Secure';
+});
 
 it('locks an admitted tab on its next poll without exposing or replaying the newly committed row', async () => {
   const queue = cashierOutbox(state.posProfile, state.user);
@@ -120,4 +128,107 @@ it('fails closed on a durable-store read error even with a confirmed tab', async
   render(<AuthGuard><Workspace /></AuthGuard>);
   await screen.findByLabelText('Password');
   expect(Workspace).not.toHaveBeenCalled();
+});
+
+it('locks a table route without an outbox hook after a missed membership notification', async () => {
+  const timers = vi.spyOn(window, 'setInterval');
+  const stop = vi.spyOn(window, 'clearInterval');
+  const view = render(<AuthGuard><main>Table T1</main></AuthGuard>);
+  await screen.findByText('Table T1');
+  const dispatch = vi.spyOn(window, 'dispatchEvent').mockReturnValue(true);
+  try { await capture(); } finally { dispatch.mockRestore(); }
+  await act(async () => {
+    for (const [wake, ms] of timers.mock.calls) if (ms === 5000) await (wake as () => void)();
+  });
+  await screen.findByText(/account that owns the queued orders/);
+  expect(screen.queryByText('Table T1')).toBeNull();
+  view.unmount();
+  timers.mock.calls.forEach(([, ms], i) => {
+    if (ms === 5000) expect(stop).toHaveBeenCalledWith(timers.mock.results[i].value);
+  });
+});
+
+it('broadcasts a logout across tabs when the storage signal is unavailable', async () => {
+  vi.stubGlobal('BroadcastChannel', NodeChannel);
+  vi.spyOn(core, 'logout').mockResolvedValue(false);
+  const sibling = new NodeChannel('ury-floor-logout');
+  const received = vi.fn();
+  sibling.onmessage = received;
+  try {
+    await expect(clearCashierStorage(true)).rejects.toThrow();
+    await waitFor(() => expect(received).toHaveBeenCalled());
+  } finally { sibling.close(); }
+});
+
+it.each(['broadcast', 'poll', 'focus', 'visibility'])('revokes a mounted sibling confirmation on %s', async (signal) => {
+  if (signal === 'broadcast') vi.stubGlobal('BroadcastChannel', NodeChannel);
+  const timers = vi.spyOn(window, 'setInterval');
+  vi.spyOn(core, 'logout').mockResolvedValue(false);
+  setFloorSessionMarker(state.user.name, false);
+  render(<AuthGuard><main>Sibling workspace</main></AuthGuard>);
+  await screen.findByText('Sibling workspace');
+  // Only the origin-wide record is shared with the tab that attempted logout.
+  await writeLogoutMarker('remote-owner');
+  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
+  await act(async () => {
+    if (signal === 'broadcast') {
+      const remote = new NodeChannel('ury-floor-logout');
+      remote.postMessage(null);
+      remote.close();
+    } else if (signal === 'poll') {
+      for (const [wake, ms] of timers.mock.calls) if (ms === 5000) await (wake as () => void)();
+    } else if (signal === 'focus') window.dispatchEvent(new Event('focus'));
+    else document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await screen.findByLabelText('Password');
+  expect(screen.queryByText('Sibling workspace')).toBeNull();
+  expect(hasFloorSessionMarker(state.user.name)).toBe(false);
+});
+
+function refuseMarkerTransactions(mode: IDBTransactionMode) {
+  const original = IDBDatabase.prototype.transaction;
+  return vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementation(function (this: IDBDatabase, ...args) {
+    if (this.name === 'ury-pos-session' && args[1] === mode) throw new DOMException('Storage unavailable', 'QuotaExceededError');
+    return original.apply(this, args);
+  });
+}
+
+it('confirms a verified password login with a cookie-only marker and a read-only empty durable store', async () => {
+  expect(await readLogoutMarker()).toBe(false);
+  refuseMarkerTransactions('readwrite');
+  document.cookie = 'ury_floor_logout_failed=1; Path=/pos; SameSite=Strict; Secure';
+  vi.spyOn(core.auth, 'loginWithUsernamePassword').mockResolvedValue({ message: 'Logged In' } as never);
+  vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(state.user.name);
+  render(<FloorPinPad usernameOnly />);
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: state.user.name } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'test password' } });
+  fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
+  await waitFor(() => expect(hasFloorSessionMarker(state.user.name)).toBe(true));
+  expect(document.cookie).not.toContain('ury_floor_logout_failed=');
+});
+
+it.each(['readonly', 'readwrite'] as const)('keeps the login gate closed when a present marker cannot be checked or cleared (%s)', async mode => {
+  await writeLogoutMarker(state.user.name);
+  refuseMarkerTransactions(mode);
+  document.cookie = 'ury_floor_logout_failed=1; Path=/pos; SameSite=Strict; Secure';
+  await expect(clearFloorLogoutFailureMarker()).rejects.toThrow();
+  expect(document.cookie).toContain('ury_floor_logout_failed=1');
+  expect(hasFloorSessionMarker(state.user.name)).toBe(false);
+});
+
+it('sets and expires the fallback cookie with Secure on HTTPS', async () => {
+  expect(location.protocol).toBe('https:');
+  expect(await readLogoutMarker()).toBe(false);
+  const blocked = refuseMarkerTransactions('readwrite');
+  const cookies = vi.spyOn(document, 'cookie', 'set');
+  vi.spyOn(core, 'logout').mockResolvedValue(false);
+  await expect(clearCashierStorage(true)).rejects.toThrow();
+  blocked.mockRestore();
+  await clearFloorLogoutFailureMarker();
+  for (const prefix of ['ury_floor_logout_failed=1;', 'ury_floor_logout_failed=;']) {
+    const value = cookies.mock.calls.find(([cookie]) => cookie.startsWith(prefix))?.[0];
+    expect(value).toContain('Path=/pos');
+    expect(value).toContain('SameSite=Strict');
+    expect(value?.toLowerCase().split(';').map(attribute => attribute.trim())).toContain('secure');
+  }
 });
