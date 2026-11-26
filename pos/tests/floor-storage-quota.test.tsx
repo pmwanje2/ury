@@ -7,9 +7,10 @@ import * as core from '@ury/core';
 import AuthGuard from '../src/components/AuthGuard';
 import OutboxPanel from '../src/components/OutboxPanel';
 import { cashierOutbox, clearCashierStorage } from '../src/offline/cashier';
-import { onOutboxMembershipChange } from '../src/offline/outbox';
+import { onOutboxMembershipChange, withOutboxLogin } from '../src/offline/outbox';
 import { useOutbox } from '../src/offline/use-outbox';
-import { clearFloorLogoutFailureMarker, currentFloorGeneration, floorSignOut, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+import { clearFloorLogoutFailureMarker, confirmVerifiedLogin, currentFloorGeneration, floorSignOut, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+import * as logoutStore from '../src/lib/logout-store';
 import { readLogoutMarker, writeLogoutMarker } from '../src/lib/logout-store';
 import FloorPinPad from '../src/components/FloorPinPad';
 import { testLocks } from './offline-locks';
@@ -418,4 +419,93 @@ it('withholds a scheduled private retry when the durable generation cannot be re
   render(<AuthGuard><main>Cashier workspace</main></AuthGuard>);
   await screen.findByLabelText('Password');
   expect(screen.queryByText('Cashier workspace')).toBeNull();
+});
+
+it.each(['Switch Waiter', 'till logout'])('refuses %s queued behind a replacement login', async action => {
+  await passwordLogin(state.user.name);
+  const restoreA = saveTab();
+  const generationA = await currentFloorGeneration();
+  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
+
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
+  const markerWrites = vi.spyOn(logoutStore, 'writeLogoutMarker');
+  const lockRequests = vi.spyOn(navigator.locks, 'request');
+  let resumeLogin!: () => void;
+  const paused = new Promise<void>(resolve => { resumeLogin = resolve; });
+  let loginHasLock!: () => void;
+  const acquired = new Promise<void>(resolve => { loginHasLock = resolve; });
+  const cashierB = 'replacement@example.test';
+  let generationB!: string;
+  let restoreB!: () => void;
+  const login = withOutboxLogin(cashierB, async () => {
+    loginHasLock();
+    await paused;
+    window.name = '';
+    sessionStorage.clear();
+    await confirmVerifiedLogin(cashierB, false);
+    generationB = await currentFloorGeneration();
+    restoreB = saveTab();
+    restoreA(); // The queued operation runs with A's private storage.
+  });
+  await acquired;
+  const attempt = action === 'Switch Waiter' ? floorSignOut() : clearCashierStorage(true);
+  const completed = Promise.allSettled([attempt]);
+  expect(lockRequests).toHaveBeenCalledTimes(2);
+  expect(lockRequests.mock.calls[0][0]).toBe(lockRequests.mock.calls[1][0]);
+  resumeLogin();
+  await login;
+  await completed;
+  expect(generationB).not.toBe(generationA);
+  expect(logout).not.toHaveBeenCalled();
+  expect(markerWrites).not.toHaveBeenCalled();
+  expect(await currentFloorGeneration()).toBe(generationB);
+  expect(hasFloorSessionMarker(state.user.name)).toBe(false);
+  const gate = render(<AuthGuard><main>Stale workspace</main></AuthGuard>);
+  await screen.findByLabelText('Password');
+  gate.unmount();
+  restoreB();
+  expect(hasFloorSessionMarker(cashierB)).toBe(true);
+  expect(logout).not.toHaveBeenCalled();
+});
+
+it('locks a confirmed tab on logout if its non-empty generation cannot be verified', async () => {
+  await passwordLogin(state.user.name);
+  const generation = await currentFloorGeneration();
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
+  const markerWrites = vi.spyOn(logoutStore, 'writeLogoutMarker');
+  const blocked = refuseMarkerTransactions('readonly');
+  await floorSignOut();
+  blocked.mockRestore();
+  expect(logout).not.toHaveBeenCalled();
+  expect(markerWrites).not.toHaveBeenCalled();
+  expect(await currentFloorGeneration()).toBe(generation);
+  render(<AuthGuard><main>Stale workspace</main></AuthGuard>);
+  await screen.findByLabelText('Password');
+  expect(hasFloorSessionMarker(state.user.name)).toBe(false);
+});
+
+it('locks a private retry without Web Locks until verified sign-in', async () => {
+  vi.stubGlobal('navigator', { onLine: true, locks: undefined });
+  await passwordLogin(state.user.name);
+  const logout = vi.spyOn(core, 'logout').mockResolvedValueOnce(false).mockResolvedValue(true);
+  // The first explicit till logout is allowed without Web Locks.
+  await expect(clearCashierStorage(true)).rejects.toThrow();
+  expect(logout).toHaveBeenCalledTimes(1);
+  const generation = await currentFloorGeneration();
+  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe(generation);
+  const markerWrites = vi.spyOn(logoutStore, 'writeLogoutMarker');
+  const showGuard = () => render(<AuthGuard><main>Cashier workspace</main></AuthGuard>);
+  for (let boot = 0; boot < 2; boot++) {
+    const gate = showGuard();
+    await screen.findByLabelText('Password');
+    expect(screen.queryByText('Cashier workspace')).toBeNull();
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(markerWrites).not.toHaveBeenCalled();
+    expect(await currentFloorGeneration()).toBe(generation);
+    gate.unmount();
+  }
+  await passwordLogin(state.user.name);
+  showGuard();
+  await screen.findByText('Cashier workspace');
+  expect(logout).toHaveBeenCalledTimes(1);
 });
