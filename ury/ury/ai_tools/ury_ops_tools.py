@@ -573,6 +573,8 @@ def trace_sale_stock_impact(invoice=None, branch=None):
 	(BOM) used per dish → the Manufacture stock entry posted when the kitchen
 	marked it ready → every ingredient deducted from the outlet warehouse
 	with the bin balance after. Defaults to the latest sale at `branch`."""
+	from ury.ury.api.kitchen_ticket_history import current_ticket_owner, owned_kots
+
 	require_manager()
 	if not invoice:
 		filters = {"docstatus": ["<", 2]}
@@ -580,11 +582,11 @@ def trace_sale_stock_impact(invoice=None, branch=None):
 			filters["branch"] = branch
 		latest_kot = frappe.get_all(
 			"URY KOT", filters={**({"branch": branch} if branch else {}), "invoice": ["is", "set"]},
-			fields=["invoice"], order_by="creation desc", limit=1,
+			fields=["name", "invoice"], order_by="creation desc", limit=1,
 		)
 		if not latest_kot:
 			return {"found": False, "reason": "No KOT-linked sale found."}
-		invoice = latest_kot[0].invoice
+		invoice = current_ticket_owner(frappe, latest_kot[0].name, latest_kot[0].invoice).name
 	inv = frappe.db.get_value(
 		"POS Invoice", invoice,
 		["name", "branch", "company", "posting_date", "grand_total", "status", "restaurant_table", "customer", "currency"],
@@ -596,7 +598,7 @@ def trace_sale_stock_impact(invoice=None, branch=None):
 	inv["items"] = frappe.get_all(
 		"POS Invoice Item", filters={"parent": invoice}, fields=["item_code", "item_name", "qty", "amount"], order_by="idx"
 	)
-	kots = frappe.get_all("URY KOT", filters={"invoice": invoice}, pluck="name")
+	kots = [ticket.name for ticket in owned_kots(frappe, invoice)]
 	records = frappe.get_all(
 		"URY Fulfilment Record",
 		filters={"kot": ["in", kots or [""]]},

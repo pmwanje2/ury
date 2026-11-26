@@ -2,6 +2,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 
+from ury.ury.api.kitchen_ticket_history import owned_kots, ticket_ownership
 from ury.ury_pos.api import getBranch
 from ury.ury.doctype.ury_order.ury_order import _order_ownership_flags
 
@@ -20,7 +21,7 @@ def reprint_kot(invoice_number, approval_token=None, reason=None, reason_note=No
     # Authorization checks run outside the existing try/except below so a
     # frappe.PermissionError or POS-AUTH/POS-REASON error isn't swallowed and
     # rewritten into the generic "unexpected error" message.
-    pos_invoice = frappe.get_doc("POS Invoice", invoice_number)
+    pos_invoice = frappe.get_doc("POS Invoice", invoice_number, for_update=True)
 
     if not frappe.has_permission("POS Invoice", "read", doc=pos_invoice):
         frappe.throw(_("Not permitted to view this order"), frappe.PermissionError)
@@ -38,6 +39,9 @@ def reprint_kot(invoice_number, approval_token=None, reason=None, reason_note=No
             _("Not permitted to reprint KOT for orders outside your active branch"),
             frappe.PermissionError,
         )
+
+    if pos_invoice.get("docstatus") == 2:
+        frappe.throw(_("Cannot reprint a cancelled check."))
 
     if not pos_invoice.pos_profile:
         frappe.throw(f"POS Profile not found for Invoice {invoice_number}.")
@@ -101,6 +105,7 @@ def reprint_kot(invoice_number, approval_token=None, reason=None, reason_note=No
         if not printer:
             frappe.throw("No printer is assigned for reprinting KOT.")
 
+        reprint_meta = None
         if auth is not None:
             reprint_meta = {
                 "invoice": invoice_number,
@@ -110,17 +115,25 @@ def reprint_kot(invoice_number, approval_token=None, reason=None, reason_note=No
                 "reprint_reason": auth.get("reason") or "",
                 "reprint_approver": auth.get("approver") or "",
             }
-            print_kot(printer, invoice_number, kot_print_format, extra_metadata=reprint_meta)
-            if isinstance(pos_invoice.get("custom_kot_reprint_count"), (int, float)):
-                frappe.db.set_value(
-                    "POS Invoice",
-                    invoice_number,
-                    "custom_kot_reprint_count",
-                    next_reprint_number,
-                    update_modified=False,
-                )
+        tickets = owned_kots(frappe, pos_invoice, active=True)
+        if tickets:
+            from ury.ury.api.ury_waiter_print import WAITER_PRINT_FORMAT
+
+            format_type = frappe.db.get_value("Print Format", kot_print_format, "doc_type")
+            ticket_format = kot_print_format if format_type == "URY KOT" or kot_print_format == "Standard" else WAITER_PRINT_FORMAT
+            metadata = reprint_meta or {"invoice": invoice_number, "is_reprint": True}
+            for ticket in tickets:
+                print_by_server("URY KOT", ticket.name, printer, ticket_format, extra_metadata=metadata)
+        elif ticket_ownership(pos_invoice) or owned_kots(frappe, pos_invoice):
+            frappe.throw(_("This check has no printable kitchen tickets."))
         else:
-            print_kot(printer, invoice_number, kot_print_format)
+            # Older waiter-print sites issue invoice slips without creating station KOTs.
+            kwargs = {"extra_metadata": reprint_meta} if reprint_meta else {}
+            print_kot(printer, invoice_number, kot_print_format, **kwargs)
+
+        if auth is not None and isinstance(pos_invoice.get("custom_kot_reprint_count"), (int, float)):
+            frappe.db.set_value("POS Invoice", invoice_number, "custom_kot_reprint_count",
+                                next_reprint_number, update_modified=False)
 
         return "Success"
 
@@ -149,8 +162,5 @@ def print_by_server(doctype, name, printer_setting, print_format=None, **kwargs)
 
 
 def print_kot(printer, docname, kot_print_format, restaurant_table=None, order_type=None, extra_metadata=None):
-    try:
-        kwargs = {"extra_metadata": extra_metadata} if extra_metadata else {}
-        print_by_server("POS Invoice", docname, printer, kot_print_format, **kwargs)
-    except Exception as e:
-        frappe.log_error(f"KOT Reprint Error: {e}", "KOT Reprint Error")
+    kwargs = {"extra_metadata": extra_metadata} if extra_metadata else {}
+    print_by_server("POS Invoice", docname, printer, kot_print_format, **kwargs)

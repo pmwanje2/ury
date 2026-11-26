@@ -59,7 +59,9 @@ def order_delay_notification(id):
     if table:
         tableOrTakeaway = table
     order_status = frappe.db.get_value("URY KOT", id, "order_status")
-    invoice_id = frappe.db.get_value("URY KOT", id, "invoice")
+    from ury.ury.api.kitchen_ticket_history import current_ticket_owner
+
+    invoice_id = current_ticket_owner(frappe, id, kot_doc.invoice).name
     order_id = invoice_id[-5:]
     kot_type = frappe.db.get_value("URY KOT", id, "type")
     pos_profile = frappe.db.get_value("URY KOT", id, "pos_profile")

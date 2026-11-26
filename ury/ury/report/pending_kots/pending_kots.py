@@ -3,6 +3,7 @@
 
 
 import frappe
+from ury.ury.api.kitchen_ticket_history import ticket_owner_query
 from frappe.utils import get_datetime
 
 
@@ -16,26 +17,26 @@ def execute(filters=None):
         )
         or 0
     )
-    kot_list = frappe.db.sql(
+    query, params = ticket_owner_query(frappe,
         """
 		SELECT
 			kot.name AS name,
 			kot.restaurant_table AS restaurant_table,
 			GREATEST(TIMESTAMPDIFF(MINUTE, TIMESTAMP(kot.date, kot.time), %(now)s), 0) AS minutes,
-			kot.invoice AS invoice
+			owner.invoice AS invoice
 		FROM
-			`tabURY KOT` AS kot
+			`tabURY KOT` AS kot JOIN {ticket_owners} owner ON owner.ticket = kot.name
 		WHERE
-			kot.order_status <> 'Served'
-			AND kot.docstatus != 2
+			owner.wholly_cancelled = 0 AND kot.order_status <> 'Served'
+			AND kot.docstatus = 1 AND kot.type NOT IN ('Cancelled', 'Partially cancelled')
 			AND GREATEST(TIMESTAMPDIFF(MINUTE, TIMESTAMP(kot.date, kot.time), %(now)s), 0) > %(alert_time)s
 			AND kot.branch = %(branch)s
 		ORDER BY
 			minutes DESC;
 	""",
         {"now": now, "alert_time": alert_time, "branch": branch},
-        as_dict=True,
     )
+    kot_list = frappe.db.sql(query, params, as_dict=True)
     for kot in kot_list:
         tableOrTakeaway = (
             kot["restaurant_table"]

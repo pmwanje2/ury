@@ -67,3 +67,7 @@ ury.patches.v2_0.setup_pos_modifiers_and_combos
 ury.patches.v2_0.setup_pos_tax_and_dayparts
 ury.patches.v2_0.setup_pos_config_sweep
 ury.patches.v2_0.timed_fire_fields
+ury.patches.v3_46.add_floor_lifecycle_fields
+ury.patches.v3_46.add_split_balance_field
+ury.patches.v3_46.drop_kitchen_ticket_owner_view
+ury.patches.v3_46.initialize_table_seating_checks

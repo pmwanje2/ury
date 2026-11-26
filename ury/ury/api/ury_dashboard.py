@@ -1,4 +1,5 @@
 import frappe
+from ury.ury.api.kitchen_ticket_history import WHOLE_COMPENSATION
 
 from frappe import _
 from frappe.utils import get_datetime, datetime, add_to_date, today
@@ -605,7 +606,7 @@ def get_shift_metrics(branch=None):
 			FROM (
 				SELECT TIME_TO_SEC(k.`start_time_serv`) - TIME_TO_SEC(k.`start_time_prep`) AS diff
 				FROM `tabURY KOT` k
-				WHERE {kot_conditions}
+				WHERE NOT {WHOLE_COMPENSATION.format(ticket="k.name")} AND {kot_conditions}
 			) d
 		) t
 		WHERE t.secs IS NOT NULL

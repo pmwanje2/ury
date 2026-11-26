@@ -154,8 +154,10 @@ def _kot_item_doc(kot_item):
 
 
 def _kot_order_ref(kot):
-	invoice = frappe.db.get_value(KOT_DOCTYPE, kot, "invoice")
-	return invoice or kot
+	from ury.ury.api.kitchen_ticket_history import current_ticket_owner
+
+	issuer = frappe.db.get_value(KOT_DOCTYPE, kot, "invoice")
+	return current_ticket_owner(frappe, kot, issuer).name if issuer else kot
 
 
 def _row_reservation_line_key(row):
@@ -431,15 +433,12 @@ def _freeze_payload(execution_doc, actor):
 			),
 		)
 	kot_item_doc, item_code, accepted_qty = _kot_item_doc(execution_doc.kot_item)
+	from ury.ury.api.kitchen_ticket_history import invoice_ticket_ledger, round_ledger
+
 	order_ref = _kot_order_ref(execution_doc.kot)
-	# B03: bind this posting to the reservation group owned by THIS KOT
-	# line, not to every group the order happens to hold for this item_code.
-	# `URY KOT Items.reservation_line_key` is written at KOT creation from the
-	# same `_line_key` derivation the reservation side freezes (see
-	# `ury_kot_generate._line_keyed_items` / `create_kot_doc`), so the two
-	# sides already agree on line identity -- the consumption side simply was
-	# not using it. Absent (legacy KOT item), `_scope_rows_to_line` is a no-op.
-	reservation_line_key = kot_item_doc.get("reservation_line_key")
+	bindings = round_ledger(invoice_ticket_ledger(frappe, order_ref))[1]
+	binding = bindings.get(execution_doc.kot, {}).get(execution_doc.kot_item, {})
+	reservation_line_key = binding.get("reservation_line_key", kot_item_doc.get("reservation_line_key"))
 	rows = _reservation_rows(
 		order_ref,
 		item_code,
@@ -1235,14 +1234,20 @@ def post_intents_for_kot(kot, actor=None):
 def post_intents_for_pos_invoice(invoice, actor=None):
 	"""Create and process posting intents for all KOTs linked to this POS Invoice."""
 	inv_name = invoice if isinstance(invoice, str) else invoice.name
-	kots = frappe.get_all("URY KOT", filters={"invoice": inv_name, "docstatus": ["!=", 2]}, pluck="name")
+	anchors = frappe.get_all(
+		"POS Invoice Item",
+		filters={"parent": inv_name, "parenttype": "POS Invoice", "custom_kitchen_anchor": ["is", "set"]},
+		pluck="custom_kitchen_anchor",
+	)
+	from ury.ury.api.kitchen_ticket_history import invoice_ticket_ledger, owned_ticket_filters
 
-	merged_invoice = frappe.db.get_value("POS Invoice", inv_name, "custom_merged_pos_invoice")
-	if merged_invoice:
-		merged_kots = frappe.get_all("URY KOT", filters={"invoice": merged_invoice, "docstatus": ["!=", 2]}, pluck="name")
-		for k in merged_kots:
-			if k not in kots:
-				kots.append(k)
+	merged = frappe.db.get_value("POS Invoice", inv_name, "custom_merged_pos_invoice")
+	owners = {inv_name, *anchors}
+	if merged:
+		owners.add(merged)
+	kots = {ticket for name in owners
+	        for scope in owned_ticket_filters(invoice_ticket_ledger(frappe, name))
+	        for ticket in frappe.get_all("URY KOT", filters=dict(scope, docstatus=["!=", 2]), pluck="name")}
 
 	results = []
 	for kot_name in kots:

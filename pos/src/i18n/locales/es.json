@@ -253,6 +253,9 @@
     }
   },
   "pos_closing": {
+    "job_summary": "Tiempo trabajado y propinas cobradas por código de puesto",
+    "labor_minutes": "Minutos trabajados",
+    "job_code_unassigned": "Sin asignar",
     "title": "Cerrar POS",
     "description": "Revisa las ventas de tu sesión e ingresa los montos reales de cierre.",
     "loading": "Cargando datos de cierre...",
@@ -593,6 +596,7 @@
     "min_notice": "Una reserva necesita al menos {{minutes}} minutos de antelación."
   },
   "bill_split": {
+    "confirm_split": "Confirmar división",
     "split_bill": "Dividir cuenta",
     "select_items": "Elige artículos para mover a una nueva cuenta desde {{invoice}}",
     "stays_on_bill": "Se quedan en la cuenta original",
@@ -820,6 +824,7 @@
     "acknowledged": "Confirmado"
   },
   "floor_pin": {
+    "enter_staff_pin": "Introduce tu PIN de empleado",
     "offline_notice": "Sin conexión. Vuelve a iniciar sesión antes de tomar pedidos.",
     "title": "Acceso del personal",
     "pin_prompt": "Introduce tu PIN de 4 dígitos",
@@ -850,6 +855,7 @@
     "login_disabled": "El acceso con PIN de sala está desactivado en este perfil POS. Actívalo primero en el perfil POS."
   },
   "staff_pins": {
+    "policy_conflict": "Antes de emitir el PIN, unifica la longitud del PIN de sala en los perfiles de punto de venta que puede usar este empleado.",
     "title": "PIN del personal",
     "description": "Asigna un PIN de sala a un miembro del personal autorizado.",
     "shown_once": "Este PIN solo se muestra una vez. Entrégalo al empleado en privado.",
@@ -1139,6 +1145,8 @@
     "sc_summary_toggle": "Ver desglose"
   },
   "timeclock": {
+    "job_code": "Código de puesto",
+    "select_job_code": "Selecciona un código de puesto",
     "clock_in": "Marcar entrada",
     "clock_out_pill": "Entrada {{time}} · Salida",
     "clock_in_title": "Marcar entrada",
@@ -1242,5 +1250,61 @@
     "consolidated_locked_hint": "Las cuentas consolidadas no se pueden devolver ni reabrir en caja.",
     "decrease_return_qty": "Disminuir cantidad a devolver de {{item}}",
     "increase_return_qty": "Aumentar cantidad a devolver de {{item}}"
+  },
+  "floor": {
+    "seat": "Asiento",
+    "seat_number": "Asiento {{seat}}",
+    "seat_short": "A{{seat}}",
+    "table_shared": "Mesa",
+    "add_seat": "Añadir asiento",
+    "course": "Tiempo",
+    "split_by_seat": "Por asiento",
+    "split_even": "Partes iguales",
+    "split_manual": "Manual",
+    "split_count": "Número de cuentas",
+    "check_number": "Cuenta {{check}}",
+    "add_check": "Añadir cuenta",
+    "remove_check": "Quitar última cuenta",
+    "guest_split": "Dividir a una cuenta con nombre",
+    "share": "Repartir en partes",
+    "custom": "Personalizado",
+    "seated": "Sentados",
+    "dirty": "Por limpiar",
+    "check_printed": "Cuenta impresa",
+    "mark_clean": "Marcar como limpia",
+    "pay": "Pagar",
+    "waitlist": "Lista de espera",
+    "add_walkin": "Añadir grupo sin reserva",
+    "party_name": "Nombre del grupo",
+    "party_phone": "Número de teléfono",
+    "party_size": "Número de personas",
+    "preferred_room": "Sala preferida",
+    "any_room": "Cualquier sala",
+    "quote": "Espera indicada (minutos)",
+    "estimate": "Estimar la espera",
+    "no_fit": "No hay mesas adecuadas para este grupo.",
+    "waiting": "En espera",
+    "notified": "Avisado",
+    "notify": "Marcar como avisado",
+    "seat_party": "Sentar al grupo",
+    "select_table": "Seleccionar mesa",
+    "elapsed": "{{minutes}} min de espera",
+    "quoted_badge": "{{minutes}} min indicados",
+    "waitlist_empty": "No hay grupos en espera.",
+    "waitlist_error": "No se pudo actualizar la lista de espera.",
+    "waitlist_access": "No tienes permiso para gestionar la lista de espera.",
+    "waitlist_room_outlet": "La sala solicitada no pertenece a este establecimiento.",
+    "waitlist_invalid_size_or_time": "Introduce un número de personas o un tiempo de espera válido.",
+    "waitlist_invalid_phone": "Introduce un número de teléfono válido.",
+    "waitlist_missing_name": "Introduce el nombre del grupo.",
+    "waitlist_party_unavailable": "Este grupo ya no está en la lista de espera.",
+    "waitlist_table_outlet": "La mesa no pertenece a este establecimiento.",
+    "waitlist_table_unavailable": "Selecciona una mesa disponible.",
+    "waitlist_table_room": "Selecciona una mesa en la sala solicitada.",
+    "waitlist_table_size": "Esta mesa no tiene capacidad para el grupo.",
+    "waitlist_table_reserved": "Esta mesa está apartada para una reserva.",
+    "waitlist_table_overlap": "Una reserva coincide con parte de la estancia prevista del grupo. Selecciona otra mesa.",
+    "waitlist_table_dirty": "Marca esta mesa como limpia antes de sentar al grupo.",
+    "clean_failed": "No se pudo marcar la mesa como limpia."
   }
 }

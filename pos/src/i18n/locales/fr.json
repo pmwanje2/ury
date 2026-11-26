@@ -527,6 +527,7 @@
     "min_notice": "Une réservation doit être faite au moins {{minutes}} minutes à l'avance."
   },
   "bill_split": {
+    "confirm_split": "Confirmer la division",
     "split_bill": "Diviser l'addition",
     "select_items": "Choisissez les articles à déplacer vers une nouvelle addition depuis {{invoice}}",
     "stays_on_bill": "Reste sur l'addition d'origine",
@@ -679,6 +680,9 @@
     "session_opened_success": "Session PDV ouverte"
   },
   "pos_closing": {
+    "job_summary": "Temps de travail et pourboires encaissés par code de poste",
+    "labor_minutes": "Minutes travaillées",
+    "job_code_unassigned": "Non attribué",
     "title": "Clôturer la session PDV",
     "description": "Vérifiez les ventes de votre session et saisissez les montants réels de clôture.",
     "loading": "Chargement des détails de clôture...",
@@ -839,6 +843,7 @@
     "till_not_open": "La caisse n’est pas ouverte. Demandez au caissier de l’ouvrir."
   },
   "floor_pin": {
+    "enter_staff_pin": "Saisissez votre code PIN personnel",
     "offline_notice": "Hors connexion. Reconnectez-vous avant de prendre des commandes.",
     "title": "Connexion du personnel",
     "pin_prompt": "Saisissez votre PIN à 4 chiffres",
@@ -869,6 +874,7 @@
     "login_disabled": "La connexion par PIN de salle est désactivée pour ce profil POS. Activez-la d’abord dans le profil POS."
   },
   "staff_pins": {
+    "policy_conflict": "Avant de délivrer un code PIN, harmonisez la longueur du code PIN de salle dans les profils de point de vente auxquels cet employé a accès.",
     "title": "PIN du personnel",
     "description": "Attribuez un PIN de salle à un membre du personnel éligible.",
     "shown_once": "Ce PIN n’est affiché qu’une seule fois. Remettez-le au membre du personnel en privé.",
@@ -1175,6 +1181,8 @@
     "sc_summary_toggle": "Voir le détail"
   },
   "timeclock": {
+    "job_code": "Code de poste",
+    "select_job_code": "Sélectionnez un code de poste",
     "clock_in": "Pointer l'entrée",
     "clock_out_pill": "Entrée {{time}} · Sortie",
     "clock_in_title": "Pointer l'entrée",
@@ -1278,5 +1286,61 @@
     "consolidated_locked_hint": "Les additions consolidées ne peuvent pas être retournées ou rouvertes en caisse.",
     "decrease_return_qty": "Diminuer la quantité retournée pour {{item}}",
     "increase_return_qty": "Augmenter la quantité retournée pour {{item}}"
+  },
+  "floor": {
+    "seat": "Place",
+    "seat_number": "Place {{seat}}",
+    "seat_short": "P{{seat}}",
+    "table_shared": "Table",
+    "add_seat": "Ajouter une place",
+    "course": "Service",
+    "split_by_seat": "Par place",
+    "split_even": "Parts égales",
+    "split_manual": "Manuel",
+    "split_count": "Nombre d’additions",
+    "check_number": "Addition {{check}}",
+    "add_check": "Ajouter une addition",
+    "remove_check": "Retirer la dernière addition",
+    "guest_split": "Créer une addition nominative",
+    "share": "Partager en parts",
+    "custom": "Personnalisé",
+    "seated": "Installé",
+    "dirty": "À nettoyer",
+    "check_printed": "Addition imprimée",
+    "mark_clean": "Marquer comme propre",
+    "pay": "Payer",
+    "waitlist": "Liste d’attente",
+    "add_walkin": "Ajouter un groupe sans réservation",
+    "party_name": "Nom du groupe",
+    "party_phone": "Numéro de téléphone",
+    "party_size": "Nombre de personnes",
+    "preferred_room": "Salle souhaitée",
+    "any_room": "Toutes les salles",
+    "quote": "Attente annoncée (minutes)",
+    "estimate": "Estimer l’attente",
+    "no_fit": "Aucune table ne convient à ce groupe.",
+    "waiting": "En attente",
+    "notified": "Prévenu",
+    "notify": "Marquer comme prévenu",
+    "seat_party": "Installer le groupe",
+    "select_table": "Sélectionner une table",
+    "elapsed": "{{minutes}} min d’attente",
+    "quoted_badge": "{{minutes}} min annoncées",
+    "waitlist_empty": "Aucun groupe en attente.",
+    "waitlist_error": "Impossible de mettre à jour la liste d’attente.",
+    "waitlist_access": "Vous n’avez pas l’autorisation de gérer la liste d’attente.",
+    "waitlist_room_outlet": "La salle demandée ne fait pas partie de cet établissement.",
+    "waitlist_invalid_size_or_time": "Saisissez un nombre de personnes ou un temps d’attente valide.",
+    "waitlist_invalid_phone": "Saisissez un numéro de téléphone valide.",
+    "waitlist_missing_name": "Saisissez le nom du groupe.",
+    "waitlist_party_unavailable": "Ce groupe ne figure plus sur la liste d’attente.",
+    "waitlist_table_outlet": "La table ne fait pas partie de cet établissement.",
+    "waitlist_table_unavailable": "Sélectionnez une table disponible.",
+    "waitlist_table_room": "Sélectionnez une table dans la salle demandée.",
+    "waitlist_table_size": "Cette table ne peut pas accueillir le groupe.",
+    "waitlist_table_reserved": "Cette table est gardée pour une réservation.",
+    "waitlist_table_overlap": "Une réservation chevauche la durée prévue de cette visite. Sélectionnez une autre table.",
+    "waitlist_table_dirty": "Indiquez que la table est propre avant d’y installer le groupe.",
+    "clean_failed": "Impossible de marquer la table comme propre."
   }
 }

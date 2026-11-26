@@ -290,7 +290,7 @@ def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None)
                 # Update invoice_printed
                 _mark_invoice_printed(invoice, was_printed=0, update_modified=False)
 
-                _free_tables_if_no_open_invoices(table)
+                _free_tables_if_no_open_invoices(table, printed=True, branch=invoice_doc.get("branch"))
                 # Validate both updates
                 new_invoice_printed = frappe.db.get_value("POS Invoice", invoice, "invoice_printed")
                 
@@ -374,7 +374,7 @@ def print_pos_page(doctype, name, print_format, approval_token=None, reason=None
         _mark_invoice_printed(name, was_printed=0)
 
         if restaurant_table:
-            _free_tables_if_no_open_invoices(restaurant_table)
+            _free_tables_if_no_open_invoices(restaurant_table, printed=True, branch=branch)
 
     from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
     trigger_manufacture_on_bill_print(name)

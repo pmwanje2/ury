@@ -156,7 +156,8 @@ def _finalize_bill(print_job_id, final_state, metadata, failure_reason):
             frappe.db.set_value("POS Invoice", invoice, "invoice_printed", 1)
 
         if restaurant_table:
-            _free_tables_if_no_open_invoices(restaurant_table)
+            branch = frappe.db.get_value("POS Invoice", invoice, "branch") if invoice else None
+            _free_tables_if_no_open_invoices(restaurant_table, printed=True, branch=branch)
 
         frappe.publish_realtime(
             "invoice_print_completed",

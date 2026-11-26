@@ -17,6 +17,7 @@ import json
 import math
 import sys
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -374,6 +375,7 @@ class FakePOSInvoice:
         self.events.append(("submit",))
 
 
+@contextmanager
 def _load_modules():
     framework, utils = _make_frappe_double()
     brand_mod = _stub(
@@ -496,8 +498,9 @@ def _load_modules():
         hook_mod = importlib.util.module_from_spec(hspec)
         sys.modules[hspec.name] = hook_mod
         hspec.loader.exec_module(hook_mod)
+        outlet = importlib.import_module("ury.ury_pos.outlet_context")
 
-    return framework, order_mod, discount_mod, hook_mod
+        yield framework, order_mod, discount_mod, hook_mod, outlet
 
 
 def _item(row_id, code, qty, rate, **extra):
@@ -528,7 +531,7 @@ def _item(row_id, code, qty, rate, **extra):
 
 class DiscountBase(unittest.TestCase):
     def setUp(self):
-        self.frappe, self.order, self.discount, self.hook = _load_modules()
+        self.frappe, self.order, self.discount, self.hook, outlet_context = self.enterContext(_load_modules())
         override_mod = self.discount._get_override_module()
         self.enterContext(patch.object(override_mod, "_get_user_permissions", return_value={}))
         self.enterContext(patch.object(override_mod, "_add_authentication_log", MagicMock()))
@@ -548,6 +551,8 @@ class DiscountBase(unittest.TestCase):
                 ),
             )
         )
+        self.enterContext(patch.object(outlet_context, "frappe", self.frappe))
+        self.enterContext(patch.object(outlet_context, "_", self.frappe._))
         self.frappe.db.sql.side_effect = self._db_sql
         self.pos_reasons = []
         self.roles_by_user = {
@@ -862,6 +867,13 @@ class DiscountBase(unittest.TestCase):
                 if u not in ("Administrator", "Guest")
             ]
             return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "POS Profile":
+            return [self.profile] if self.profile.disabled == filters.get("disabled", 0) else []
+        if doctype == "POS Profile User":
+            return [
+                Row(parent=self.profile.name, user=row.user)
+                for row in self.profile.applicable_for_users
+            ]
         if doctype == "POS Invoice":
             out = []
             for (dt, _), doc in self.docs.items():

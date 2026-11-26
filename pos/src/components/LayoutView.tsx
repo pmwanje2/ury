@@ -1,12 +1,13 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { CreditCard as Edit3, Save, Users, Move, X, Grid3x3 as Grid3X3, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { CreditCard as Edit3, Printer, Sparkles, CircleCheck, Save, Users, Move, X, Grid3x3 as Grid3X3, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { cn } from '@ury/ui';
-import { formatInvoiceTime } from '@ury/core';
+import { formatCurrency, formatInvoiceTime } from '@ury/core';
 import { Table, updateTableLayout } from '../lib/table-api';
 import { getTableOrder, POSInvoice } from '../lib/order-api';
 import { getCombinedOrderTotals } from '../lib/invoice-api';
 import { Button, Input, Select, SelectItem } from '@ury/ui';
 import { t } from '../i18n';
+import { TABLE_STATE_STYLES } from './TableCard';
 
 
 
@@ -14,10 +15,12 @@ interface Props {
   selectedRoom: string;
   tables: Table[];
   onBackToGrid: () => void;
-  onRefresh?: () => void; // Add refresh callback
+  onRefresh?: () => void;
+  onMarkClean?: (table: Table) => void;
+  onPay?: (table: Table) => void;
 }
 
-const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRefresh }) => {
+const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRefresh, onMarkClean, onPay }) => {
   const isRTL = document.dir === 'rtl';
   const [isEditMode, setIsEditMode] = useState(false);
 
@@ -180,10 +183,13 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
     setDragOffset({ x: 0, y: 0 });
   };
 
-  const getTableStatusColor = (occupied: number) => {
-    return occupied
-      ? 'bg-warning-100 border-warning-300 text-warning-900 shadow-sm'
-      : 'bg-success-50 border-success-200 text-success-800 hover:shadow-md';
+  const getTableState = (table: Table) => {
+    if (table.custom_table_state === 'Dirty') return { color: TABLE_STATE_STYLES.dirty, label: 'floor.dirty', Icon: Sparkles };
+    if (table.custom_table_state === 'Check Printed') return { color: TABLE_STATE_STYLES.printed, label: 'floor.check_printed', Icon: Printer };
+    if (table.occupied) return {
+      color: TABLE_STATE_STYLES.occupied, label: table.custom_table_state === 'Seated' ? 'floor.seated' : 'tables.occupied', Icon: Users,
+    };
+    return { color: TABLE_STATE_STYLES.available, label: 'tables.available', Icon: CircleCheck };
   };
 
   const handleMouseDown = (e: React.MouseEvent, table: typeof tablesWithPosition[0]) => {
@@ -231,10 +237,11 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
 
   const TableShape = ({ table }: { table: typeof tablesWithPosition[0] }) => {
     const dimensions = getTableDimensions(table.table_shape, table.no_of_seats);
+    const { color, label, Icon } = getTableState(table);
 
     const baseClasses = cn(
       'absolute border-2 flex items-center justify-center text-sm font-semibold cursor-pointer transition-all select-none',
-      getTableStatusColor(table.occupied),
+      color,
       isEditMode && 'hover:ring-2 hover:ring-primary-400 cursor-move',
       draggedTable === table.name && 'shadow-xl scale-105 z-20',
       selectedTable === table.name && 'ring-2 ring-primary-600 z-10'
@@ -260,15 +267,22 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
 
     return (
       <div
+        role="button" tabIndex={0} aria-label={`${table.name} · ${t(label)}`}
         className={cn(baseClasses, roundedClass)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setSelectedTable(table.name);
+          }
+        }}
         style={style}
         onMouseDown={(e) => handleMouseDown(e, table)}
       >
         <div className="text-center p-1 overflow-hidden pointer-events-none">
           <div className="font-bold truncate px-1">{table.name}</div>
           <div className="text-[10px] flex items-center justify-center gap-1 opacity-80">
-            <Users className="w-3 h-3" />
-            {table.no_of_seats || '-'}
+            <Icon className="w-3 h-3 shrink-0" aria-hidden />
+            <span>{t(label)}</span>
           </div>
         </div>
         {isEditMode && (
@@ -505,9 +519,16 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
             <div>
               <label className="block text-sm font-medium mb-1">{t('tables.status')}</label>
               <div className="w-full px-3 py-2 border border-border bg-gray-50 rounded-md text-sm cursor-not-allowed capitalize">
-                {selectedTableData.occupied ? t('tables.occupied') : t('tables.available')}
+                {t(getTableState(selectedTableData).label)}
               </div>
             </div>
+
+            {selectedTableData.custom_table_state === 'Dirty' && onMarkClean && (
+              <Button className="min-h-11 w-full" onClick={() => onMarkClean(selectedTableData)}>{t('floor.mark_clean')}</Button>
+            )}
+            {selectedTableData.custom_table_state === 'Check Printed' && onPay && (
+              <Button className="min-h-11 w-full" onClick={() => onPay(selectedTableData)}>{t('floor.pay')}</Button>
+            )}
 
             {/* Position Information */}
             <div className="pt-3 border-t border-border">
@@ -552,7 +573,7 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
                     <div className="flex justify-between items-center pt-2 mt-2 border-t border-primary-200">
                       <span>{t('tables.total_amount')}</span>
                       <span className="font-bold text-lg text-primary-800">
-                        {getCombinedOrderTotals(selectedTableOrder).roundedTotal.toFixed(2)}
+                        {formatCurrency(getCombinedOrderTotals(selectedTableOrder).roundedTotal, selectedTableOrder.currency)}
                       </span>
                     </div>
                   )}

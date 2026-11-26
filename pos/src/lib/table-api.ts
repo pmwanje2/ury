@@ -47,6 +47,7 @@ export interface Room {
 }
 
 export interface BranchReservationSettings {
+  block_dirty_table_seating?: number;
   enable_reservation: number;
   buffer_time: number;
   grace_period: number;
@@ -81,7 +82,13 @@ export interface TableReservation {
   can_mark_no_show?: boolean;
 }
 
+export type FloorTableState = 'Available' | 'Seated' | 'Check Printed' | 'Dirty';
+
 export interface Table {
+  branch?: string;
+  company?: string;
+  custom_table_state?: FloorTableState;
+  custom_dirty_since?: string | null;
   name: string;
   occupied: number;
   latest_invoice_time: string | null;
@@ -128,6 +135,8 @@ export async function getTables(room: string): Promise<Table[]> {
     fields: [
       'name',
       'occupied',
+      'custom_table_state',
+      'custom_dirty_since',
       'latest_invoice_time',
       'is_take_away',
       'restaurant_room',
@@ -149,6 +158,8 @@ export async function getTables(room: string): Promise<Table[]> {
 const TABLE_LIST_FIELDS = [
   'name',
   'occupied',
+  'custom_table_state',
+  'custom_dirty_since',
   'latest_invoice_time',
   'is_take_away',
   'restaurant_room',
@@ -344,4 +355,46 @@ export async function getAvailableTablesForReservation(
     }
   );
   return response.message ?? [];
+}
+
+
+export async function markTableClean(table: string): Promise<void> {
+  await call.post('ury.ury.api.table_lifecycle.mark_table_clean', { table });
+}
+
+export interface WaitlistParty {
+  name: string;
+  customer_name: string;
+  customer_phone: string;
+  no_of_pax: number;
+  requested_room?: string;
+  quoted_wait_minutes: number;
+  elapsed_minutes: number;
+  status: 'Waiting' | 'Waitlist Notified';
+}
+
+const WAITLIST_API = 'ury.ury.api.table_reservation';
+
+export async function listWaitlist(branch: string): Promise<WaitlistParty[]> {
+  return (await call.get(`${WAITLIST_API}.list_walkin_waitlist`, { branch })).message;
+}
+
+export async function estimateWait(branch: string, no_of_pax: number, requested_room?: string): Promise<number | null> {
+  const response = await call.get(`${WAITLIST_API}.estimate_wait_time`, { branch, no_of_pax, requested_room });
+  return response.message.quoted_wait_minutes;
+}
+
+export async function addWalkIn(data: {
+  branch: string; customer_name: string; customer_phone: string; no_of_pax: number;
+  requested_room?: string; quoted_wait_minutes?: number;
+}): Promise<void> {
+  await call.post(`${WAITLIST_API}.add_walkin_waitlist`, data);
+}
+
+export async function notifyWaitlistParty(reservation: string): Promise<void> {
+  await call.post(`${WAITLIST_API}.notify_waitlist_party`, { reservation });
+}
+
+export async function seatWaitlistParty(reservation: string, table: string): Promise<void> {
+  await call.post(`${WAITLIST_API}.seat_waitlist_party`, { reservation, table });
 }

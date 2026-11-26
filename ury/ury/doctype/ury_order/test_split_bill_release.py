@@ -206,6 +206,10 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
 
     def _wire_invoice(self, invoice, room="Main Hall"):
         profile = self._profile()
+        self.enterContext(patch(
+            "ury.ury_pos.outlet_context.get_authorized_outlets",
+            return_value=[{"pos_profile": profile.name, "branch": invoice.branch}],
+        ))
         self.framework.get_doc.side_effect = lambda doctype, name=None: (
             invoice if doctype == "POS Invoice" else profile
         )
@@ -241,6 +245,8 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
             self.order.split_bill(invoice.name, [{"name": "line-1", "qty": 1}])
 
     def test_without_reservation_control_whole_ticket_moves_and_mixed_ticket_stays(self):
+        from ury.ury.api.kitchen_ticket_history import ticket_ownership
+
         invoice = self._invoice(items=[Row(name='row1',item_code='Tea',item_name='Tea',qty=1,reservation_line_key='seat'),
                                        Row(name='row2',item_code='Tea',item_name='Tea',qty=1,reservation_line_key='other')])
         self._wire_invoice(invoice)
@@ -252,8 +258,11 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
                 if kw['filters']['parent'] == 'mixed' else [])
         self.framework.get_all.side_effect = rows
         self.order.split_bill(invoice.name, [{'name':'row1', 'qty':1}])
-        moves = [call.args[1] for call in self.framework.db.set_value.call_args_list if call.args[0]=='URY KOT']
-        self.assertEqual(moves, ['whole'])
+        child = self.framework.new_doc.return_value
+        self.assertFalse(any(write.args[0] == "URY KOT" for write in self.framework.db.set_value.call_args_list))
+        # Only the whole ticket transfers. The mixed ticket remains with its issuer by default.
+        self.assertEqual(ticket_ownership(invoice), {"whole": child.name})
+        self.assertEqual(ticket_ownership(child), {"whole": True})
 
     def test_unidentified_released_dish_cannot_be_detached_from_reservation(self):
         invoice = self._invoice()

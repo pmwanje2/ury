@@ -1,5 +1,5 @@
 import frappe
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 WAITER_PRINT_FORMAT = "URY Waiter Order Slip"
 ADD_KOT_TYPES = ("New Order", "Order Modified")
@@ -47,7 +47,9 @@ def _aggregate_kot_items(kot_docs):
 			parent_key = row.get("parent_line_key") or ""
 			is_mod = 1 if row.get("is_modifier") else 0
 			mod_summary = row.get("modifier_summary") or ""
-			key = (row.item, row.comments or "", parent_key, is_mod, mod_summary)
+			seat = cint(row.get("seat_no"))
+			course = row.get("course") or ""
+			key = (row.item, row.comments or "", parent_key, is_mod, mod_summary, seat, course)
 			if kot.type in CANCEL_KOT_TYPES:
 				if key not in cancel_items:
 					cancel_items[key] = {
@@ -56,7 +58,8 @@ def _aggregate_kot_items(kot_docs):
 					"quantity": _normalize_qty(row.quantity),
 					"cancelled_qty": _normalize_qty(row.cancelled_qty),
 					"comments": row.comments,
-					"course": row.course,
+					"course": course,
+					"seat_no": seat,
 					"parent_line_key": parent_key or None,
 					"is_modifier": is_mod,
 					"modifier_summary": mod_summary,
@@ -68,7 +71,8 @@ def _aggregate_kot_items(kot_docs):
 					"item_name": row.item_name,
 					"quantity": _normalize_qty(row.quantity),
 					"comments": row.comments,
-					"course": row.course,
+					"course": course,
+					"seat_no": seat,
 					"parent_line_key": parent_key or None,
 					"is_modifier": is_mod,
 					"modifier_summary": mod_summary,
@@ -89,10 +93,10 @@ def _get_invoice_item_qty_map(invoice_id):
 	for row in frappe.get_all(
 		"POS Invoice Item",
 		filters={"parent": invoice_id},
-		fields=["item_code", "qty", "comment"],
+		fields=["item_code", "qty", "comment", "custom_course", "custom_seat_no"],
 	):
-		key = (row["item_code"], row.get("comment") or "")
-		qty_map[key] = _normalize_qty(row.get("qty"))
+		key = (row["item_code"], row.get("comment") or "", cint(row.get("custom_seat_no")), row.get("custom_course") or "")
+		qty_map[key] = _normalize_qty(qty_map.get(key, 0) + flt(row.get("qty")))
 
 	return qty_map
 
@@ -103,7 +107,7 @@ def _enrich_item_display_fields(items, invoice_id):
 
 	for item in items:
 		item = dict(item)
-		key = (item["item"], item.get("comments") or "")
+		key = (item["item"], item.get("comments") or "", cint(item.get("seat_no")), item.get("course") or "")
 
 		if item.get("cancelled_qty"):
 			old_qty = _normalize_qty(item.get("quantity"))

@@ -1,4 +1,5 @@
 import frappe
+from ury.ury.api.kitchen_ticket_history import WHOLE_COMPENSATION
 
 from frappe.utils import add_to_date, get_datetime
 
@@ -116,7 +117,7 @@ def _rule_long_open_tickets(branch):
 		f"""
 		SELECT k.`name`
 		FROM `tabURY KOT` k
-		WHERE {conditions}
+		WHERE NOT {WHOLE_COMPENSATION.format(ticket="k.name")} AND {conditions}
 		""",
 		params,
 		as_dict=True,

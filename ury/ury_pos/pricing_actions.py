@@ -108,6 +108,7 @@ def _getdate(val=None):
     return _dt.date.fromisoformat(str(val or _nowdate())[:10])
 
 from ury.brand import coded_message
+from ury.ury_pos.complimentary import check_is_comped_for_room_charge
 from ury.ury_pos.approval_currency import (
     company_approval_amount,
     invoice_approval_currency,
@@ -672,6 +673,17 @@ def build_complimentary_claim(
     }
 
 
+def _set_line_comp(row, comp_type, reason, approver):
+    if not row.get("custom_original_price_list_rate"):
+        row.custom_original_price_list_rate = flt(row.get("price_list_rate") or row.get("rate"))
+    row.discount_percentage = 100.0
+    row.rate = 0.0
+    row.custom_is_complimentary = 1
+    row.custom_comp_type = comp_type
+    row.custom_comp_reason = reason
+    row.custom_comp_approver = approver
+
+
 @frappe.whitelist(methods=["POST"])
 def apply_complimentary(
     invoice: str,
@@ -761,14 +773,7 @@ def apply_complimentary(
 
     full_reason = f"{auth['reason']}: {auth['reason_note']}" if auth["reason_note"] else auth["reason"]
     if scope == "item" and target_row is not None:
-        if not target_row.get("custom_original_price_list_rate"):
-            target_row.custom_original_price_list_rate = flt(target_row.get("price_list_rate") or target_row.get("rate"))
-        target_row.discount_percentage = 100.0
-        target_row.rate = 0.0
-        target_row.custom_is_complimentary = 1
-        target_row.custom_comp_type = comp_type
-        target_row.custom_comp_reason = full_reason
-        target_row.custom_comp_approver = auth["approver"]
+        _set_line_comp(target_row, comp_type, full_reason, auth["approver"])
         if becomes_full_comp:
             doc.custom_is_complimentary = 1
             doc.custom_comp_type = comp_type
@@ -783,8 +788,14 @@ def apply_complimentary(
         doc.custom_comp_approver = auth["approver"]
         doc.remarks = f"{comp_type}: {full_reason}"
 
-    sync_service_charge(doc, profile)
-    doc.calculate_taxes_and_totals()
+    if doc.get("custom_split_balance"):
+        from ury.ury.doctype.ury_order.ury_order import _split_discount_pricing
+
+        with _split_discount_pricing(doc, None):
+            sync_service_charge(doc, profile)
+    else:
+        sync_service_charge(doc, profile)
+        doc.calculate_taxes_and_totals()
     _save_verified(doc)
 
     return {
@@ -2446,7 +2457,7 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
             )
 
     # 2. Comp vs Room Charge collision guard (both directions).
-    if cint(doc.get("custom_is_complimentary")) == 1 and _invoice_has_room_charge(doc):
+    if check_is_comped_for_room_charge(doc) and _invoice_has_room_charge(doc):
         frappe.throw(
             coded_message(
                 "COMP-ROOM-CHARGE-FORBIDDEN",

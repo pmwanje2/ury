@@ -5,6 +5,11 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "notified_at",
+  "joined_at",
+  "quoted_wait_minutes",
+  "requested_room",
+  "is_waitlist",
   "branch",
   "reserved_table",
   "customer",
@@ -23,6 +28,38 @@
  ],
  "fields": [
   {
+   "fieldname": "notified_at",
+   "fieldtype": "Datetime",
+   "label": "Notified At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "joined_at",
+   "fieldtype": "Datetime",
+   "label": "Joined At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "quoted_wait_minutes",
+   "fieldtype": "Int",
+   "label": "Quoted Wait Minutes",
+   "default": "0",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "requested_room",
+   "fieldtype": "Link",
+   "label": "Requested Room",
+   "options": "URY Room"
+  },
+  {
+   "fieldname": "is_waitlist",
+   "fieldtype": "Check",
+   "label": "Walk-in Wait List",
+   "default": "0",
+   "read_only": 1
+  },
+  {
    "fieldname": "branch",
    "fieldtype": "Link",
    "in_filter": 1,
@@ -39,16 +76,16 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Table",
+   "mandatory_depends_on": "eval:!doc.is_waitlist || doc.status === 'Seated'",
    "options": "URY Table",
-   "reqd": 1,
    "search_index": 1
   },
   {
    "fieldname": "customer",
    "fieldtype": "Link",
    "label": "Customer",
-   "options": "Customer",
-   "reqd": 1
+   "mandatory_depends_on": "eval:!doc.is_waitlist",
+   "options": "Customer"
   },
   {
    "fieldname": "customer_name",
@@ -91,7 +128,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Requested\nConfirmed\nSeated\nCompleted\nCancelled\nNo Show",
+   "options": "Requested\nConfirmed\nSeated\nCompleted\nCancelled\nNo Show\nWaiting\nWaitlist Notified",
    "reqd": 1
   },
   {

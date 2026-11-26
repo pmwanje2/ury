@@ -825,12 +825,10 @@ def _sync(ctx, *, items, customer, pax, order_type, table=None, invoice=None, ro
 
 
 def _kots_of(invoice, types=("New Order", "Order Modified")):
-	return frappe.get_all(
-		"URY KOT",
-		filters={"invoice": invoice, "docstatus": 1, "type": ["in", list(types)]},
-		fields=["name", "production", "order_status"],
-		order_by="creation asc",
-	)
+	from ury.ury.api.kitchen_ticket_history import owned_kots
+
+	return owned_kots(frappe, invoice, filters={"docstatus": 1, "type": ["in", list(types)]},
+	                  fields=["production", "order_status"])
 
 
 def _backdate_invoice(invoice, ts, table=None):

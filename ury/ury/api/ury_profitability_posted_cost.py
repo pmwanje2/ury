@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 
 import frappe
 from frappe.utils import flt
+from ury.ury.api.kitchen_ticket_history import ticket_owner_query
 
 
 def load_posted_costs(company, branch, invoice_lines):
@@ -40,23 +41,16 @@ def load_posted_costs(company, branch, invoice_lines):
 
 
 def _read_postings(company, branch, invoices):
-	fulfilment = frappe.qb.DocType("URY Fulfilment Record")
-	kot = frappe.qb.DocType("URY KOT")
-	entry = frappe.qb.DocType("Stock Entry")
-	return (
-		frappe.qb.from_(fulfilment)
-		.join(kot).on(kot.name == fulfilment.kot)
-		.join(entry).on(entry.name == fulfilment.posting_reference)
-		.select(
-			kot.invoice, fulfilment.item_code, fulfilment.qty, fulfilment.posting_reference,
-			entry.total_outgoing_value.as_("posted_cost"),
-		)
-		.where(
-			(fulfilment.company == company) & (fulfilment.branch == branch)
-			& (fulfilment.posted_to_erpnext == 1)
-			& (kot.branch == branch) & (kot.docstatus == 1) & kot.invoice.isin(list(invoices))
-			& (entry.company == company) & (entry.docstatus == 1)
-			& entry.purpose.isin(["Manufacture", "Material Issue"])
-		)
-		.run(as_dict=True)
-	)
+	query, params = ticket_owner_query(frappe, """
+        SELECT owner.invoice, f.item_code, f.qty, f.posting_reference, e.total_outgoing_value AS posted_cost
+        FROM `tabURY Fulfilment Record` f
+        JOIN `tabURY KOT` k ON k.name = f.kot
+        JOIN {ticket_owners} owner ON owner.ticket = k.name
+        JOIN `tabPOS Invoice` i ON i.name = owner.invoice
+        JOIN `tabStock Entry` e ON e.name = f.posting_reference
+        WHERE f.company = %(company)s AND f.branch = k.branch AND f.posted_to_erpnext = 1
+          AND i.company = %(company)s AND i.branch = %(branch)s AND k.docstatus = 1
+          AND owner.invoice IN %(checks)s AND e.company = %(company)s AND e.docstatus = 1
+          AND e.purpose IN ('Manufacture', 'Material Issue')
+    """, dict(company=company, branch=branch, checks=tuple(invoices)), invoices=invoices)
+	return frappe.db.sql(query, params, as_dict=True)

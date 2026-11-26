@@ -8,6 +8,7 @@ export interface POSInvoiceItem {
   fire_at?: string | null;
   fire_confirmation_pending?: number;
   custom_course?: string;
+  custom_seat_no?: number;
   name: string;
   item_code: string;
   item_name: string;
@@ -41,6 +42,7 @@ export interface POSInvoiceItem {
 }
 
 export interface POSInvoice {
+  currency?: string;
   name: string;
   title: string;
   customer: string;
@@ -82,10 +84,11 @@ export interface TableOrder {
  * @param table_no The table number to fetch the order for
  * @returns The order details and customer information if an active order exists
  */
-export async function getTableOrder(table_no: string, strict = false): Promise<TableOrder> {
+export async function getTableOrder(table_no: string, strict = false, payment = false): Promise<TableOrder> {
   try {
     const res = await call.get('ury.ury.doctype.ury_order.ury_order.get_order_invoice', { 
-      table: table_no
+      table: table_no,
+      ...(payment ? { is_payment: 'Printed' } : {}),
     });
     return res as TableOrder;
   } catch (error) {
@@ -103,6 +106,8 @@ export interface SyncOrderRequest {
   items: Array<{
     name?: string;
     ury_held?: number;
+    custom_course?: string;
+    custom_seat_no?: number;
     item: string;
     item_name: string;
     rate: number;
@@ -231,6 +236,24 @@ export async function splitBill(
     ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
   return res.message as SplitBillResponse;
+}
+
+export async function splitCheckMulti(
+  sourceInvoice: string,
+  payload: import('../components/BillSplitDialog').MultiSplitRequest,
+  auth?: OrderActionAuth,
+): Promise<{ source_invoice: string; new_invoices: string[] }> {
+  await assertOfflineActionAllowed('split');
+  const res = await call.post('ury.ury.doctype.ury_order.ury_order.split_check_multi', {
+    source_invoice: sourceInvoice,
+    mode: payload.mode,
+    ...('splits' in payload ? { splits: payload.splits } : {}),
+    ...('splitCount' in payload ? { split_count: payload.splitCount } : {}),
+    approval_token: auth?.approvalToken,
+    reason: auth?.reason,
+    reason_note: auth?.reasonNote,
+  });
+  return res.message;
 }
 
 export async function tableTransfer(

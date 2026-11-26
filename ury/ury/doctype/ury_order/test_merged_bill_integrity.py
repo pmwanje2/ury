@@ -286,11 +286,15 @@ class TestAddCheck(Loaded):
         self.assertIn(("db_set", "cancel_reason", "Added to check CHK-1"), self.source.events)
 
     def test_the_kitchen_tickets_follow_the_lines(self):
+        from ury.ury.api.kitchen_ticket_history import ticket_ownership
+
         self.consolidate()
-        self.frappe.db.set_value.assert_has_calls([
-            call("URY KOT", "KOT-7", "invoice", "CHK-1", update_modified=False),
-            call("URY KOT", "KOT-8", "invoice", "CHK-1", update_modified=False),
-        ])
+        self.assertFalse(any(write.args[0] == "URY KOT" for write in self.frappe.db.set_value.call_args_list))
+        self.assertEqual(ticket_ownership(self.source), {"KOT-7": self.destination.name, "KOT-8": self.destination.name})
+        self.assertEqual(ticket_ownership(self.destination), {"KOT-7": True, "KOT-8": True})
+        self.frappe.db.set_value.assert_any_call(
+            "POS Invoice", self.source.name, "ury_applied_rounds", self.source.ury_applied_rounds, update_modified=False,
+        )
 
     def test_the_source_table_is_freed_once_no_open_check_remains_on_it(self):
         self.consolidate()
@@ -1380,6 +1384,10 @@ class TestSplitBillReceivedTenders(Loaded):
         super().setUp()
         self.frappe.has_permission.return_value = True
         self.frappe.generate_hash.return_value = "SPLITGRP99"
+        self.enterContext(patch(
+            "ury.ury_pos.outlet_context.get_authorized_outlets",
+            return_value=[{"pos_profile": "Lakeside Till", "branch": "Lakeside"}],
+        ))
         self.enterContext(patch.object(self.order, "getBranch", return_value="Lakeside"))
         self.enterContext(patch.object(self.order, "_enforce_order_access"))
         self.enterContext(patch.object(self.order, "_split_kots_to_move", return_value=[]))

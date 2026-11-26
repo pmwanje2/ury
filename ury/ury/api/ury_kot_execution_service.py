@@ -326,6 +326,11 @@ def _transition(kot, target_state, idempotency_key, actor_field, timestamp_field
 	branch, company, production_unit = _kot_scope(kot)
 	_require_kot_branch_scope(branch, actor)
 
+	from ury.ury.api.kitchen_ticket_history import is_wholly_cancelled
+
+	if is_wholly_cancelled(frappe, kot):
+		raise ExecutionError(INVALID_EXECUTION_TRANSITION, _("KOT has been cancelled and cannot be served"))
+
 	# Step 4: lock any existing row for this KOT before reading its state,
 	# so two concurrent callers serialize on this SELECT ... FOR UPDATE.
 	locked = _lock_execution_row(kot)

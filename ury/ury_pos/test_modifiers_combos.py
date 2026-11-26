@@ -1432,6 +1432,33 @@ class TestModifiersAndCombosEngine(unittest.TestCase):
 			mods.validate_pos_invoice_modifiers(verified_comp_doc)
 
 
+def _enable_split_profile(framework, profile):
+	user = framework.session.user
+	profile.branch = "Main"
+	profile.company = "Maximus Hospitality"
+	profile.currency = "UGX"
+	profile.disabled = 0
+	get_all = framework.get_all.side_effect
+	get_value = framework.db.get_value.side_effect
+	default_value = framework.db.get_value.return_value
+
+	def query(dt, **kwargs):
+		if dt == "POS Profile":
+			return [profile]
+		if dt == "POS Profile User":
+			return [Row(parent=profile.name, user=user)]
+		kwargs.pop("limit_page_length", None)
+		return get_all(dt, **kwargs) if get_all else []
+
+	def value(dt, name=None, fieldname=None, **kwargs):
+		if (dt, name, fieldname) == ("User", user, "enabled"):
+			return 1
+		return get_value(dt, name, fieldname, **kwargs) if get_value else default_value
+
+	framework.get_all.side_effect = query
+	framework.db.get_value.side_effect = value
+
+
 class TestSplitBillAtomicParentChildModifiers(unittest.TestCase):
 	def test_split_bill_moves_child_modifiers_with_parent_and_blocks_orphan_child_split(self):
 		framework, modules = _make_frappe_double()
@@ -1581,6 +1608,8 @@ class TestSplitBillAtomicParentChildModifiers(unittest.TestCase):
 			framework.new_doc.side_effect = new_doc
 			framework.get_all.return_value = []
 			framework.db.get_value.return_value = "Maximus Hospitality"
+
+			_enable_split_profile(framework, profile)
 
 			# 1. Trying to split child modifier row alone without its parent is refused!
 			with self.assertRaises(framework.ValidationError) as ctx:
@@ -1865,6 +1894,7 @@ class TestR3PrivilegedModifiersAndAvailabilityRestore(unittest.TestCase):
 			framework.db.get_value.side_effect = custom_get_value
 			framework.new_doc.side_effect = new_doc
 
+			_enable_split_profile(framework, profile)
 			res = ury_order.split_bill("POS-SPLIT-001", [{"name": "ROW-P1", "qty": 1}])
 			self.assertEqual(res["new_invoice"], "POS-SPLIT-002")
 			new_inv = created[0]

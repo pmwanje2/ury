@@ -78,15 +78,18 @@ class TestCreateCancelKotDocDecimal(unittest.TestCase):
 		)
 		original_kot_doc = MagicMock()
 		original_kot_doc.name = "KOT-001"
-		original_kot_doc.kot_items = [frappe._dict({"item": "I1", "reservation_line_key": None})]
+		original_kot_doc.kot_items = [frappe._dict(item="I1", quantity=invoice_qty, seat_no=0)]
 		kot_ref = MagicMock()
 		kot_ref.name = "KOT-001"
 		cancel_doc = MagicMock()
 		cancel_doc.name = "CNCL-1"
 
+		database = SimpleNamespace(
+			get_list=MagicMock(return_value=[kot_ref]),
+			get_value=MagicMock(side_effect=["Room-1", "Rest-1", "MENU-1", "Course"]),
+		)
 		with patch(f"{GENERATE}.frappe.get_doc", side_effect=[pos_invoice, original_kot_doc, cancel_doc]), \
-			patch(f"{GENERATE}.frappe.db.get_list", return_value=[kot_ref]), \
-			patch(f"{GENERATE}.frappe.db.get_value", side_effect=["Room-1", "Rest-1", "MENU-1", "Course"]):
+			patch(f"{GENERATE}.frappe.db", database):
 			create_cancel_kot_doc(
 				"INV-1",
 				"TABLE-1",
@@ -127,6 +130,7 @@ class TestWaiterPrintQuantities(unittest.TestCase):
 		patcher = patch(f"{PRINT}.frappe.get_precision", return_value=3)
 		patcher.start()
 		self.addCleanup(patcher.stop)
+		self.enterContext(patch(f"{PRINT}.frappe.get_system_settings", return_value="Banker's Rounding (legacy)"))
 
 	def test_whole_quantities_stay_integers(self):
 		for value in (2, 2.0, "2", "2.000", None, ""):
@@ -149,7 +153,7 @@ class TestWaiterPrintQuantities(unittest.TestCase):
 		mock_precision.assert_called_with("URY KOT Items", "quantity")
 
 	def _kot(self, kot_type, rows):
-		return SimpleNamespace(type=kot_type, kot_items=[SimpleNamespace(**row) for row in rows])
+		return SimpleNamespace(type=kot_type, kot_items=[frappe._dict(row) for row in rows])
 
 	def _row(self, **kwargs):
 		base = {"item": "I1", "item_name": "Item", "comments": "", "course": None,
@@ -199,7 +203,7 @@ class TestWaiterPrintQuantities(unittest.TestCase):
 		self.assertEqual(result[0]["new_qty"], 0)
 
 	def test_enrich_increase_of_decimal_quantity(self):
-		qty_map = {("I1", ""): 2.5}
+		qty_map = {("I1", "", 0, ""): 2.5}
 		with patch(f"{PRINT}._get_invoice_item_qty_map", return_value=qty_map):
 			result = _enrich_item_display_fields([{"item": "I1", "quantity": 1.5}], "INV")
 		self.assertEqual(result[0]["display_mode"], "old_new")
@@ -207,7 +211,7 @@ class TestWaiterPrintQuantities(unittest.TestCase):
 		self.assertEqual(result[0]["new_qty"], 2.5)
 
 	def test_enrich_first_order_is_single_qty(self):
-		qty_map = {("I1", ""): 0.5}
+		qty_map = {("I1", "", 0, ""): 0.5}
 		with patch(f"{PRINT}._get_invoice_item_qty_map", return_value=qty_map):
 			result = _enrich_item_display_fields([{"item": "I1", "quantity": 0.5}], "INV")
 		self.assertEqual(result[0]["display_mode"], "single_qty")
@@ -215,7 +219,7 @@ class TestWaiterPrintQuantities(unittest.TestCase):
 		self.assertEqual(result[0]["new_qty"], 0.5)
 
 	def test_enrich_float_residue_does_not_leak_into_old_qty(self):
-		qty_map = {("I1", ""): 0.3}
+		qty_map = {("I1", "", 0, ""): 0.3}
 		with patch(f"{PRINT}._get_invoice_item_qty_map", return_value=qty_map):
 			result = _enrich_item_display_fields([{"item": "I1", "quantity": 0.1 + 0.2}], "INV")
 		# 0.3 - 0.30000000000000004 is a negative residue; it must read as a first order.
@@ -224,7 +228,11 @@ class TestWaiterPrintQuantities(unittest.TestCase):
 	def test_invoice_qty_map_keeps_decimals(self):
 		rows = [{"item_code": "I1", "qty": 1.5, "comment": "x"}, {"item_code": "I2", "qty": 2.0, "comment": None}]
 		with patch(f"{PRINT}.frappe.get_all", return_value=rows):
-			qty_map = ury_waiter_print._get_invoice_item_qty_map("INV")
+			placed_quantities = ury_waiter_print._get_invoice_item_qty_map("INV")
+		qty_map = {
+			(item, comment): placed_quantities[item, comment, 0, ""]
+			for item, comment in (("I1", "x"), ("I2", ""))
+		}
 		self.assertEqual(qty_map[("I1", "x")], 1.5)
 		self.assertEqual(qty_map[("I2", "")], 2)
 

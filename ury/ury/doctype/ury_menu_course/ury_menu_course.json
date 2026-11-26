@@ -9,10 +9,17 @@
  "document_type": "Setup",
  "engine": "InnoDB",
  "field_order": [
+  "disabled",
   "course",
   "icon"
  ],
  "fields": [
+  {
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled",
+   "default": "0"
+  },
   {
    "fieldname": "course",
    "fieldtype": "Data",

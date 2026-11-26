@@ -3,6 +3,7 @@
 import frappe
 from frappe import _
 
+from ury.ury.api.kitchen_ticket_history import owned_kots
 from ury.ury_pos.api import getBranch
 
 # Least-advanced first: an item split over several KOTs shows its slowest state.
@@ -33,12 +34,7 @@ def get_order_kot_status(invoice):
 	if user_branch and branch and branch != user_branch:
 		frappe.throw(_("Not permitted to view orders outside your active branch"), frappe.PermissionError)
 
-	kots = frappe.get_all(
-		"URY KOT",
-		filters={"invoice": invoice, "type": ["not in", ("Cancelled", "Partially cancelled")]},
-		fields=["name", "order_status"],
-		order_by="creation asc",
-	)
+	kots = owned_kots(frappe, invoice, active=True, fields=["order_status"])
 	items = {}
 	for kot in kots:
 		served = kot.order_status == "Served"
@@ -58,4 +54,4 @@ def get_order_kot_status(invoice):
 			prev = items.get(row.item)
 			if prev is None or _STATE_ORDER.index(state) < _STATE_ORDER.index(prev):
 				items[row.item] = state
-	return {"items": items, "kots": [dict(k) for k in kots]}
+	return {"items": items, "kots": [{"name": k.name, "order_status": k.order_status} for k in kots]}

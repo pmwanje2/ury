@@ -781,7 +781,8 @@ class TestSeatedLifecycle(_Site):
         meta = json.loads((ROOT / "ury/doctype/ury_table_reservation/ury_table_reservation.json").read_text())
         status = next(f for f in meta["fields"] if f["fieldname"] == "status")
         self.assertEqual(status["options"].split("\n"),
-            ["Requested", "Confirmed", "Seated", "Completed", "Cancelled", "No Show"])
+            ["Requested", "Confirmed", "Seated", "Completed", "Cancelled", "No Show",
+                          "Waiting", "Waitlist Notified"])
         for before, after in (("Confirmed", "Seated"), ("Seated", "Completed")):
             with self.subTest(allowed=(before, after)):
                 self.transition(before, after)

@@ -46,7 +46,10 @@ def process_invoice(invoice):
     pos_profile = frappe.get_doc("POS Profile", posInvoice.pos_profile)
     kot_naming_series = pos_profile.get("custom_kot_naming_series") or pos_profile.get("kot_naming_series")
     # A scheduler tick may have opened its transaction before Fire committed.
-    if not frappe.db.get_value("URY KOT", {"invoice": posInvoice.name}, "name", for_update=True):
+    from ury.ury.api.kitchen_ticket_history import owned_ticket_filters
+
+    if not any(frappe.db.get_value("URY KOT", scope, "name", for_update=True)
+               for scope in owned_ticket_filters(posInvoice)):
         # Fetch production units for the branch
         productions = get_productions_for_branch(posInvoice.branch)
 
@@ -59,7 +62,7 @@ def process_invoice(invoice):
 
             # Check if items in the invoice belong to production groups
             for i in posInvoice.items:
-                if cint(i.get("ury_held")) or not i.qty:
+                if cint(i.get("ury_held")) or i.get("custom_kitchen_anchor") or not i.qty:
                     continue
                 item = frappe.get_doc("Item", i.item_code)
                 if item.item_group in productionItemGroups:
@@ -118,7 +121,8 @@ def create_kot(
         kotdoc.append(
             "kot_items",
             {"item": pr.item_code, "item_name": pr.item_name, "quantity": pr.qty,
-             "comments": pr.get("comment"),
+             "comments": pr.get("comment"), "course": pr.get("custom_course"),
+             "seat_no": cint(pr.get("custom_seat_no")),
              "reservation_line_key": _line_key(pr.item_code, pr, 1) if pr.get("reservation_line_key") else None},
         )
 

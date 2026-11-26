@@ -2,7 +2,21 @@ import frappe
 
 from frappe.utils import get_datetime
 from ury.ury.api.ury_dashboard import _business_day_bounds
+from ury.ury.api.kitchen_ticket_history import owned_kots
+from ury.ury.api.seating_membership import table_checks
 from ury.ury.report_api.utils import require_dashboard_user
+
+
+def _other_check_in_kitchen(table, current):
+	names = table_checks(frappe, table) - {current}
+	if not names:
+		return False
+	checks = frappe.get_all(
+		"POS Invoice", filters={"name": ("in", sorted(names)), "docstatus": ("in", [0, 1])},
+		fields=["name", "ury_applied_rounds"],
+	)
+	return any(ticket.order_status != "Served" for check in checks
+	           for ticket in owned_kots(frappe, check, active=True, fields=["order_status"]))
 
 
 @frappe.whitelist(methods=["GET"])
@@ -17,7 +31,7 @@ def get_service_line(branch=None):
 	tables = frappe.get_all(
 		"URY Table",
 		filters=table_filters,
-		fields=["name", "occupied", "is_take_away"],
+		fields=["name", "occupied", "is_take_away", "seating_checks"],
 		order_by="name",
 	)
 
@@ -34,7 +48,7 @@ def get_service_line(branch=None):
 		minutes = None
 		invoice = frappe.db.sql(
 			"""
-			SELECT name, creation FROM `tabPOS Invoice`
+			SELECT name, creation, invoice_printed FROM `tabPOS Invoice`
 			WHERE restaurant_table = %(table)s AND docstatus = 0
 			ORDER BY creation DESC LIMIT 1
 			""",
@@ -42,20 +56,22 @@ def get_service_line(branch=None):
 			as_dict=True,
 		)
 
+		# A printed draft may outlive its seating, even after the new party pays.
+		if invoice and invoice[0].get("invoice_printed"):
+			members = table_checks(frappe, t)
+			if invoice[0].name not in members:
+				invoice = frappe.get_all("POS Invoice", filters={"name": ("in", sorted(members)), "docstatus": 0},
+				                         fields=["name", "creation"], order_by="creation desc", limit=1) if members else []
+
 		stage = "seated"
 		if invoice:
 			minutes = max(0, int((now - get_datetime(invoice[0].creation)).total_seconds() // 60))
-			kot = frappe.db.sql(
-				"""
-				SELECT order_status FROM `tabURY KOT`
-				WHERE invoice = %(invoice)s
-				ORDER BY creation DESC LIMIT 1
-				""",
-				{"invoice": invoice[0].name},
-				as_dict=True,
-			)
+			kot = owned_kots(frappe, invoice[0].name, active=True, fields=["order_status"])
 			if kot:
-				stage = "served" if kot[0].order_status == "Served" else "fired"
+				stage = "fired" if any(row.order_status != "Served" for row in kot) else "served"
+
+		if stage != "fired" and _other_check_in_kitchen(t, invoice[0].name if invoice else None):
+			stage = "fired"
 
 		if minutes is not None and minutes > 75:
 			stage = "over"

@@ -185,7 +185,15 @@ def _verify_fulfilment_posted_for_invoice(doc, strict=False):
 	"""
 	from ury.ury.api.ury_fulfilment_posting_service import process_posting_intent
 
-	kots = frappe.get_all("URY KOT", filters={"invoice": doc.name}, fields=["name"])
+	from ury.ury.api.kitchen_ticket_history import invoice_ticket_ledger, owned_ticket_filters
+
+	anchors = {
+		row.get("custom_kitchen_anchor") for row in (doc.get("items") or [])
+		if row.get("custom_kitchen_anchor") and row.get("custom_kitchen_anchor") != doc.name
+	}
+	owners = [doc, *(invoice_ticket_ledger(frappe, name) for name in sorted(anchors))]
+	kots = [ticket for owner in owners for scope in owned_ticket_filters(owner)
+	        for ticket in frappe.get_all("URY KOT", filters=scope, fields=["name"])]
 	if not kots:
 		return
 

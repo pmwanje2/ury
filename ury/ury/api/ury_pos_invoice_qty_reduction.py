@@ -44,6 +44,7 @@ this module.
 """
 
 import inspect
+from decimal import Decimal
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
@@ -186,6 +187,11 @@ def reduce_order_item_qty(
 		)
 
 	item_code = item_row.item_code
+	if item_row.get("custom_kitchen_anchor"):
+		from ury.ury.doctype.ury_order.ury_order import assert_no_shared_kitchen_void
+
+		assert_no_shared_kitchen_void(pos_invoice)
+
 	current_qty = item_row.qty
 
 	try:
@@ -211,18 +217,11 @@ def reduce_order_item_qty(
 			).format(new_qty),
 		)
 
-	# Locate any linked child modifier / combo upcharge rows belonging to this parent line
-	parent_line_key = item_row.get("reservation_line_key")
-	linked_children = [
-		row
-		for row in pos_invoice.items
-		if row.name != item_row_name
-		and parent_line_key
-		and cint(row.get("custom_is_modifier")) == 1
-		and row.get("custom_parent_line_key") == parent_line_key
-		and flt(row.qty) > 0
-	]
-	linked_child_names = {c.name for c in linked_children}
+	from ury.ury.api.modifier_tree import modifier_edges
+	from ury.ury.doctype.ury_order.ury_order import _validate_split_share_quantities
+
+	edges = list(modifier_edges(pos_invoice.items, [item_row]))
+	linked_child_names = {child.name for _, child in edges}
 
 	other_rows_with_qty = sum(
 		1
@@ -240,21 +239,36 @@ def reduce_order_item_qty(
 
 	# Compute new quantities for linked child modifiers proportionally
 	child_updates = []
-	for child in linked_children:
-		if new_qty == 0:
-			child_new_qty = 0.0
-		elif flt(current_qty) > 0:
-			ratio = flt(new_qty) / flt(current_qty)
-			scaled = flt(child.qty) * ratio
-			child_new_qty = float(round(scaled)) if abs(scaled - round(scaled)) < 1e-6 else flt(child.qty)
-		else:
-			child_new_qty = flt(child.qty)
+	remaining_qty = {item_row.name: new_qty}
+	for parent, child in edges:
+		parent_new_qty = remaining_qty[parent.name]
+		scaled = (Decimal(str(child.qty)) * Decimal(str(parent_new_qty)) / Decimal(str(parent.qty))
+		          if parent_new_qty else Decimal(0))
+		if scaled != scaled.quantize(Decimal("0.0001")):
+			raise QtyReductionError(INVALID_QTY, _("Cannot represent the proportional modifier quantity."))
+		child_new_qty = float(scaled)
+		if scaled:
+			_validate_split_share_quantities([child], [{child.name: Decimal(str(child.qty)) - scaled}])
+		remaining_qty[child.name] = child_new_qty
 		if child_new_qty < flt(child.qty):
 			child_updates.append((child, flt(child.qty), child_new_qty))
 
 	# Guard against reducing a partially paid open check below already-received tender.
 	received_paid = received_tender_total(pos_invoice)
-	if received_paid > 0:
+	# Plan the surviving lines and charges once, before tender validation or mutation.
+	remaining_balance = None
+	if pos_invoice.get("custom_split_balance"):
+		from ury.ury.doctype.ury_order.ury_order import _split_balance_precisions
+		from ury.ury_pos.split_balances import allocate_split_balances, set_split_balance
+
+		removed = {item_row.name: -delta}
+		removed.update({child.name: before - after for child, before, after in child_updates})
+		remaining_balance = allocate_split_balances(
+			pos_invoice, removed, *_split_balance_precisions(pos_invoice, pos_invoice.company)
+		)[0]
+		header = remaining_balance["header"]
+		projected_total = header["rounded_total"] if pos_invoice.get("rounded_total") else header["grand_total"]
+	elif received_paid > 0:
 		rate = flt(item_row.get("rate"))
 		current_total = flt(pos_invoice.get("rounded_total") or pos_invoice.get("grand_total"))
 		if current_total <= 0:
@@ -264,18 +278,25 @@ def reduce_order_item_qty(
 			for child, child_prev_qty, child_new_qty in child_updates
 		)
 		projected_total = current_total + (delta * rate) - child_reduction_amount
-		if projected_total < received_paid - 1e-6:
-			raise QtyReductionError(
-				CODE_VOID_PARTIAL_PAYMENT,
-				_(
-					"Cannot reduce items below payments already received on this check. [{0}]"
-				).format(CODE_VOID_PARTIAL_PAYMENT),
-			)
+	if received_paid > 0 and projected_total < received_paid - 1e-6:
+		raise QtyReductionError(
+			CODE_VOID_PARTIAL_PAYMENT,
+			_(
+				"Cannot reduce items below payments already received on this check. [{0}]"
+			).format(CODE_VOID_PARTIAL_PAYMENT),
+		)
 
 	pos_profile_id = pos_invoice.pos_profile
 	kot_naming_series = pos_profile.custom_kot_naming_series
 	held = cint(item_row.get("ury_held")) == 1
-	if not held and not kot_naming_series:
+	updates = [(item_row, current_qty, new_qty), *child_updates]
+	sent_updates = [(row, before, after) for row, before, after in updates if not cint(row.get("ury_held"))]
+	has_held_updates = len(sent_updates) < len(updates)
+	if any(child.get("custom_kitchen_anchor") for child, _, _ in child_updates):
+		from ury.ury.doctype.ury_order.ury_order import assert_no_shared_kitchen_void
+
+		assert_no_shared_kitchen_void(pos_invoice)
+	if sent_updates and not kot_naming_series:
 		raise QtyReductionError(
 			KOT_NAMING_SERIES_MISSING,
 			_(
@@ -288,7 +309,7 @@ def reduce_order_item_qty(
 	# Sent items require reason + privilege/manager PIN (Simphony Opt 135 keeps unsent/held free).
 	approver = None
 	reason_info = None
-	if not held:
+	if sent_updates:
 		privilege = "void_sent_item" if new_qty == 0 else "reduce_sent_qty"
 		fallback_privs = ("void_sent_item",) if privilege == "reduce_sent_qty" else ()
 		voided_qty = flt(current_qty) - flt(new_qty)
@@ -348,7 +369,7 @@ def reduce_order_item_qty(
 	apply_count_delta(pos_invoice.branch, prev_count_rows, next_count_rows, invoice=pos_invoice)
 
 	reconcile_held = False
-	if held:
+	if has_held_updates:
 		from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 		from ury.ury.api.ury_order_reservation_service import reconcile_order_reservations
 		from ury.ury.doctype.ury_order.ury_order import _previous_line_snapshot
@@ -356,19 +377,15 @@ def reduce_order_item_qty(
 		reconcile_held = get_branch_stock_policy(pos_invoice.branch, pos_invoice.company).reservation_control_enabled
 		if reconcile_held:
 			previous = _previous_line_snapshot(pos_invoice.items)
-	else:
+	if sent_updates:
 		from ury.ury.doctype.ury_order.ury_order import _kitchen_snapshot
 
 		# Use the same canonical dish/note groups and persisted keys as the original KOT.
 		previous_items_snapshot = list(_line_keyed_items(_kitchen_snapshot(pos_invoice.items)).values())
-		cancel_line, = _line_keyed_items(_kitchen_snapshot([item_row])).values()
-		cancel_payload = [{**cancel_line, "qty": delta}]
-		for child, child_prev_qty, child_new_qty in child_updates:
-			if cint(child.get("ury_held")) == 1:
-				continue
-			child_lines = list(_line_keyed_items(_kitchen_snapshot([child])).values())
-			if child_lines:
-				cancel_payload.append({**child_lines[0], "qty": child_new_qty - child_prev_qty})
+		cancel_payload = []
+		for row, before, after in sent_updates:
+			for line in _line_keyed_items(_kitchen_snapshot([row])).values():
+				cancel_payload.append({**line, "qty": after - before})
 
 	# Apply the reduction (or full removal) to the invoice, bypassing
 	# validate_invoice's post-print guard for exactly this legitimate write.
@@ -379,7 +396,7 @@ def reduce_order_item_qty(
 			item_row.ury_held = 0
 		for child, _child_prev_qty, child_new_qty in child_updates:
 			child.qty = child_new_qty
-			if held and child_new_qty == 0:
+			if child_new_qty == 0:
 				child.ury_held = 0
 		if reconcile_held:
 			reconcile_order_reservations(order_ref=pos_invoice.name, previous_items=previous,
@@ -391,6 +408,8 @@ def reduce_order_item_qty(
 				if child_new_qty == 0:
 					pos_invoice.remove(child)
 			pos_invoice.remove(item_row)
+		if remaining_balance is not None:
+			set_split_balance(pos_invoice, remaining_balance, [row.name for row in pos_invoice.items])
 		pos_invoice.save(ignore_permissions=False)
 	finally:
 		frappe.flags.ury_qty_reduction = False
@@ -398,7 +417,7 @@ def reduce_order_item_qty(
 	# Reuse the existing cancel-KOT creation path for exactly the delta, carrying void/waste reason.
 	created_kot_names = []
 	waste_stock_entry = None
-	if not held:
+	if sent_updates:
 		cancel_comment = reason_info["display"] if reason_info else reason
 		cancel_kwargs = {}
 		if reason_info and "void_reason_code" in inspect.signature(process_items_for_cancel_kot).parameters:
@@ -411,31 +430,15 @@ def reduce_order_item_qty(
 		if reason_info and reason_info["is_waste"]:
 			waste_rows = [
 				{
-					"item_code": item_code,
-					"qty": abs(delta),
-					"warehouse": item_row.get("warehouse"),
-					"uom": item_row.get("uom"),
-					"custom_line_role": item_row.get("custom_line_role"),
-					"custom_bundle_overrides_json": item_row.get("custom_bundle_overrides_json"),
+					"item_code": row.item_code,
+					"qty": before - after,
+					"warehouse": row.get("warehouse"),
+					"uom": row.get("uom"),
+					"custom_line_role": row.get("custom_line_role"),
+					"custom_bundle_overrides_json": row.get("custom_bundle_overrides_json"),
 				}
+				for row, before, after in sent_updates if row.get("custom_line_role") != "Combo Upcharge"
 			]
-			for child, child_prev_qty, child_new_qty in child_updates:
-				if cint(child.get("ury_held")) == 1:
-					continue
-				if (child.get("custom_line_role") or "") == "Combo Upcharge":
-					continue
-				child_delta = flt(child_prev_qty) - flt(child_new_qty)
-				if child_delta > 0:
-					waste_rows.append(
-						{
-							"item_code": child.get("item_code"),
-							"qty": child_delta,
-							"warehouse": child.get("warehouse"),
-							"uom": child.get("uom"),
-							"custom_line_role": child.get("custom_line_role"),
-							"custom_bundle_overrides_json": child.get("custom_bundle_overrides_json"),
-						}
-					)
 			waste_stock_entry = post_waste_stock_entry(
 				pos_invoice,
 				pos_profile,

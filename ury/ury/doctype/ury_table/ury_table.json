@@ -8,6 +8,8 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "custom_dirty_since",
+  "custom_table_state",
   "table_info_tab",
   "no_of_seats",
   "minimum_seating",
@@ -26,10 +28,33 @@
   "is_take_away",
   "active_info_tab",
   "occupied",
+  "seating_checks",
   "column_break_280tb",
   "latest_invoice_time"
  ],
  "fields": [
+  {
+   "fieldname": "seating_checks",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Current Seating Checks",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "custom_dirty_since",
+   "fieldtype": "Datetime",
+   "label": "Dirty Since",
+   "read_only": 1
+  },
+  {
+   "fieldname": "custom_table_state",
+   "fieldtype": "Select",
+   "label": "Table State",
+   "default": "Available",
+   "options": "Available\nSeated\nCheck Printed\nDirty",
+   "read_only": 1
+  },
   {
    "fieldname": "table_info_tab",
    "fieldtype": "Tab Break",
@@ -149,7 +174,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-17 15:45:13.235634",
+ "modified": "2026-11-26 00:30:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Table",

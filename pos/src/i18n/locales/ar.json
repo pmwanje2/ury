@@ -300,6 +300,9 @@
     "failed_to_load": "تعذر تحميل نقطة البيع"
   },
   "pos_closing": {
+    "job_summary": "وقت العمل والإكراميات المحصّلة حسب رمز الوظيفة",
+    "labor_minutes": "دقائق العمل",
+    "job_code_unassigned": "غير معيّن",
     "title": "إغلاق نقطة البيع",
     "description": "راجع مبيعات ورديتك وأدخل المبالغ الفعلية للإغلاق.",
     "loading": "جاري تحميل تفاصيل الإغلاق...",
@@ -657,6 +660,7 @@
     "min_notice": "يجب أن يكون الحجز قبل موعده بـ {{minutes}} دقيقة على الأقل."
   },
   "bill_split": {
+    "confirm_split": "تأكيد التقسيم",
     "split_bill": "تقسيم الفاتورة",
     "select_items": "اختر الأصناف التي سيتم نقلها من {{invoice}} إلى فاتورة جديدة",
     "stays_on_bill": "تبقى في الفاتورة الأصلية",
@@ -1043,6 +1047,7 @@
     "acknowledged": "تم الاستلام"
   },
   "floor_pin": {
+    "enter_staff_pin": "أدخل رمز PIN الخاص بك",
     "offline_notice": "لا يوجد اتصال. سجّل الدخول مجددًا قبل تلقي الطلبات.",
     "title": "تسجيل دخول الموظفين",
     "pin_prompt": "أدخل رقم PIN المكون من 4 أرقام",
@@ -1073,6 +1078,7 @@
     "login_disabled": "تسجيل الدخول برقم PIN الأرضي متوقف لملف نقطة البيع هذا. فعّله في ملف نقطة البيع أولاً."
   },
   "staff_pins": {
+    "policy_conflict": "وحّد إعدادات طول رمز PIN في ملفات نقاط البيع التي يحق لهذا الموظف استخدامها قبل إصدار الرمز.",
     "title": "أرقام PIN للموظفين",
     "description": "إصدار رقم PIN أرضي لموظف مؤهل.",
     "shown_once": "يُعرض رقم PIN هذا مرة واحدة فقط. سلّمه للموظف بشكل خاص.",
@@ -1375,6 +1381,8 @@
     "sc_summary_toggle": "عرض التفاصيل"
   },
   "timeclock": {
+    "job_code": "رمز الوظيفة",
+    "select_job_code": "اختر رمز الوظيفة",
     "clock_in": "تسجيل الدخول",
     "clock_out_pill": "دخول {{time}} · تسجيل الخروج",
     "clock_in_title": "تسجيل بدء الدوام",
@@ -1478,5 +1486,61 @@
     "consolidated_locked_hint": "لا يمكن إرجاع أو إعادة فتح الفواتير المجمّعة من الصندوق.",
     "decrease_return_qty": "إنقاص كمية الإرجاع لصنف {{item}}",
     "increase_return_qty": "زيادة كمية الإرجاع لصنف {{item}}"
+  },
+  "floor": {
+    "seat": "المقعد",
+    "seat_number": "المقعد {{seat}}",
+    "seat_short": "م{{seat}}",
+    "table_shared": "الطاولة",
+    "add_seat": "إضافة مقعد",
+    "course": "مرحلة التقديم",
+    "split_by_seat": "حسب المقعد",
+    "split_even": "حصص متساوية",
+    "split_manual": "تقسيم يدوي",
+    "split_count": "عدد الفواتير",
+    "check_number": "الفاتورة {{check}}",
+    "add_check": "إضافة فاتورة",
+    "remove_check": "إزالة آخر فاتورة",
+    "guest_split": "تقسيم إلى فاتورة باسم الضيف",
+    "share": "تقسيم الحصة",
+    "custom": "مخصص",
+    "seated": "تم الإجلاس",
+    "dirty": "تحتاج إلى تنظيف",
+    "check_printed": "تمت طباعة الفاتورة",
+    "mark_clean": "تحديد كنظيفة",
+    "pay": "دفع",
+    "waitlist": "قائمة الانتظار",
+    "add_walkin": "إضافة مجموعة دون حجز",
+    "party_name": "اسم المجموعة",
+    "party_phone": "رقم الهاتف",
+    "party_size": "عدد الأشخاص",
+    "preferred_room": "الصالة المفضلة",
+    "any_room": "أي صالة",
+    "quote": "مدة الانتظار المقدرة (بالدقائق)",
+    "estimate": "تقدير مدة الانتظار",
+    "no_fit": "لا توجد طاولة تناسب هذه المجموعة.",
+    "waiting": "في الانتظار",
+    "notified": "تم الإبلاغ",
+    "notify": "تحديد كتم الإبلاغ",
+    "seat_party": "إجلاس المجموعة",
+    "select_table": "اختر طاولة",
+    "elapsed": "{{minutes}} دقيقة انتظار",
+    "quoted_badge": "{{minutes}} دقيقة مقدرة",
+    "waitlist_empty": "لا توجد مجموعات في الانتظار.",
+    "waitlist_error": "تعذر تحديث قائمة الانتظار.",
+    "waitlist_access": "ليس لديك إذن لإدارة قائمة الانتظار.",
+    "waitlist_room_outlet": "الصالة المطلوبة لا تتبع هذا الفرع.",
+    "waitlist_invalid_size_or_time": "أدخل عدد ضيوف أو مدة انتظار صالحة.",
+    "waitlist_invalid_phone": "أدخل رقم هاتف صالحًا.",
+    "waitlist_missing_name": "أدخل اسم المجموعة.",
+    "waitlist_party_unavailable": "هذه المجموعة لم تعد في قائمة الانتظار.",
+    "waitlist_table_outlet": "الطاولة لا تتبع هذا الفرع.",
+    "waitlist_table_unavailable": "اختر طاولة متاحة.",
+    "waitlist_table_room": "اختر طاولة في الصالة المطلوبة.",
+    "waitlist_table_size": "هذه الطاولة لا تتسع للمجموعة.",
+    "waitlist_table_reserved": "هذه الطاولة مخصصة لحجز.",
+    "waitlist_table_overlap": "يتداخل حجز هذه الطاولة مع مدة جلوس المجموعة المتوقعة. اختر طاولة أخرى.",
+    "waitlist_table_dirty": "ضع علامة على أن الطاولة نظيفة قبل إجلاس الضيوف.",
+    "clean_failed": "تعذر تحديد الطاولة كنظيفة."
   }
 }

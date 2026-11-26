@@ -263,6 +263,8 @@ export default function CaptainOrder() {
           // Same stable line identity the Cashier OrderPanel sends — see
           // OrderItem.reservationLineKey (B02b).
           reservation_line_key: item.reservationLineKey || item.uniqueId,
+          ...(item.seatNo ? { custom_seat_no: item.seatNo } : {}),
+          ...(item.courseOverride ? { custom_course: item.courseOverride } : {}),
           ...(item.parentLineKey ? { custom_parent_line_key: item.parentLineKey } : {}),
           ...(item.lineRole ? { custom_line_role: item.lineRole } : {}),
           ...(item.isModifier ? { custom_is_modifier: 1 } : {}),
@@ -471,6 +473,7 @@ export default function CaptainOrder() {
           rate,
           amount: rate * item.quantity,
           reservation_line_key: item.reservationLineKey || null,
+          custom_seat_no: item.seatNo,
           custom_parent_line_key: item.parentLineKey || null,
           custom_is_modifier: item.isModifier ? 1 : 0,
           custom_modifier_prefix: item.modifierPrefix || null,

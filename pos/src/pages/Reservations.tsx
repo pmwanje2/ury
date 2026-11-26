@@ -1,3 +1,4 @@
+import { WaitList } from '../components/WaitList';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   BookLock,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 import {
   Badge,
+  Button,
   Card,
   CardContent,
   SearchableSelect,
@@ -102,6 +104,7 @@ export default function Reservations() {
   const navigate = useNavigate();
   const { posProfile, searchQuery, setSelectedTable, setSelectedOrderType } = usePOSStore();
   const branch = posProfile?.branch ?? '';
+  const [showWaitList, setShowWaitList] = useState(false);
 
   // The branch's Minimum Reservation Notice, for the edit dialog's own check.
   const [minNoticeMinutes, setMinNoticeMinutes] = useState<number | null>(null);
@@ -465,11 +468,26 @@ export default function Reservations() {
     }
   };
 
+  if (showWaitList && branch) {
+    return (
+      <div className="h-full overflow-y-auto bg-background text-foreground">
+        <div className="mx-auto max-w-4xl space-y-4 p-4">
+          <div role="group" aria-label={t('reservations.page_title')} className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" className="min-h-11"
+              onClick={() => setShowWaitList(false)}>{t('reservations.page_title')}</Button>
+            <Button type="button" aria-pressed className="min-h-11">{t('floor.waitlist')}</Button>
+          </div>
+          <WaitList key={branch} branch={branch} rooms={rooms} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-gray-50 overflow-hidden">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
             <BookLock className="w-6 h-6" />
           </div>
@@ -482,6 +500,9 @@ export default function Reservations() {
             </h1>
           </div>
         </div>
+
+        {branch && <Button type="button" variant="outline" className="min-h-11"
+          onClick={() => setShowWaitList(true)}>{t('floor.waitlist')}</Button>}
 
         {/* Right side: Room Filter -> Table Filter -> Date Selector -> View Mode Switcher */}
         <div className="flex items-center gap-3">

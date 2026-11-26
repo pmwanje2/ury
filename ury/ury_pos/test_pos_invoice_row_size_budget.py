@@ -107,7 +107,7 @@ def _extract_dict_literal_from_function(py_path: Path, func_name: str) -> dict[s
     raise AssertionError(f"Could not extract dict literal from {py_path}:{func_name}")
 
 
-def _extract_module_constant(py_path: Path, var_name: str) -> dict[str, list[dict]]:
+def _extract_module_constant(py_path: Path, var_name: str) -> dict:
     tree = ast.parse(py_path.read_text(), filename=str(py_path))
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -147,11 +147,22 @@ def load_ury_pos_invoice_sources() -> dict[str, dict[str, dict]]:
         ).get("POS Invoice", [])
     }
     return {
+        "patches/v2_0/setup_pos_config_sweep.py": {
+            field["fieldname"]: field for field in (
+                _extract_module_constant(APP_ROOT / "patches/v2_0/setup_pos_config_sweep.py", name)
+                for name in ("POS_COVERS_FIELD", "LEGACY_COVERS_FIELD")
+            )
+        },
         "fixtures/custom_field.json": fixture_pos,
         "setup_customizations.py": setup_pos,
         "ury_pos/privileged_fields.py": priv_pos,
         "patches/v3_46/add_pos_fx_ref_offline_fields.py": pr6_pos,
         "ury_pos/timeclock_tips_fields.py": pr10_pos,
+        "patches/v3_46/add_floor_lifecycle_fields.py": {
+            row["fieldname"]: row for row in _extract_module_constant(
+                APP_ROOT / "patches" / "v3_46" / "add_floor_lifecycle_fields.py", "SPLIT_BALANCE_FIELDS"
+            )["POS Invoice"]
+        },
     }
 
 
@@ -182,6 +193,13 @@ class TestPosInvoiceRowSizeBudget(unittest.TestCase):
             f"Combined tabPOS Invoice row size ({combined_total}B) leaves less than 3,000B "
             f"headroom below MariaDB 65,535B limit.",
         )
+
+    def test_timed_fire_columns_belong_to_invoice_items(self):
+        definitions = _extract_dict_literal_from_function(APP_ROOT / "setup_customizations.py", "get_custom_fields")
+        timed = {"fire_at", "fire_confirmation_pending"}
+        self.assertEqual({row["fieldname"]: row["fieldtype"] for row in definitions["POS Invoice Item"]
+                          if row["fieldname"] in timed}, {"fire_at": "Datetime", "fire_confirmation_pending": "Check"})
+        self.assertFalse(timed.intersection(row["fieldname"] for row in definitions["POS Invoice"]))
 
     def test_bounded_setup_fields_are_not_widened_by_fixtures(self):
         sources = load_ury_pos_invoice_sources()

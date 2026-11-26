@@ -86,6 +86,9 @@ def after_install():
     setup_pos_void_return_reopen.execute()
     setup_pos_modifiers_and_combos.execute()
     setup_pos_config_sweep.execute()
+    from ury.patches.v3_46 import add_floor_lifecycle_fields
+
+    add_floor_lifecycle_fields.execute()
 
 
 

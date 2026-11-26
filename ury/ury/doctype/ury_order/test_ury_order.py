@@ -2094,8 +2094,18 @@ class TestSplitBillReservations(FrappeTestCase):
         fire_items(source.name, line=lines["whole"])
         whole, = tickets(source.name) - {mixed}
         result = split_bill(source.name, [{"name": lines[key], "qty": 1} for key in ("move", "whole")])
-        self.assertEqual(tickets(result["new_invoice"]), {whole})
-        self.assertEqual(tickets(source.name), {mixed})
+        from ury.ury.api.kitchen_ticket_history import ticket_owner_query, ticket_ownership
+
+        child = frappe.get_doc("POS Invoice", result["new_invoice"])
+        self.assertEqual(tickets(source.name), {mixed, whole})
+        self.assertEqual(tickets(child.name), set())
+        self.assertEqual(ticket_ownership(source.reload()), {whole: child.name})
+        self.assertEqual(ticket_ownership(child), {whole: True})
+        query, params = ticket_owner_query(frappe,
+            "SELECT ticket, invoice FROM {ticket_owners} owner WHERE ticket IN %(tickets)s",
+            {"tickets": (mixed, whole)})
+        owners = frappe.db.sql(query, params)
+        self.assertCountEqual(owners, [(mixed, source.name), (whole, child.name)])
 
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.get_all")
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.db.set_value")

@@ -14,8 +14,9 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
+from ury.brand import coded_message
 from ury.ury.api.ury_availability import _resolve_production_config, get_reservation_availability as get_item_availability
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.api.ury_reservation_service import (
@@ -82,6 +83,9 @@ def _line_context(row):
 		value = row.get(fieldname)
 		if value not in (None, ""):
 			context[fieldname] = value
+	seat = cint(row.get("custom_seat_no") or row.get("seat_no"))
+	if seat:
+		context["custom_seat_no"] = seat
 	return context
 
 
@@ -180,6 +184,81 @@ def _audit_frozen_context(row):
 		if frozen_context:
 			return frozen_context
 	return {}
+
+
+def _held_group_bindings(items, groups):
+	"""Resolve one old stock key without splitting a reservation group."""
+	if len({ref for item, ref in items}) == 1:
+		return [(rows, items[0][1]) for rows in groups.values()]
+
+	# A persisted invoice-row reference, when present, is stronger evidence
+	# than item/warehouse equivalence. Multiple components travel together.
+	pending = list(items)
+	unmatched = []
+	bindings = []
+	for rows in groups.values():
+		ref = _audit_frozen_context(rows[0]).get("source_line_ref")
+		match = next((entry for entry in pending if entry[0].name == ref
+		              and entry[0].get("reservation_line_key") != ref), None)
+		if match:
+			bindings.append((rows, match[1]))
+			pending.remove(match)
+		else:
+			unmatched.append(rows)
+	def equivalent_group(rows):
+		return sorted((row.component_item, row.warehouse, row.branch, row.company, row.policy or "",
+		               flt(row.qty), str(row.expires_at or ""), json.dumps(_audit_frozen_context(row), sort_keys=True))
+		              for row in rows)
+
+	# Legacy split siblings may share every recorded reference. Pair them
+	# only if their demands and entire frozen stock allocations are equivalent.
+	if (len(unmatched) != len(pending)
+			or len({flt(item.qty) for item, _ in pending}) > 1
+			or (len(pending) > 1 and not all(cint(item.get("ury_held")) for item, _ in pending))
+			or any(equivalent_group(rows) != equivalent_group(unmatched[0]) for rows in unmatched[1:])):
+		frappe.throw(coded_message("HOLD-AMBIGUOUS-LINE", _("Held kitchen lines have an ambiguous reservation key.")))
+	return bindings + [(rows, ref) for rows, (_, ref) in zip(unmatched, pending, strict=True)]
+
+
+def rebind_merged_reservations(check, updates):
+	"""Retain the frozen stock allocation and append the new held-line identity."""
+	from ury.ury.api.ury_reservation_service import append_audit
+
+	items_by_key = defaultdict(list)
+	changed = set()
+	for item in check.items:
+		old = _line_key(_item_code(item), item, 1)
+		ref = updates.get(item.name, {}).get("reservation_line_key")
+		items_by_key[old].append((item, ref))
+		if ref:
+			changed.add(old)
+	if not changed:
+		return
+	rows = frappe.qb.get_query(
+		RESERVATION_DOCTYPE, filters={"order_ref": check.name, "status": RESERVED},
+		fields=["name", "audit_log", "reservation_group", "component_item", "qty", "status",
+		        "warehouse", "branch", "company", "policy", "top_level_item", "expires_at"],
+		order_by="creation, name", for_update=True,
+	).run(as_dict=True)
+	duplicate_items = {_item_code(items_by_key[key][0][0]) for key in changed if len(items_by_key[key]) > 1}
+	groups = defaultdict(lambda: defaultdict(list))
+	for row in rows:
+		key = _audit_frozen_context(row).get("reservation_line_key")
+		if not key and row.top_level_item in duplicate_items:
+			frappe.throw(coded_message("HOLD-AMBIGUOUS-LINE", _("Held kitchen lines have an ambiguous reservation key.")))
+		if key in changed:
+			groups[key][row.reservation_group].append(row)
+
+	bindings = [binding for key, group in groups.items()
+	            for binding in _held_group_bindings(items_by_key[key], group)]
+	for group, ref in bindings:
+		if ref:
+			for row in group:
+				new_key = _line_key(row.top_level_item, {"reservation_line_key": ref}, 1)
+				append_audit(row, frappe.session.user, "Add Check", frozen_context={
+					**_audit_frozen_context(row), "reservation_line_key": new_key, "source_line_ref": ref,
+				})
+				frappe.db.set_value(RESERVATION_DOCTYPE, row.name, "audit_log", row.audit_log, update_modified=False)
 
 
 def _active_groups(order_ref, item_code, reservation_line_key=None):

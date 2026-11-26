@@ -241,25 +241,25 @@ def received_tender_total(invoice) -> float:
     return total
 
 
-def has_sent_kot_for_invoice(invoice_name: str | None) -> bool:
+def has_sent_kot_for_invoice(invoice_name: str | None, invoice=None) -> bool:
     """True if an original kitchen/bar ticket (New Order / Order Modified) exists for this check."""
     if not isinstance(invoice_name, str) or not invoice_name:
         return False
-    found = _f().db.exists(
-        "URY KOT",
-        {
-            "invoice": invoice_name,
-            "type": ["in", ["New Order", "Order Modified"]],
-            "docstatus": ["in", [1, 2]],
-        },
-    )
-    return isinstance(found, str) and bool(found)
+    from ury.ury.api.kitchen_ticket_history import invoice_ticket_ledger, owned_ticket_filters
+
+    doc = invoice if invoice is not None else invoice_ticket_ledger(_f(), invoice_name)
+    for scope in owned_ticket_filters(doc):
+        found = _f().db.exists("URY KOT", dict(scope, type=["in", ["New Order", "Order Modified"]],
+                                               docstatus=["in", [1, 2]]))
+        if isinstance(found, str) and found:
+            return True
+    return False
 
 
 def has_sent_kitchen_activity(invoice) -> bool:
     """True when an open check has already been sent to kitchen/bar or printed."""
     name = _field(invoice, "name")
-    if has_sent_kot_for_invoice(name):
+    if has_sent_kot_for_invoice(name, invoice):
         return True
     printed = _field(invoice, "invoice_printed", 0)
     if isinstance(printed, (int, float, bool)) and cint(printed) == 1:
