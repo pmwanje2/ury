@@ -110,3 +110,77 @@ class SiteContracts(TestCase):
         doc = frappe.get_doc({"doctype": "URY Production Unit", "production": self.prefix})
         with self.assertRaisesRegex(frappe.ValidationError, "(?i)branch"):
             doc.validate()
+
+    def test_failed_manufacture_intent_rolls_back_delivery(self):
+        prepared = self.prepare()
+        branch = row("Branch", name=self.prefix, company=self.prefix)
+        kot = row("URY KOT", name=self.prefix, branch=branch.name, invoice=self.invoice.name)
+        row("URY KOT Item Execution", name=self.prefix, kot=kot.name, kot_item=self.prefix, state="READY")
+        frappe.db.savepoint("before_intent")
+        with patch("ury.ury.api.ury_production_settings.get_manufacture_trigger_time", return_value="On Bill Print"), patch(
+            "ury.ury.api.ury_stock_policy.get_branch_stock_policy",
+            return_value=frappe._dict(realtime_production_posting_enabled=True),
+        ), patch("ury.ury.api.ury_fulfilment_posting_service.create_or_get_posting_intent_for_ready",
+                 side_effect=frappe.ValidationError("intent persistence failed")) as create:
+            with self.assertRaisesRegex(frappe.ValidationError, "intent persistence failed"):
+                receipts.complete_receipt_delivery(self.invoice.name, prepared["delivery_id"])
+            create.assert_called_once()
+        frappe.db.rollback(save_point="before_intent")
+        self.assertEqual(self.table.reload().occupied, 1)
+        self.assertEqual(self.invoice.reload().invoice_printed, 0)
+        self.assertEqual(frappe.db.get_value("URY Receipt Delivery", prepared["delivery_id"], "delivered"), 0)
+
+    def test_scope_reconciliation_never_publishes_tentative_permissions(self):
+        from redis import Redis
+        from ury.ury.doctype.ury_production_unit.station_scope import user_scope_updated
+
+        self.station_fixture()
+        rule = row("User Permission", name=uuid4().hex, user=self.user, allow="Company",
+                   for_value=self.company + "-B", apply_to_all_doctypes=1)
+        row("DocShare", name=uuid4().hex, share_doctype=self.station.doctype, share_name=self.station.name,
+            user=self.user, read=1)
+        cache_key = frappe.cache.make_key("user_permissions")
+        self.addCleanup(frappe.cache.hdel, "user_permissions", self.user)
+        user_scope_updated(rule)
+        before = Redis.hget(frappe.cache, cache_key, self.user)
+        frappe.db.rollback()
+        self.assertIsNone(before, "reconciliation published an uncommitted scope to shared Redis")
+        self.assertIsNone(Redis.hget(frappe.cache, cache_key, self.user))
+
+    def test_public_network_print_only_accepts_client_print_options(self):
+        from inspect import signature
+
+        self.assertEqual(set(signature(receipts.network_printing).parameters),
+                         {"doctype", "name", "printer_setting", "print_format", "doc", "no_letterhead",
+                          "approval_token", "reason", "reason_note"})
+
+    def test_fiscal_client_copy_is_reserved_until_idempotent_confirmation(self):
+        from ury.ury_pos import api
+
+        invoice = row("POS Invoice", name=self.prefix, status="Paid", docstatus=1)
+        key = f"efris-auto-{invoice.name}"
+        queue = row(api._COPY_LOG, name=f"PENDING-EFRIS-{invoice.name}", invoice=invoice.name,
+                    status="AWAITING_FDN", print_job_id=f"PENDING-EFRIS-{invoice.name}")
+        with patch.object(api, "_closed_branch", return_value="Main"), patch.object(
+            api, "_closed_invoice", return_value=invoice
+        ), patch.object(api, "_open_isolated_copy_db", return_value=None), patch(
+            "ury.ury.api.ury_print._bill_printers", return_value=[]
+        ), patch("frappe.get_print", return_value="COPY #1"):
+            reserved = api.print_bill_copy(invoice.name, key, delivery="browser")
+            self.assertEqual(reserved["status"], "RESERVED")
+            self.assertEqual(frappe.db.get_value(api._COPY_LOG, reserved["print_job_id"], "status"), "RESERVED")
+            self.assertEqual(queue.reload().status, "AWAITING_FDN")
+            self.assertEqual(api.print_bill_copy(invoice.name, key, delivery="qz")["copy_number"], reserved["copy_number"])
+            frappe.set_user("another@example.test")
+            try:
+                with self.assertRaises(frappe.PermissionError):
+                    api.confirm_bill_copy(invoice.name, key)
+            finally:
+                frappe.set_user("Administrator")
+            self.assertEqual(queue.reload().status, "AWAITING_FDN")
+            for _ in range(2):
+                self.assertEqual(api.confirm_bill_copy(invoice.name, key)["status"], "COMPLETED")
+            self.assertEqual(queue.reload().status, "DISPATCHED")
+            replay = api.print_bill_copy(invoice.name, key, delivery="browser")
+            self.assertNotIn("html", replay)
+            self.assertEqual(replay["copy_number"], reserved["copy_number"])

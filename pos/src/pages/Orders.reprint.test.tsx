@@ -100,15 +100,16 @@ vi.mock("@ury/core", () => ({
   printWithQz: vi.fn().mockResolvedValue(undefined),
   call: {
     get: vi.fn().mockResolvedValue({ message: { has_permission: true } }),
-    post: vi.fn().mockResolvedValue({
+    post: vi.fn().mockImplementation(async (method: string) => method.endsWith("confirm_bill_copy")
+      ? { message: { status: "COMPLETED" } } : ({
       message: {
-        status: "COMPLETED",
+        status: "RESERVED",
         copy_number: 2,
         delivery: "browser",
         html: "<article><h1>COPY #2</h1></article>",
         print_url: "/printview?doctype=POS%20Invoice&name=POS-INV-00024&format=URY%20Bill%20Copy&copy_number=2&no_letterhead=1&trigger_print=1",
       },
-    }),
+    })),
   },
 }));
 
@@ -185,7 +186,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
   it("sends COPY #n HTML to QZ Tray on a QZ till without requiring CUPS", async () => {
     vi.mocked(call.post).mockResolvedValueOnce({
       message: {
-        status: "COMPLETED",
+        status: "RESERVED",
         copy_number: 3,
         delivery: "qz",
         html: "<article><h1>COPY #3</h1></article>",
@@ -204,6 +205,9 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
       { invoice: "POS-INV-00024", idempotency_key: "k-qz-1", delivery: "qz" },
     );
     expect(printWithQz).toHaveBeenCalledWith("localhost", "<article><h1>COPY #3</h1></article>", "Cashier");
+    expect(call.post).toHaveBeenLastCalledWith("ury.ury_pos.api.confirm_bill_copy",
+      { invoice: "POS-INV-00024", idempotency_key: "k-qz-1" });
+    expect(vi.mocked(call.post).mock.invocationCallOrder.at(-1)).toBeGreaterThan(vi.mocked(printWithQz).mock.invocationCallOrder[0]);
     expect(res.copy_number).toBe(3);
   });
 

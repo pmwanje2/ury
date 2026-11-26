@@ -26,7 +26,11 @@ describe('frontend Pos printOrder & resolvePrintFormat (P1-5)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('open', openSpy);
+    vi.stubGlobal('open', openSpy.mockReturnValue({ closed: true }));
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    vi.mocked(call.post).mockResolvedValue({ message: {
+      delivery_id: 'd', invoice_revision: 'v', html: 'Receipt', print_url: '/authorized-receipt',
+    } });
   });
 
   function makeProfile(overrides: Partial<PosProfileCombined> = {}): PosProfileCombined {
@@ -87,6 +91,34 @@ describe('frontend Pos printOrder & resolvePrintFormat (P1-5)', () => {
     );
   });
 
+  it.each([0, 1])('requires an explicit network acknowledgement (multiple_cashier=%s)', async multiple_cashier => {
+    vi.mocked(call.post).mockResolvedValue({ message: { status: 'Failure', message: 'paper out' } });
+    await expect(printOrder({ orderId: 'INV', posProfile: makeProfile({ print_type: 'network', multiple_cashier }) }))
+      .rejects.toThrow('paper out');
+    expect(call.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a network receipt without a second status mutation', async () => {
+    vi.mocked(call.post).mockResolvedValue({ message: { status: 'Success' } });
+    expect(await printOrder({ orderId: 'INV', posProfile: makeProfile({ print_type: 'network' }) })).toBe('network');
+    expect(call.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a cancelled browser receipt pending', async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    await expect(printOrder({ orderId: 'INV', posProfile: makeProfile() })).rejects.toThrow(/confirm/i);
+    expect(call.post).toHaveBeenCalledTimes(1);
+    expect(call.post).toHaveBeenCalledWith(expect.stringContaining('prepare_receipt_delivery'), expect.anything());
+  });
+
+  it('lets the cashier cancel a blocked popup without completing the receipt', async () => {
+    openSpy.mockReturnValue(null);
+    HTMLDialogElement.prototype.showModal = function () { this.querySelectorAll('button')[1].click(); };
+    await expect(printOrder({ orderId: 'INV', posProfile: makeProfile() })).rejects.toThrow(/cancel/i);
+    expect(call.post).toHaveBeenCalledTimes(1);
+    expect(call.post).toHaveBeenCalledWith(expect.stringContaining('prepare_receipt_delivery'), expect.anything());
+  });
+
   it('forwards configured letter_head on browser printview and QZ Tray', async () => {
     await printOrder({
       orderId: 'POS-INV-FE-1',
@@ -97,10 +129,11 @@ describe('frontend Pos printOrder & resolvePrintFormat (P1-5)', () => {
       } as Partial<PosProfileCombined>),
     });
     expect(openSpy).toHaveBeenCalledTimes(1);
-    const url = openSpy.mock.calls[0][0] as string;
-    expect(url).toContain(`format=${encodeURIComponent(MERGED_POS_INVOICE_PRINT_FORMAT)}`);
-    expect(url).toContain('no_letterhead=0');
-    expect(url).toContain(`letterhead=${encodeURIComponent('Grand Terrace Receipt')}`);
+    expect(openSpy).toHaveBeenCalledWith('/authorized-receipt', '_blank');
+    expect(call.post).toHaveBeenNthCalledWith(1, expect.stringContaining('prepare_receipt_delivery'),
+      expect.objectContaining({ print_format: MERGED_POS_INVOICE_PRINT_FORMAT, letterhead: 'Grand Terrace Receipt' }));
+    expect(call.post).toHaveBeenNthCalledWith(2, expect.stringContaining('complete_receipt_delivery'),
+      { invoice: 'POS-INV-FE-1', delivery_id: 'd' });
 
     vi.mocked(call.post).mockClear().mockResolvedValue({ message: { delivery_id: 'd', invoice_revision: 'v', html: 'COPY #2 / REPRINT' } });
     await printOrder({

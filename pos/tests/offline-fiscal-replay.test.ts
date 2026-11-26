@@ -114,10 +114,11 @@ test("replayed offline settlement enters the pending->reprint path and prints CO
     if (method === "ury.ury_pos.api.queue_fiscal_reprint") {
       return { message: { status: "AWAITING_FDN" } };
     }
+    if (method === "ury.ury_pos.api.confirm_bill_copy") return { message: { status: "COMPLETED" } };
     if (method === "ury.ury_pos.api.print_bill_copy") {
       return {
         message: {
-          status: "COMPLETED",
+          status: "RESERVED",
           copy_number: 1,
           delivery: "browser",
           html: "<article><h1>COPY #1</h1></article>",

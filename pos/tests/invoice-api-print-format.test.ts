@@ -175,7 +175,7 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
   });
 
   it('keeps POS open and requires confirmation when a numbered QZ copy falls back', async () => {
-    vi.mocked(call.post).mockResolvedValue({ message: { status: 'COMPLETED', delivery: 'qz', copy_number: 4,
+    vi.mocked(call.post).mockResolvedValue({ message: { status: 'RESERVED', delivery: 'qz', copy_number: 4,
       html: 'COPY #4', print_url: '/printview?copy_number=4' } });
     vi.mocked(printWithQz).mockRejectedValue(new Error('QZ_NOT_RUNNING'));
     vi.mocked(window.confirm).mockReturnValueOnce(true).mockReturnValueOnce(false);
@@ -233,10 +233,18 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     );
   });
 
+  it('does not dispatch a numbered copy again after confirmed delivery', async () => {
+    vi.mocked(call.post).mockResolvedValueOnce({ message: { status: 'COMPLETED', copy_number: 3 } });
+    const result = await printBillCopy({ orderId: 'C', posProfile: makeProfile({ print_type: 'socket' }), idempotencyKey: 'same' });
+    expect(result.status).toBe('COMPLETED');
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(call.post).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards configured POS Profile letter_head in printBillCopy browser fallback URL (P1-5)', async () => {
     vi.mocked(call.post).mockResolvedValueOnce({
-      message: { status: 'COMPLETED', delivery: 'browser', copy_number: 2 },
-    });
+      message: { status: 'RESERVED', delivery: 'browser', copy_number: 2 },
+    }).mockResolvedValueOnce({ message: { status: 'COMPLETED' } });
 
     await printBillCopy({
       orderId: 'POS-INV-0004',

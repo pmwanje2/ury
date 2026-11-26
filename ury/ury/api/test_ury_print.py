@@ -106,7 +106,7 @@ class TestNetworkPrinting(BillPrintTestCase):
 
 
 class TestSelectNetworkPrinter(BillPrintTestCase):
-	@patch("ury.ury.api.ury_print.network_printing")
+	@patch("ury.ury.api.ury_print._network_print_internal", create=True)
 	@patch("ury.ury.api.ury_print.frappe.get_all")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -136,7 +136,7 @@ class TestSelectNetworkPrinter(BillPrintTestCase):
 			["Room Printer 1", "Room Printer 2"],
 		)
 
-	@patch("ury.ury.api.ury_print.network_printing")
+	@patch("ury.ury.api.ury_print._network_print_internal", create=True)
 	@patch("ury.ury.api.ury_print.frappe.get_all")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -156,7 +156,7 @@ class TestSelectNetworkPrinter(BillPrintTestCase):
 		self.assertIsNone(result)
 		mock_network_printing.assert_not_called()
 
-	@patch("ury.ury.api.ury_print.network_printing")
+	@patch("ury.ury.api.ury_print._network_print_internal", create=True)
 	@patch("ury.ury.api.ury_print.frappe.get_all")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")

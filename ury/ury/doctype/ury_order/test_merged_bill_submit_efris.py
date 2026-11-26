@@ -653,7 +653,7 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 			patch("ury.ury.doctype.ury_order.ury_order._enforce_order_access"):
 			res = api.print_bill_copy("INV-SP", idempotency_key="efris-auto-INV-SP", delivery="browser")
 
-		self.assertEqual(res["status"], "COMPLETED")
+		self.assertEqual(res["status"], "RESERVED")
 		self.assertEqual(res["copy_number"], 1)
 		fake_frappe.db.savepoint.assert_called()
 		fake_frappe.db.rollback.assert_called()
@@ -876,7 +876,7 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 			res = api.print_bill_copy("INV-ISO-SL", idempotency_key="iso-key", delivery="browser")
 
 		opener.assert_called()
-		self.assertEqual(res["status"], "COMPLETED")
+		self.assertEqual(res["status"], "RESERVED")
 		self.assertEqual(res["copy_number"], 2)
 		self.assertIs(fake_frappe.db, caller_db)
 		claim_db.rollback.assert_called()

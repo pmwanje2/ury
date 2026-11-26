@@ -224,12 +224,12 @@ class BillCopy(unittest.TestCase):
             browser = api.print_bill_copy('INV-B1', idempotency_key='browser-key', delivery='browser')
             qz = api.print_bill_copy('INV-B1', idempotency_key='qz-key', delivery='qz')
 
-        self.assertEqual(browser['status'], 'COMPLETED')
+        self.assertEqual(browser['status'], 'RESERVED')
         self.assertEqual(browser['copy_number'], 1)
         self.assertEqual(browser['delivery'], 'browser')
         self.assertIn('COPY #1', browser['html'])
         self.assertIn('copy_number=1', browser['print_url'])
-        self.assertEqual(qz['status'], 'COMPLETED')
+        self.assertEqual(qz['status'], 'RESERVED')
         self.assertEqual(qz['copy_number'], 2)
         self.assertEqual(qz['delivery'], 'qz')
         self.assertIn('COPY #2', qz['html'])
@@ -364,8 +364,8 @@ class BillCopy(unittest.TestCase):
         self.assertEqual(seen_template[0][2], 'copy_number')
         self.assertEqual(seen_template[0][3].get('order_by'), 'copy_number desc')
 
-    def test_completed_replay_returns_copy_number_delivery_html_and_print_url(self):
-        """P1: Replaying a COMPLETED copy must return copy_number, delivery, html, and print_url."""
+    def test_reserved_replay_returns_copy_number_delivery_html_and_print_url(self):
+        """P1: Replaying a reserved copy must return copy_number, delivery, html, and print_url."""
         records = []
         doc = frappe._dict(
             name='INV-R1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
@@ -410,7 +410,7 @@ class BillCopy(unittest.TestCase):
 
         self.assertEqual(len(records), 1)
         self.assertEqual(first['copy_number'], 1)
-        self.assertEqual(replay['status'], 'COMPLETED')
+        self.assertEqual(replay['status'], 'RESERVED')
         self.assertEqual(replay.get('copy_number'), 1)
         self.assertEqual(replay.get('delivery'), 'browser')
         self.assertIn('COPY #1', replay.get('html') or '')
@@ -479,7 +479,7 @@ class BillCopy(unittest.TestCase):
 
             res = api.print_bill_copy('INV-RACE', idempotency_key='race-key', delivery='browser')
 
-        self.assertEqual(res['status'], 'COMPLETED')
+        self.assertEqual(res['status'], 'RESERVED')
         self.assertEqual(res['copy_number'], 2)
         self.assertEqual([r['copy_number'] for r in records], [1, 2])
         self.assertEqual(records[-1].get('copy_slot'), 'INV-RACE:2:1')
@@ -603,7 +603,7 @@ class BillCopy(unittest.TestCase):
 
             res = api.print_bill_copy('INV-SP1', idempotency_key='sp-key', delivery='browser')
 
-        self.assertEqual(res['status'], 'COMPLETED')
+        self.assertEqual(res['status'], 'RESERVED')
         self.assertEqual(res['copy_number'], 1)
         f.db.savepoint.assert_called()
         f.db.rollback.assert_called()
@@ -813,7 +813,7 @@ class BillCopy(unittest.TestCase):
             self.assertIs(f.db, caller_db, 'Caller DB handle must be restored after isolated copy claim')
 
         opener.assert_called()
-        self.assertEqual(res['status'], 'COMPLETED')
+        self.assertEqual(res['status'], 'RESERVED')
         self.assertEqual(res['copy_number'], 2)
         self.assertEqual([r['copy_number'] for r in records], [1, 2])
         self.assertIn('get_lock', claim_events)
@@ -881,7 +881,7 @@ class BillCopy(unittest.TestCase):
 
             res = api.print_bill_copy('INV-RO1020', idempotency_key='ro-1020-key', delivery='browser')
 
-        self.assertEqual(res['status'], 'COMPLETED')
+        self.assertEqual(res['status'], 'RESERVED')
         self.assertEqual(res['copy_number'], 1)
         f.db.rollback.assert_called_once_with()
 
