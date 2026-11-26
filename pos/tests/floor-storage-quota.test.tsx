@@ -9,7 +9,7 @@ import OutboxPanel from '../src/components/OutboxPanel';
 import { cashierOutbox, clearCashierStorage } from '../src/offline/cashier';
 import { onOutboxMembershipChange } from '../src/offline/outbox';
 import { useOutbox } from '../src/offline/use-outbox';
-import { clearFloorLogoutFailureMarker, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+import { clearFloorLogoutFailureMarker, currentFloorGeneration, floorSignOut, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
 import { readLogoutMarker, writeLogoutMarker } from '../src/lib/logout-store';
 import FloorPinPad from '../src/components/FloorPinPad';
 import { testLocks } from './offline-locks';
@@ -343,4 +343,79 @@ it('rotates the persistent generation on logout and verified login and binds con
   render(<AuthGuard><main>Old workspace</main></AuthGuard>);
   await screen.findByLabelText('Password');
   expect(screen.queryByText('Old workspace')).toBeNull();
+});
+
+function saveTab() {
+  const name = window.name;
+  const entries = Object.entries(sessionStorage);
+  return () => {
+    window.name = name;
+    sessionStorage.clear();
+    for (const [key, value] of entries) sessionStorage.setItem(key, value);
+  };
+}
+
+it.each(['quota still full', 'quota recovered', 'retry already scheduled'])(
+  'keeps a replacement cashier signed in when the failed tab returns (%s)', async scenario => {
+    await passwordLogin(state.user.name);
+    const logout = vi.spyOn(core, 'logout').mockResolvedValueOnce(false).mockResolvedValue(true);
+    await expect(clearCashierStorage(true)).rejects.toThrow();
+    expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeTruthy();
+    const restoreFailedTab = saveTab();
+
+    window.name = '';
+    sessionStorage.clear();
+    const replacement = 'replacement@example.test';
+    await passwordLogin(replacement);
+    const restoreReplacementTab = saveTab();
+    const replacementGeneration = await currentFloorGeneration();
+    expect(await readLogoutMarker()).toBe(false);
+
+    restoreFailedTab();
+    if (scenario === 'quota recovered') vi.mocked(Storage.prototype.setItem).mockRestore();
+    if (scenario === 'retry already scheduled') await floorSignOut(() => true, true);
+    const previous = state.user;
+    state.user = { ...previous, name: replacement }; // Both tabs now see B's cookie.
+    try {
+      const showGuard = () => render(<AuthGuard><main>Cashier workspace</main></AuthGuard>);
+      const gate = showGuard();
+      await screen.findByLabelText('Password');
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('Cashier workspace')).toBeNull();
+      expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
+      expect(localStorage.getItem('ury_floor_logout_failed')).toBeNull();
+      expect(await currentFloorGeneration()).toBe(replacementGeneration);
+      gate.unmount();
+
+      const reopened = showGuard();
+      await screen.findByLabelText('Password');
+      reopened.unmount();
+      restoreReplacementTab();
+      showGuard();
+      await screen.findByText('Cashier workspace');
+      expect(hasFloorSessionMarker(replacement)).toBe(true);
+      expect(logout).toHaveBeenCalledTimes(1);
+    } finally { state.user = previous; }
+  },
+);
+
+it('binds a private logout retry to its generation and retries while it matches', async () => {
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
+  await expect(clearCashierStorage(true)).rejects.toThrow();
+  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe(await currentFloorGeneration());
+  render(<AuthGuard><main>Cashier workspace</main></AuthGuard>);
+  await screen.findByLabelText('Password');
+  expect(logout).toHaveBeenCalledTimes(2);
+  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe(await currentFloorGeneration());
+});
+
+it('withholds a scheduled private retry when the durable generation cannot be read', async () => {
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
+  await expect(clearCashierStorage(true)).rejects.toThrow();
+  refuseMarkerTransactions('readonly');
+  await floorSignOut(() => true, true);
+  expect(logout).toHaveBeenCalledTimes(1);
+  render(<AuthGuard><main>Cashier workspace</main></AuthGuard>);
+  await screen.findByLabelText('Password');
+  expect(screen.queryByText('Cashier workspace')).toBeNull();
 });
