@@ -100,7 +100,7 @@ vi.mock("@ury/core", () => ({
   printWithQz: vi.fn().mockResolvedValue(undefined),
   call: {
     get: vi.fn().mockResolvedValue({ message: { has_permission: true } }),
-    post: vi.fn().mockImplementation(async (method: string) => method.endsWith("confirm_bill_copy")
+    post: vi.fn().mockImplementation(async (method: string) => method.endsWith("begin_bill_copy_dispatch") ? {message: {status: "DISPATCHING"}} : method.endsWith("confirm_bill_copy")
       ? { message: { status: "COMPLETED" } } : ({
       message: {
         status: "RESERVED", dispatch_token: "attempt-1",
@@ -157,7 +157,8 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
   });
 
   it("prints a settled order via print_bill_copy (COPY #n) instead of printOrder", async () => {
-    const openSpy = vi.spyOn(window, "open").mockReturnValue({ closed: true } as Window);
+    const navigate = vi.fn();
+  const openSpy = vi.spyOn(window, "open").mockReturnValue({ closed: true, location: { replace: navigate } } as unknown as Window);
     vi.spyOn(window, "confirm").mockReturnValue(true);
     const printOrderSpy = vi.spyOn(printLib, "printOrder");
 
@@ -176,10 +177,8 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
       ),
     );
     expect(printOrderSpy).not.toHaveBeenCalled();
-    expect(openSpy).toHaveBeenCalledWith(
-      expect.stringContaining("copy_number=2"),
-      "_blank",
-    );
+    expect(openSpy).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(navigate).toHaveBeenCalledWith(expect.stringContaining("copy_number=2"));
     openSpy.mockRestore();
   });
 
@@ -204,7 +203,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
       "ury.ury_pos.api.print_bill_copy",
       { invoice: "POS-INV-00024", idempotency_key: "k-qz-1", delivery: "qz" },
     );
-    expect(printWithQz).toHaveBeenCalledWith("localhost", "<article><h1>COPY #3</h1></article>", "Cashier");
+    expect(printWithQz).toHaveBeenCalledWith("localhost", "<article><h1>COPY #3</h1></article>", "Cashier", expect.any(Function));
     expect(call.post).toHaveBeenLastCalledWith("ury.ury_pos.api.confirm_bill_copy",
       { invoice: "POS-INV-00024", idempotency_key: "k-qz-1", dispatch_token: "attempt-1" });
     expect(vi.mocked(call.post).mock.invocationCallOrder.at(-1)).toBeGreaterThan(vi.mocked(printWithQz).mock.invocationCallOrder[0]);

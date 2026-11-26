@@ -71,11 +71,12 @@ describe('resolvePrintFormat safety & default guest-check fallback', () => {
 
 describe('printOrder and printBillCopy letterhead forwarding', () => {
   const openSpy = vi.fn();
+  const navigate = vi.fn();
   const snapshot = { html: '<p>COPY #2 / REPRINT</p>', invoice_revision: 'rev2', print_url: '/authorized-receipt?trigger_print=1' };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    openSpy.mockReturnValue({ closed: true });
+    openSpy.mockReturnValue({ closed: true, close: vi.fn(), location: { replace: navigate } });
     vi.spyOn(window, 'confirm').mockReset().mockReturnValue(true);
     vi.mocked(printWithQz).mockReset();
     vi.stubGlobal('open', openSpy);
@@ -174,14 +175,50 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     expect(call.post).not.toHaveBeenCalledWith(expect.stringMatching(/complete_receipt_delivery|qz_print_update/), expect.anything());
   });
 
+  it('rechecks a deferred copy after 301 seconds before navigating to printview', async () => {
+    let elapsed = 0;
+    vi.mocked(call.post).mockImplementation(async method => {
+      if (method.endsWith('begin_bill_copy_dispatch') && elapsed > 300) throw new Error('Replacement already printed');
+      return {message: {status: 'RESERVED', delivery: 'browser', copy_number: 1, dispatch_token: 'old', print_url: '/printview?copy_number=1'}};
+    });
+    openSpy.mockReturnValueOnce(null);
+    HTMLDialogElement.prototype.showModal ??= function () { this.open = true; };
+    const pending = printBillCopy({orderId: 'C', posProfile: makeProfile(), idempotencyKey: 'key'});
+    await vi.waitFor(() => expect(document.querySelector('dialog button')).toBeTruthy());
+    elapsed = 301;
+    (document.querySelector('dialog button') as HTMLButtonElement).click();
+    await expect(pending).rejects.toThrow();
+    expect(openSpy.mock.calls.every(([url]) => url === 'about:blank')).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('retains a lost QZ acknowledgement and accepts physical confirmation=%s', async printed => {
+    vi.mocked(call.post).mockImplementation(async method => {
+      if (method.endsWith('begin_bill_copy_dispatch')) return { message: { status: 'DISPATCHING' } };
+      if (method.endsWith('confirm_bill_copy')) return { message: { status: 'COMPLETED' } };
+      return {message: {status: 'RESERVED', delivery: 'qz', html: 'COPY #1', copy_number: 1, dispatch_token: 'owner'}};
+    });
+    vi.mocked(printWithQz).mockImplementationOnce(async (...args: unknown[]) => {
+      await (args[3] as (() => Promise<void>) | undefined)?.();
+      throw new Error('QZ acknowledgement lost');
+    });
+    vi.mocked(window.confirm).mockReturnValueOnce(printed).mockReturnValue(false);
+    const job = printBillCopy({orderId: 'C', posProfile: makeProfile({print_type:'qz'}), idempotencyKey: 'key'});
+    if (printed) await expect(job).resolves.toMatchObject({status:'COMPLETED'});
+    else await expect(job).rejects.toThrow();
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/did.*print/i));
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(call.post).not.toHaveBeenCalledWith(expect.stringContaining('release_bill_copy'), expect.anything());
+  });
+
   it('keeps POS open and requires confirmation when a numbered QZ copy falls back', async () => {
-    vi.mocked(call.post).mockResolvedValue({ message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'qz', copy_number: 4,
-      html: 'COPY #4', print_url: '/printview?copy_number=4' } });
+    vi.mocked(call.post).mockImplementation(async method => method.endsWith('begin_bill_copy_dispatch') ? { message: {status: 'DISPATCHING'} } : ({ message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'qz', copy_number: 4,
+      html: 'COPY #4', print_url: '/printview?copy_number=4' } }));
     vi.mocked(printWithQz).mockRejectedValue(new Error('QZ_NOT_RUNNING'));
     vi.mocked(window.confirm).mockReturnValueOnce(true).mockReturnValueOnce(false);
     await expect(printBillCopy({ orderId: 'C', posProfile: makeProfile({print_type: 'qz'}), idempotencyKey: 'key' })).rejects.toThrow();
-    expect(openSpy).toHaveBeenCalledWith('/printview?copy_number=4', '_blank');
-    expect(call.post).toHaveBeenCalledWith('ury.ury_pos.api.release_bill_copy', { invoice: 'C', idempotency_key: 'key', dispatch_token: 'attempt-1' });
+    expect(navigate).toHaveBeenCalledWith('/printview?copy_number=4');
+    expect(call.post).not.toHaveBeenCalledWith('ury.ury_pos.api.release_bill_copy', { invoice: 'C', idempotency_key: 'key', dispatch_token: 'attempt-1' });
   });
 
   it('uses configured letterhead and defaults to Merged POS Invoice Format when print_format is empty or unsafe', async () => {
@@ -245,7 +282,7 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
   it('forwards configured POS Profile letter_head in printBillCopy browser fallback URL (P1-5)', async () => {
     vi.mocked(call.post).mockResolvedValueOnce({
       message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'browser', copy_number: 2 },
-    }).mockResolvedValueOnce({ message: { status: 'COMPLETED' } });
+    }).mockResolvedValueOnce({ message: { status: 'DISPATCHING' } }).mockResolvedValueOnce({ message: { status: 'COMPLETED' } });
 
     await printBillCopy({
       orderId: 'POS-INV-0004',
@@ -254,7 +291,7 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     });
 
     expect(openSpy).toHaveBeenCalledTimes(1);
-    const url = openSpy.mock.calls[0][0] as string;
+    const url = navigate.mock.lastCall?.[0] as string;
     expect(url).toContain('no_letterhead=0');
     expect(url).toContain(`letterhead=${encodeURIComponent('Grand Terrace Receipt')}`);
     expect(url).toContain('copy_number=2');

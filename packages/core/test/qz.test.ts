@@ -62,3 +62,17 @@ it('reports failed or empty script loads and permits retry', async () => {
     expect(scripts()).toHaveLength(0);
   }
 });
+
+it('checks copy dispatch authority after resolving the printer and before spooling', async () => {
+  const spool = vi.fn();
+  const bridge = {
+    security: { setSignatureAlgorithm: vi.fn(), setSignaturePromise: vi.fn() },
+    websocket: { isActive: () => true }, printers: { getDefault: async () => 'Receipt' },
+    configs: { create: () => ({}) }, print: spool,
+  };
+  Object.assign(window, { qz: bridge });
+  await expect(printWithQz('localhost', 'COPY #1', 'Receipt', async () => {
+    throw new Error('Copy reclaimed');
+  })).rejects.toThrow('Copy reclaimed');
+  expect(spool).not.toHaveBeenCalled();
+});

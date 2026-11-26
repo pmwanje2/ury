@@ -382,6 +382,8 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 		)}), patch.object(api, "frappe", fake_frappe), \
 			 patch.object(api, "getBranch", return_value="Main Branch"), \
 			 patch("ury.ury.doctype.ury_order.ury_order._enforce_order_access"):
+			api._record_settlement_fiscal_intent(doc)
+			fake_frappe.db.get_value.side_effect = lambda *a, **kw: SimpleNamespace(**inserted[0])
 			first = fn("INV-001")
 			second = fn("INV-001")
 

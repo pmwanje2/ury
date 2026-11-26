@@ -262,6 +262,52 @@ class SiteContracts(TestCase):
                 api.queue_fiscal_reprint(doc.name)
             self.assertFalse(frappe.db.exists(api._COPY_LOG, "PENDING-EFRIS-" + doc.name))
 
+    def test_old_offline_capture_is_not_a_settlement_intent(self):
+        from ury.ury_pos import api
+
+        doc = row("POS Invoice", name=self.prefix, branch="Main", docstatus=1, status="Paid",
+                  ury_offline_captured_at="2020-01-01 00:00:00")
+        with patch.object(api, "_closed_branch", return_value="Main"), patch.object(
+            api, "_fiscal_statuses", return_value=[{"fdn": "F-1", "efris_status": "Submitted"}]
+        ):
+            with self.assertRaises(frappe.PermissionError):
+                api.queue_fiscal_reprint(doc.name)
+            self.assertFalse(frappe.db.exists(api._COPY_LOG, "PENDING-EFRIS-" + doc.name))
+
+    def test_fdn_issued_between_settlement_and_queue_registration(self):
+        from ury.ury_pos import api
+        from ury.ury.doctype.ury_order import ury_order
+
+        doc = row("POS Invoice", name=self.prefix, branch="Main", docstatus=1, status="Paid")
+        with patch.object(type(doc), "submit"), patch.object(ury_order, "_enforce_on_account", return_value=False), patch.object(
+            api, "_closed_branch", return_value="Main"
+        ), patch.object(api, "_fiscal_statuses", return_value=[{"efris_status": "Pending"}]) as provider:
+            ury_order._submit_and_release_tables(doc, None, False)
+            provider.return_value = [{"fdn": "F-1", "efris_status": "Submitted"}]
+            for _ in range(2):
+                self.assertEqual(api.queue_fiscal_reprint(doc.name)["status"], "AWAITING_FDN")
+            self.assertTrue(api._require_fiscal_event(doc))
+
+    def test_spooling_copy_cannot_be_reclaimed_after_five_minutes(self):
+        from datetime import timedelta
+        from frappe.utils import now_datetime
+        from ury.ury_pos import api
+
+        invoice = self.committed_copy()
+        reserve = lambda: api.print_bill_copy(invoice, "copy", delivery="browser")
+        first = reserve()
+        with patch("frappe.utils.now_datetime", return_value=now_datetime() + timedelta(seconds=301)):
+            replacement = reserve()
+            self.assertNotEqual(first["dispatch_token"], replacement["dispatch_token"])
+            with self.assertRaises(frappe.PermissionError):
+                api.begin_bill_copy_dispatch(invoice, "copy", first["dispatch_token"])
+            api.begin_bill_copy_dispatch(invoice, "copy", replacement["dispatch_token"])
+        with patch("frappe.utils.now_datetime", return_value=now_datetime() + timedelta(hours=1)):
+            replay = reserve()
+            self.assertNotIn("print_url", replay)
+            self.assertNotIn("dispatch_token", replay)
+            self.assertEqual(api.confirm_bill_copy(invoice, "copy", replacement["dispatch_token"])["status"], "COMPLETED")
+
     def committed_copy(self):
         from ury.ury_pos import api
 

@@ -281,6 +281,19 @@ describe("PaymentDialog fiscal receipt order", () => {
     expect(localStorage.getItem("ury_pending_fiscal_reprints")).toBeNull();
   });
 
+  it("removes a permanently refused registration without dispatch or another retry", async () => {
+    const { queuePendingFiscalReprint, flushPendingFiscalReprints } = await import("../lib/efris-print");
+    const profile = { print_type: "qz" } as const;
+    await queuePendingFiscalReprint({ invoice: "OLD", posProfile: profile });
+    vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN-1" } });
+    vi.mocked(call.post).mockClear().mockRejectedValue({ httpStatus: 403, exc_type: "PermissionError" });
+    await flushPendingFiscalReprints(profile);
+    await flushPendingFiscalReprints(profile);
+    expect(localStorage.getItem("ury_pending_fiscal_reprints")).toBeNull();
+    expect(call.post).toHaveBeenCalledTimes(1);
+    expect(printBillCopy).not.toHaveBeenCalled();
+  });
+
   it.each(["pending", "immediate"])("passes the named receipt queue through %s fiscal replay", async path => {
     const { queuePendingFiscalReprint, flushPendingFiscalReprints, triggerPostReplayFiscalPrint } = await import("../lib/efris-print");
     const profile = { print_type: "qz" as const, qz_host: "localhost", printer: "Receipt" };
