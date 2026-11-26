@@ -21,10 +21,10 @@ vi.mock('./invoice-api', async () => {
   }
 })
 
+import { call } from '@ury/core'
 import { printOrder } from './print'
 import {
   assertNetworkPrintSuccess,
-  getInvoicePrintHtml,
   networkPrint,
   printPosPage,
   updatePrintStatus,
@@ -61,6 +61,8 @@ describe('printOrder transports', () => {
     })
     expect(printPosPage).toHaveBeenCalledWith('INV-UNSAFE', 'Merged POS Invoice Format')
 
+    const copy = '<p>COPY #2 / REPRINT</p>'
+    vi.mocked(call.post).mockResolvedValue({ message: { delivery_id: 'd', html: copy, invoice_revision: 'rev' } })
     await printOrder({
       orderId: 'INV-QZ',
       posProfile: {
@@ -71,11 +73,12 @@ describe('printOrder transports', () => {
         letter_head: 'Grand Terrace Receipt',
       },
     })
-    expect(getInvoicePrintHtml).toHaveBeenCalledWith(
-      'INV-QZ',
-      'Merged POS Invoice Format',
-      'Grand Terrace Receipt'
-    )
+    expect(call.post).toHaveBeenNthCalledWith(1, expect.stringContaining('prepare_receipt_delivery'),
+      expect.objectContaining({ print_format: 'Merged POS Invoice Format', letterhead: 'Grand Terrace Receipt' }))
+    expect(printWithQz).toHaveBeenCalledWith('localhost', copy, 'Printer-1')
+    expect(call.post).toHaveBeenNthCalledWith(2, expect.stringContaining('complete_receipt_delivery'),
+      { invoice: 'INV-QZ', delivery_id: 'd' })
+    expect(vi.mocked(call.post).mock.invocationCallOrder[0]).toBeLessThan(printWithQz.mock.invocationCallOrder[0])
   })
 
   it('honors network Success without double-marking', async () => {

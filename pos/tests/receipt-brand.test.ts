@@ -25,7 +25,7 @@ it.each([['POS', posPrint], ['dashboard', dashboardPrint]] as const)(
   '%s browser printview explicitly suppresses letterhead', async (_, print) => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     try {
-      await print({ orderId: 'INV-1', posProfile: { print_type: 'socket' } as never, printFormat: 'Thermal receipt' });
+      await print({ orderId: 'INV-1', posProfile: { print_type: 'socket' } as never, skipStatusUpdate: true, printFormat: 'Thermal receipt' });
       const params = new URL(String(open.mock.lastCall![0]), location.origin).searchParams;
       expect(params.get('format')).toBe('Thermal receipt');
       expect(params.get('no_letterhead')).toBe('1');

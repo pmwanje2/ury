@@ -107,7 +107,8 @@ test("replayed offline settlement enters the pending->reprint path and prints CO
     print_format: "Restaurant Receipt 80mm",
     efris_print_wait_seconds: 0,
   };
-  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  const openSpy = vi.spyOn(window, "open").mockReturnValue({ closed: true } as Window);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
   const getSpy = vi.spyOn(call, "get").mockResolvedValue({ message: { efris_status: "Pending", fdn: null } });
   const postSpy = vi.spyOn(call, "post").mockImplementation(async (method: string) => {
     if (method === "ury.ury_pos.api.queue_fiscal_reprint") {
@@ -180,5 +181,5 @@ test("replayed offline settlement enters the pending->reprint path and prints CO
       delivery: "browser",
     }),
   );
-  expect(openSpy).toHaveBeenCalledWith(expect.stringContaining("copy_number=1"), "_blank", "noopener,noreferrer");
+  expect(openSpy).toHaveBeenCalledWith(expect.stringContaining("copy_number=1"), "_blank");
 });

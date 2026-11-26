@@ -71,9 +71,12 @@ describe('resolvePrintFormat safety & default guest-check fallback', () => {
 
 describe('printOrder and printBillCopy letterhead forwarding', () => {
   const openSpy = vi.fn();
+  const snapshot = { html: '<p>COPY #2 / REPRINT</p>', invoice_revision: 'rev2', print_url: '/authorized-receipt?trigger_print=1' };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    openSpy.mockReturnValue({ closed: true });
+    vi.spyOn(window, 'confirm').mockReset().mockReturnValue(true);
     vi.mocked(printWithQz).mockReset();
     vi.stubGlobal('open', openSpy);
   });
@@ -118,13 +121,13 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     const events: string[] = [];
     vi.mocked(call.post).mockImplementation(async (method: string) => {
       events.push(method.split('.').pop()!);
-      return { message: { delivery_id: 'receipt-1' } };
+      return { message: { ...snapshot, delivery_id: 'receipt-1' } };
     });
     vi.mocked(printWithQz).mockImplementation(async () => { events.push('dispatch'); });
     const params = { orderId: 'INV-1', posProfile: makeProfile({ print_type: 'qz', printer: 'Front Desk' }) };
     await printOrder(params);
     expect(events).toEqual(['prepare_receipt_delivery', 'dispatch', 'complete_receipt_delivery']);
-    expect(printWithQz).toHaveBeenCalledWith('localhost', expect.any(String), 'Front Desk');
+    expect(printWithQz).toHaveBeenCalledWith('localhost', snapshot.html, 'Front Desk');
     events.length = 0;
     vi.mocked(printWithQz).mockRejectedValueOnce(new Error('QZ_NOT_RUNNING'));
     vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
@@ -133,7 +136,7 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
   });
 
   it('records fallback delivery only when the cashier confirms the browser receipt printed', async () => {
-    vi.mocked(call.post).mockResolvedValue({ message: { delivery_id: 'receipt-2' } });
+    vi.mocked(call.post).mockResolvedValue({ message: { ...snapshot, delivery_id: 'receipt-2' } });
     vi.mocked(printWithQz).mockRejectedValue(new Error('QZ_NOT_RUNNING'));
     const popup = { closed: true, opener: window };
     openSpy.mockReturnValue(popup);
@@ -143,11 +146,41 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     expect(call.post).not.toHaveBeenCalledWith(expect.stringContaining('complete_receipt_delivery'), expect.anything());
     vi.mocked(window.confirm).mockReturnValue(true);
     await expect(printOrder(params)).resolves.toBe('socket');
-    expect(openSpy.mock.lastCall?.[0]).toContain('trigger_print=1');
+    expect(openSpy.mock.lastCall?.[0]).toBe(snapshot.print_url);
     expect(call.post).toHaveBeenCalledWith(expect.stringContaining('complete_receipt_delivery'), {
       invoice: 'INV-2', delivery_id: 'receipt-2',
     });
     vi.mocked(printWithQz).mockResolvedValue(undefined);
+  });
+
+  it.each([{ status: 'Failure', message: 'queue offline' }, {}, null])('does not finalize a rejected or missing network acknowledgement %j', async (message) => {
+    vi.mocked(call.post).mockResolvedValue({ message });
+    await expect(printOrder({ orderId: 'N', posProfile: makeProfile({ print_type: 'network' }) })).rejects.toThrow();
+    expect(call.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('cannot complete a browser-only receipt when the cashier cancels or the popup is blocked', async () => {
+    vi.mocked(call.post).mockResolvedValue({ message: { ...snapshot, delivery_id: 'd' } });
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const params = { orderId: 'B', posProfile: makeProfile() };
+    await expect(printOrder(params)).rejects.toThrow();
+    openSpy.mockReturnValue(null);
+    HTMLDialogElement.prototype.showModal ??= function () { this.open = true; };
+    const blocked = printOrder(params);
+    const cancelled = expect(blocked).rejects.toThrow();
+    await vi.waitFor(() => expect(document.querySelector('dialog button:last-child')).toBeTruthy());
+    (document.querySelector('dialog button:last-child') as HTMLButtonElement).click();
+    await cancelled;
+    expect(call.post).not.toHaveBeenCalledWith(expect.stringMatching(/complete_receipt_delivery|qz_print_update/), expect.anything());
+  });
+
+  it('keeps POS open and requires confirmation when a numbered QZ copy falls back', async () => {
+    vi.mocked(call.post).mockResolvedValue({ message: { status: 'COMPLETED', delivery: 'qz', copy_number: 4,
+      html: 'COPY #4', print_url: '/printview?copy_number=4' } });
+    vi.mocked(printWithQz).mockRejectedValue(new Error('QZ_NOT_RUNNING'));
+    vi.mocked(window.confirm).mockReturnValueOnce(true).mockReturnValueOnce(false);
+    await expect(printBillCopy({ orderId: 'C', posProfile: makeProfile({print_type: 'qz'}), idempotencyKey: 'key' })).rejects.toThrow();
+    expect(openSpy).toHaveBeenCalledWith('/printview?copy_number=4', '_blank');
   });
 
   it('uses configured letterhead and defaults to Merged POS Invoice Format when print_format is empty or unsafe', async () => {

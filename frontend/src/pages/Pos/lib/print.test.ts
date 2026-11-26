@@ -16,7 +16,7 @@ vi.mock('@ury/core', async () => {
   };
 });
 
-import { call } from '@ury/core';
+import { call, printWithQz } from '@ury/core';
 import { MERGED_POS_INVOICE_PRINT_FORMAT, resolvePrintFormat } from './invoice-api';
 import { printOrder } from './print';
 import type { PosProfileCombined } from './pos-profile-api';
@@ -102,6 +102,7 @@ describe('frontend Pos printOrder & resolvePrintFormat (P1-5)', () => {
     expect(url).toContain('no_letterhead=0');
     expect(url).toContain(`letterhead=${encodeURIComponent('Grand Terrace Receipt')}`);
 
+    vi.mocked(call.post).mockClear().mockResolvedValue({ message: { delivery_id: 'd', invoice_revision: 'v', html: 'COPY #2 / REPRINT' } });
     await printOrder({
       orderId: 'POS-INV-FE-2',
       posProfile: makeProfile({
@@ -111,15 +112,11 @@ describe('frontend Pos printOrder & resolvePrintFormat (P1-5)', () => {
         letter_head: 'Grand Terrace Receipt',
       } as Partial<PosProfileCombined>),
     });
-    expect(call.get).toHaveBeenCalledWith(
-      'frappe.www.printview.get_html_and_style',
-      expect.objectContaining({
-        doc: 'POS Invoice',
-        name: 'POS-INV-FE-2',
-        print_format: MERGED_POS_INVOICE_PRINT_FORMAT,
-        no_letterhead: 0,
-        letterhead: 'Grand Terrace Receipt',
-      })
-    );
+    expect(call.post).toHaveBeenNthCalledWith(1, expect.stringContaining('prepare_receipt_delivery'),
+      expect.objectContaining({ print_format: MERGED_POS_INVOICE_PRINT_FORMAT, letterhead: 'Grand Terrace Receipt' }));
+    expect(printWithQz).toHaveBeenCalledWith('localhost', 'COPY #2 / REPRINT', null);
+    expect(vi.mocked(call.post).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(printWithQz).mock.invocationCallOrder[0]);
+    expect(call.post).toHaveBeenNthCalledWith(2, expect.stringContaining('complete_receipt_delivery'),
+      { invoice: 'POS-INV-FE-2', delivery_id: 'd' });
   });
 });

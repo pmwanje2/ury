@@ -227,7 +227,7 @@ class TestQzPrintUpdate(BillPrintTestCase):
 			result = qz_print_update("INV-001")
 
 		self.assertEqual(result, {"status": "Success"})
-		mock_release.assert_called_once_with("T-01", printed=True, branch=None)
+		mock_release.assert_called_once_with("T-01", printed=True, branch=None, commit=False)
 
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
@@ -532,11 +532,8 @@ class TestReceiptDelivery(BillPrintTestCase):
 		from ury.ury.api import ury_print as api
 		from uuid import uuid4
 		invoice = "Fixture-" + uuid4().hex
-		frappe.get_doc({"doctype": "POS Invoice", "name": invoice}).db_insert()
-		doc = _ordinary_invoice()
-		doc.docstatus = 1
-		# A synthetic invoice exercises the delivery ledger without creating a fiscal sale.
-		with patch.object(api, "_receipt_invoice", return_value=doc, create=True), patch.object(api, "_record_delivered_bill", return_value={"status": "Success"}, create=True) as effects:
+		frappe.get_doc({"doctype": "POS Invoice", "name": invoice, "docstatus": 1}).db_insert()
+		with patch("frappe.www.printview.get_html_and_style", return_value={"html": "<p>receipt</p>"}), patch.object(api, "_record_delivered_bill", return_value={"status": "Success"}) as effects:
 			request_id = str(uuid4())
 			first = api.prepare_receipt_delivery(invoice, request_id)
 			self.assertEqual(api.prepare_receipt_delivery(invoice, request_id), first)

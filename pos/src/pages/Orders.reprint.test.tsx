@@ -156,7 +156,8 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
   });
 
   it("prints a settled order via print_bill_copy (COPY #n) instead of printOrder", async () => {
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue({ closed: true } as Window);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     const printOrderSpy = vi.spyOn(printLib, "printOrder");
 
     render(<Orders />);
@@ -177,7 +178,6 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
     expect(openSpy).toHaveBeenCalledWith(
       expect.stringContaining("copy_number=2"),
       "_blank",
-      "noopener,noreferrer",
     );
     openSpy.mockRestore();
   });
