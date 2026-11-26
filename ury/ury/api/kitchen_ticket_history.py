@@ -36,10 +36,12 @@ def ticket_ownership(invoice):
     return owners if isinstance(ledger.get("applied_rounds"), dict) and isinstance(owners, dict) else {}
 
 
-# The ticket expression is always a fixed SQL identifier supplied by the caller.
+# Sentinel commas let the same pattern strip both outer and inter-token padding.
+# UCP covers Unicode whitespace; Python str.strip also accepts separators U+001C–U+001F.
 WHOLE_COMPENSATION = """EXISTS (SELECT 1 FROM `tabURY KOT` c
     WHERE c.docstatus = 1 AND c.type = 'Cancelled'
-      AND FIND_IN_SET({ticket}, REPLACE(c.original_kot, ', ', ',')))"""
+      AND FIND_IN_SET(BINARY {ticket}, REGEXP_REPLACE(CONCAT(',', c.original_kot, ','),
+          '(*UCP)[[:space:]\x1c-\x1f]*,[[:space:]\x1c-\x1f]*', ',')))"""
 
 
 def ticket_owner_query(frappe, query, filters=None, *, invoices=None):
