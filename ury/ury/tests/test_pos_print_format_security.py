@@ -221,12 +221,20 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 			):
 				for fmt in (GUEST_CHECK_PRINT_FORMAT, "URY Bill Copy"):
 					with self.subTest(print_format=fmt):
-						out = get_html_and_style(
-							doc=json.dumps(doc.as_dict(), default=str),
-							print_format=fmt,
-							no_letterhead=0,
-						)
-						html = out.get("html") or ""
+						if fmt == "URY Bill Copy":
+							from ury.ury_pos.api import _render_copy_html
+
+							# Exercise the server renderer used after reserving a numbered QZ copy.
+							doc.docstatus = 1
+							from frappe.www.printview import get_rendered_template
+
+							full_html, _timestamp = _render_copy_html(doc, doc.name, copy_number=2)
+							self.assertIn("data:image/svg+xml;base64,", full_html)
+							html = get_rendered_template(doc, print_format=frappe.get_doc("Print Format", fmt), no_letterhead=1)
+							self.assertIn("COPY #2", html)
+						else:
+							out = get_html_and_style(doc=json.dumps(doc.as_dict(), default=str), print_format=fmt, no_letterhead=0)
+							html = out.get("html") or ""
 						self.assertIn("data:image/svg+xml;base64,", html)
 						self.assertNotIn("/files/_test_maximus_logo.svg", html)
 						# Standalone HTML renders to valid PDF bytes via wkhtmltopdf with zero network fetches

@@ -71,6 +71,14 @@ class SiteContracts(TestCase):
         response = receipts.receipt_delivery_view(result["delivery_id"])
         self.assertIn(result["html"], response.get_data(as_text=True))
 
+    def test_guest_reprint_delivered_by_qz_cannot_open_browser_view(self):
+        with patch("ury.ury_pos.floor_actions.authorize_and_count_bill_print",
+                   return_value={"print_number": 2, "reprint_label": "COPY #2 / REPRINT"}):
+            delivery = self.prepare()
+        frappe.db.set_value("URY Receipt Delivery", delivery["delivery_id"], "delivered", 1)
+        with self.assertRaises(frappe.PermissionError):
+            receipts.receipt_delivery_view(delivery["delivery_id"])
+
     def station_fixture(self):
         self.company = row("Company", name=self.prefix, abbr=self.prefix[-5:]).name
         self.branch = row("Branch", name=self.prefix, company=self.company).name
@@ -180,6 +188,7 @@ class SiteContracts(TestCase):
             self.assertEqual(frappe.db.get_value(api._COPY_LOG, reserved["print_job_id"], "status"), "RESERVED")
             self.assertEqual(queue.reload().status, "AWAITING_FDN")
             lease = {k: reserved[k] for k in ("dispatch_token",) if k in reserved}
+            api.begin_bill_copy_dispatch(invoice.name, key, **lease, transport="qz")
             fiscal.get_efris_status = lambda *args: {}
             with self.assertRaises(frappe.PermissionError):
                 api.confirm_bill_copy(invoice.name, key, **lease)
@@ -301,7 +310,7 @@ class SiteContracts(TestCase):
             self.assertNotEqual(first["dispatch_token"], replacement["dispatch_token"])
             with self.assertRaises(frappe.PermissionError):
                 api.begin_bill_copy_dispatch(invoice, "copy", first["dispatch_token"])
-            api.begin_bill_copy_dispatch(invoice, "copy", replacement["dispatch_token"])
+            api.begin_bill_copy_dispatch(invoice, "copy", replacement["dispatch_token"], "qz")
         with patch("frappe.utils.now_datetime", return_value=now_datetime() + timedelta(hours=1)):
             replay = reserve()
             self.assertNotIn("print_url", replay)
@@ -346,6 +355,7 @@ class SiteContracts(TestCase):
         for stage in ("reassigned", "completed"):
             with self.subTest(stage=stage):
                 if stage == "completed":
+                    api.begin_bill_copy_dispatch(invoice, "copy", replacement["dispatch_token"], "qz")
                     api.confirm_bill_copy(invoice, "copy", replacement["dispatch_token"])
                 with self.assertRaises(frappe.PermissionError):
                     self.render_copy(invoice, original["copy_number"])
@@ -374,8 +384,90 @@ class SiteContracts(TestCase):
         with self.assertRaises(frappe.PermissionError):
             api.release_bill_copy(invoice, "qz", token)
         self.assertNotIn("dispatch_token", api.print_bill_copy(invoice, "qz", delivery="qz"))
-        self.assertTrue(api.begin_bill_copy_dispatch(invoice, "qz", token, "browser")["render_grant"])
+        claim = api.begin_bill_copy_dispatch(invoice, "qz", token, "browser")
+        self.render_copy(invoice, copy["copy_number"], claim["render_grant"])
         self.assertEqual(api.confirm_bill_copy(invoice, "qz", token)["status"], "COMPLETED")
+
+    def fiscal_reservation(self, transport):
+        from ury.ury_pos import api
+
+        invoice = self.committed_copy()
+        pending = f"PENDING-EFRIS-{invoice}"
+        row(api._COPY_LOG, name=pending, print_job_id=pending, invoice=invoice,
+            job_owner="Administrator", status="AWAITING_FDN")
+        frappe.db.commit()
+        self.enterContext(patch.object(api, "_fiscal_statuses", return_value=[{"fdn": "FDN-1"}]))
+        key = f"efris-auto-{invoice}"
+        return invoice, key, api.print_bill_copy(invoice, key, delivery=transport)
+
+    def test_reserved_fiscal_copy_cannot_be_confirmed(self):
+        from ury.ury_pos import api
+
+        invoice, key, copy = self.fiscal_reservation("browser")
+        with self.assertRaises(frappe.PermissionError):
+            api.confirm_bill_copy(invoice, key, copy["dispatch_token"])
+        self.assertEqual(frappe.db.get_value(api._COPY_LOG, f"PENDING-EFRIS-{invoice}", "status"), "AWAITING_FDN")
+
+    def test_fiscal_confirmation_requires_consumed_browser_grant(self):
+        from ury.ury_pos import api
+
+        invoice, key, copy = self.fiscal_reservation("browser")
+        token = copy["dispatch_token"]
+        claim = api.begin_bill_copy_dispatch(invoice, key, token, "browser")
+        with self.assertRaises(frappe.PermissionError):
+            api.confirm_bill_copy(invoice, key, token)
+        self.assertEqual(frappe.db.get_value(api._COPY_LOG, f"PENDING-EFRIS-{invoice}", "status"), "AWAITING_FDN")
+        self.render_copy(invoice, copy["copy_number"], claim["render_grant"])
+        for _ in range(2):
+            self.assertEqual(api.confirm_bill_copy(invoice, key, token)["status"], "COMPLETED")
+
+    def test_qz_fiscal_recovery_is_session_bound_and_cannot_repeat_qz(self):
+        from ury.ury_pos import api
+
+        invoice, key, copy = self.fiscal_reservation("qz")
+        api.begin_bill_copy_dispatch(invoice, key, copy["dispatch_token"], "qz")
+        replay = lambda: api.print_bill_copy(invoice, key, delivery="qz")
+        with patch.dict(frappe.session, sid="another-login"):
+            self.assertNotIn("recovery_token", replay())
+        recovered = replay()
+        self.assertNotIn("html", recovered)
+        self.assertNotIn("dispatch_token", recovered)
+        proof = recovered["recovery_token"]
+        with patch.dict(frappe.session, sid="another-login"), self.assertRaises(frappe.PermissionError):
+            api.begin_bill_copy_dispatch(invoice, key, proof, "browser")
+        with self.assertRaises(frappe.PermissionError):
+            api.begin_bill_copy_dispatch(invoice, key, proof, "qz")
+        claim = api.begin_bill_copy_dispatch(invoice, key, proof, "browser")
+        self.render_copy(invoice, copy["copy_number"], claim["render_grant"])
+        for _ in range(2):
+            self.assertEqual(api.confirm_bill_copy(invoice, key, proof)["status"], "COMPLETED")
+
+    def test_concurrent_guest_reprint_views_allow_one_render(self):
+        from frappe.app import sync_database
+
+        invoice = self.committed_copy()
+        delivery = row("URY Receipt Delivery", name=self.prefix, invoice=invoice, print_number=2,
+                       reprint_label="COPY #2 / REPRINT", receipt_html="<p>COPY #2 / REPRINT</p>")
+        frappe.db.commit()
+        def cleanup():
+            frappe.db.rollback()
+            frappe.db.delete("URY Receipt Delivery", {"name": delivery.name})
+            frappe.db.commit()
+        self.addCleanup(cleanup)
+
+        def view():
+            try:
+                response = receipts.receipt_delivery_view(delivery.name)
+            except frappe.PermissionError:
+                return "refused"
+            self.assertIn("COPY #2 / REPRINT", response.get_data(as_text=True))
+            with patch.object(frappe.local, "request", SimpleNamespace(method="GET"), create=True):
+                sync_database()
+            return "rendered"
+
+        self.assertCountEqual(self.overlap(view), ["rendered", "refused"])
+        with self.assertRaises(frappe.PermissionError):
+            receipts.receipt_delivery_view(delivery.name)
 
     def committed_copy(self):
         from ury.ury_pos import api
@@ -443,6 +535,7 @@ class SiteContracts(TestCase):
         name = self.committed_copy()
         reservation = api.print_bill_copy(name, "one", delivery="browser")
         args = {k: reservation[k] for k in ("dispatch_token",) if k in reservation}
+        api.begin_bill_copy_dispatch(name, "one", **args, transport="qz")
         responses = self.overlap(lambda: api.confirm_bill_copy(name, "one", **args))
         self.assertEqual([r["status"] for r in responses], ["COMPLETED", "COMPLETED"])
         self.assertEqual({r["print_job_id"] for r in responses}, {reservation["print_job_id"]})

@@ -99,10 +99,14 @@ def render(name, doc, efris=None, e_invoices=None, *, clearing="Guest Ledger Cle
 			return "204"
 		return None
 
+	def refuse(message):
+		raise PermissionError(message)
+
 	env = SandboxedEnvironment(undefined=DebugUndefined, autoescape=False)
 	env.globals.update(
 		_=lambda text: text,
 		frappe=SimpleNamespace(
+			throw=refuse,
 			get_fullname=lambda user=None: user or "cashier@example.com",
 			get_doc=get_doc,
 			get_meta=lambda doctype: SimpleNamespace(
@@ -309,11 +313,10 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 			self.assertIn(needle, flat)
 		self.assertIn(f'src="{QR}"', html)
 
-	def test_a_copy_without_in_memory_number_falls_back_to_log_or_hash_one(self):
-		flat_default = text(render(COPY, bill(copy_number=None))[0])
-		self.assertIn("COPY #1", flat_default)
-		flat_logged = text(render(COPY, bill(copy_number=None), copy_log_max=5)[0])
-		self.assertIn("COPY #5", flat_logged)
+	def test_a_copy_without_an_authorized_number_refuses_rendering(self):
+		for highest in (None, 5):
+			with self.subTest(highest=highest), self.assertRaisesRegex(PermissionError, "authorized numbered receipt"):
+				render(COPY, bill(copy_number=None), copy_log_max=highest)
 
 	def test_a_copy_of_a_merged_bill_includes_partner_items_payments_and_fdn(self):
 		partner = bill(
