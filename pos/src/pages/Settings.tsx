@@ -26,7 +26,7 @@ function SecurityControls({ userName, posProfileName }: { userName: string; posP
               : external ? <Badge variant="outline">{t('approval_pin.status_external')}</Badge>
               : status && <PinStatusBadges {...status} />}
             {status && <p className="text-sm text-muted-foreground">
-              {t(external ? 'approval_pin.external_managed' : 'settings.personal_pin_note')}
+              {t(status.reauth?.mode === 'unavailable' ? 'approval_pin.unavailable' : external ? 'approval_pin.external_managed' : 'settings.personal_pin_note')}
             </p>}
             <Button onClick={openDialog}>{t('settings.manage_my_pin')}</Button>
           </CardContent>

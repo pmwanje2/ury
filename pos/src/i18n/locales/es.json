@@ -697,7 +697,7 @@
   "settings": {
     "title": "Configuración",
     "security": "Seguridad y acceso",
-    "personal_pin_note": "Configura tu PIN de aprobación con tu contraseña. Es personal. Nunca lo compartas.",
+    "personal_pin_note": "Tu PIN de aprobación es personal. Nunca lo compartas.",
     "manage_my_pin": "Gestionar mi PIN de aprobación",
     "floor_devices": "Tabletas de sala y PIN de camareros",
     "waiter_pin_note": "Los camareros usan un PIN de sala (4 dígitos por defecto) para cambiar de usuario en las tabletas vinculadas. Las autorizaciones de caja requieren un PIN de aprobación distinto.",
@@ -1043,6 +1043,10 @@
     "error_reason": "Elige un motivo activo (y añade una nota breve si es obligatoria)."
   },
   "approval_pin": {
+    "unavailable": "La configuración del PIN de aprobación no está disponible en este sitio.",
+    "confirm_identity": "Confirma tu identidad ({{label}})",
+    "confirm_failed": "Confirma tu identidad e inténtalo de nuevo.",
+    "save_uncertain": "Se perdió la conexión. Comprueba si se guardó tu PIN antes de volver a intentarlo.",
     "status_external": "Gestión externa",
     "title": "Mi PIN de aprobación",
     "description": "Usa tu PIN personal para autorizar operaciones de caja sin cambiar de sesión.",
@@ -1063,7 +1067,7 @@
     "pin_format": "Introduce un PIN de aprobación de 4 a 8 dígitos.",
     "pin_mismatch": "Los PIN de aprobación no coinciden.",
     "saved": "Tu PIN de aprobación se ha guardado.",
-    "save_failed": "No se pudo guardar tu PIN de aprobación. Revisa tu contraseña e inténtalo de nuevo.",
+    "save_failed": "No se pudo guardar tu PIN de aprobación.",
     "load_failed": "No se pudo cargar el estado del PIN de aprobación.",
     "clear_policy_note": "Los encargados pueden borrar el PIN de un empleado para que configure uno nuevo. Nadie puede leer ni establecer el PIN de otra persona.",
     "clear_pin": "Borrar PIN",

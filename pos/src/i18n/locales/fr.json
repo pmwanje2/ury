@@ -628,7 +628,7 @@
   "settings": {
     "title": "Paramètres",
     "security": "Sécurité et accès",
-    "personal_pin_note": "Définissez votre code d’approbation avec votre mot de passe. Ce code est personnel. Ne le partagez jamais.",
+    "personal_pin_note": "Votre code d’approbation est personnel. Ne le partagez jamais.",
     "manage_my_pin": "Gérer mon code d’approbation",
     "floor_devices": "Tablettes de salle et codes des serveurs",
     "waiter_pin_note": "Les serveurs utilisent un code de salle (4 chiffres par défaut) pour changer de compte sur une tablette associée. Les dérogations en caisse nécessitent un code d’approbation distinct.",
@@ -1077,6 +1077,10 @@
     "error_reason": "Choisissez un motif actif (et ajoutez une note si nécessaire)."
   },
   "approval_pin": {
+    "unavailable": "La configuration du code d’approbation est indisponible sur ce site.",
+    "confirm_identity": "Confirmez votre identité ({{label}})",
+    "confirm_failed": "Confirmez votre identité et réessayez.",
+    "save_uncertain": "Connexion perdue. Vérifiez si votre code PIN a été enregistré avant de réessayer.",
     "status_external": "Gestion externe",
     "title": "Mon PIN d’approbation",
     "description": "Utilisez votre PIN personnel pour approuver des opérations en caisse sans changer de session.",
@@ -1097,7 +1101,7 @@
     "pin_format": "Saisissez un PIN d'approbation de 4 à 8 chiffres.",
     "pin_mismatch": "Les deux saisies du PIN ne correspondent pas.",
     "saved": "Votre PIN d'approbation a été enregistré.",
-    "save_failed": "Impossible d'enregistrer votre PIN d'approbation. Vérifiez votre mot de passe.",
+    "save_failed": "Impossible d’enregistrer votre code d’approbation.",
     "load_failed": "Impossible de charger le statut du PIN d'approbation.",
     "clear_policy_note": "Les responsables peuvent effacer le PIN d'un employé afin qu'il en choisisse un nouveau. Un PIN n'est jamais lisible ni définissable par un tiers.",
     "clear_pin": "Effacer le PIN",

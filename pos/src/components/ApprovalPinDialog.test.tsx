@@ -20,6 +20,40 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     vi.restoreAllMocks();
   });
 
+  it.each(['network', 'csrf'])('requires the IdP popup and sends one enrollment POST after %s failure', async failure => {
+    const start = 'example.central.begin';
+    vi.spyOn(call, 'get').mockResolvedValue({ message: {
+      has_pin: false, external_verifier: true, can_manage_here: true,
+      reauth: { mode: 'identity_provider', start, purpose: 'floor_pin', label: 'SSO' },
+    } });
+    const popup = { location: '', close: vi.fn(), closed: false } as unknown as Window;
+    vi.spyOn(window, 'open').mockReturnValue(popup);
+    const post = vi.spyOn(call, 'post').mockResolvedValueOnce({ message: { authorize_url: 'https://example.com/login' } })
+      .mockRejectedValue(failure === 'network' ? { httpStatus: 0, ury_network_failure: true } : { httpStatus: 403 });
+    const user = userEvent.setup();
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} />);
+    await user.type(await screen.findByLabelText(/new approval pin/i), '4826');
+    await user.type(screen.getByLabelText(/confirm approval pin/i), '4826');
+    expect(screen.queryByLabelText(/current password/i)).toBeNull();
+    await user.click(screen.getByRole('button', { name: /confirm.*SSO/i }));
+    expect(post).toHaveBeenCalledWith(start, { purpose: 'floor_pin' });
+    await waitFor(() => expect(popup.location).toBe('https://example.com/login'));
+    const send = (source: Window, origin: string, purpose: string) => window.dispatchEvent(new MessageEvent('message', {
+      source, origin, data: { type: 'siteops-reauth', ok: true, purpose },
+    }));
+    send(window, location.origin, 'floor_pin');
+    send(popup, 'https://example.com', 'floor_pin');
+    send(popup, location.origin, 'other');
+    await Promise.resolve();
+    expect(post).toHaveBeenCalledTimes(1);
+    send(popup, location.origin, 'floor_pin');
+    send(popup, location.origin, 'floor_pin');
+    const alert = await screen.findByRole('alert');
+    if (failure === 'network') expect(alert).toHaveTextContent(/check whether your PIN/i);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenLastCalledWith('ury.ury_pos.override.set_my_pin', { pin_secret: '4826' });
+  });
+
   it('enrols the signed-in user approval PIN after re-entering own password', async () => {
     vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
       if (method === 'ury.ury_pos.override.my_pin_status') {
@@ -177,10 +211,21 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     expect(screen.queryByText('Locked')).not.toBeInTheDocument();
   });
 
+  it('keeps self enrollment available without offering staff management to an outlet manager', async () => {
+    const get = vi.spyOn(call, 'get').mockResolvedValue({ message: {
+      external_verifier: true, has_pin: false, can_manage_here: true, can_manage_staff_pins: false,
+      reauth: { mode: 'identity_provider', purpose: 'floor_pin', label: 'SSO', start: 'example.begin' },
+    } });
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
+    expect(await screen.findByRole('button', { name: /confirm.*SSO/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /clear staff approval pins/i })).toBeNull();
+    expect(get).not.toHaveBeenCalledWith('ury.ury_pos.override.list_pin_users', expect.anything());
+  });
+
   it('shows external staff flags and updates the row after a manager clears its PIN', async () => {
     vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
       if (method === 'ury.ury_pos.override.my_pin_status') {
-        return { message: { has_pin: true, external_verifier: true, can_manage_here: true } };
+        return { message: { has_pin: true, external_verifier: true, can_manage_here: true, can_manage_staff_pins: true } };
       }
       return { message: [{ user: 'staff@example.com', full_name: 'Staff Member', has_pin: true, locked: true }] };
     });
