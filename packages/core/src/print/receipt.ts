@@ -1,7 +1,8 @@
 export { prepareReceipt, completeReceipt, dispatchReceipt } from '../../../../ury/public/js/receipt-delivery.js';
 
-export async function confirmBrowserDelivery(url: string): Promise<void> {
-  let popup = window.open(url, '_blank');
+export async function confirmBrowserDelivery(url: string, beforeNavigate?: () => Promise<void>): Promise<void> {
+  const initialUrl = beforeNavigate ? 'about:blank' : url;
+  let popup = window.open(initialUrl, '_blank');
   if (!popup) {
     // The QZ attempt may have outlived browser user activation. An actual click
     // opens printview without repeating the receipt authorization.
@@ -20,7 +21,7 @@ export async function confirmBrowserDelivery(url: string): Promise<void> {
       cancel.onclick = dismiss;
       dialog.oncancel = dismiss;
       open.onclick = () => {
-        const receipt = window.open(url, '_blank');
+        const receipt = window.open(initialUrl, '_blank');
         if (!receipt) {
           open.textContent = 'Allow pop-ups, then open receipt';
           return;
@@ -32,6 +33,15 @@ export async function confirmBrowserDelivery(url: string): Promise<void> {
     });
   }
   popup.opener = null;
+  if (beforeNavigate) {
+    try {
+      await beforeNavigate();
+      popup.location.replace(url);
+    } catch (error) {
+      popup.close();
+      throw error;
+    }
+  }
   // Frappe closes printview after the native dialog. Browsers cannot report
   // whether the operator printed or cancelled, so confirm the physical receipt.
   while (!popup.closed) await new Promise(resolve => setTimeout(resolve, 300));

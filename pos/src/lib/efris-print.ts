@@ -172,6 +172,17 @@ function deliveryForProfile(posProfile?: ReprintPosProfile | null): 'network' | 
   return 'browser';
 }
 
+async function registerFiscalCopy(invoice: string, profile?: ReprintPosProfile | null): Promise<boolean> {
+  try {
+    const response = await call.post(QUEUE_REPRINT_METHOD, { invoice, delivery: deliveryForProfile(profile) });
+    return !['DISPATCHED', 'NOT_REQUIRED', 'FAILED', 'CANCELED'].includes(response?.message?.status);
+  } catch (error) {
+    const refusal = error as { httpStatus?: number; exc_type?: string } | null;
+    if (refusal?.httpStatus === 403 || refusal?.exc_type === 'PermissionError') return false;
+    throw error;
+  }
+}
+
 export async function queuePendingFiscalReprint({
   invoice,
   partnerInvoice,
@@ -188,10 +199,9 @@ export async function queuePendingFiscalReprint({
   }
   if (typeof call.post === 'function') {
     try {
-      await call.post(QUEUE_REPRINT_METHOD, {
-        invoice,
-        delivery: deliveryForProfile(posProfile),
-      });
+      if (!await registerFiscalCopy(invoice, posProfile)) {
+        writePendingQueue(readPendingQueue().filter(entry => entry.invoice !== invoice));
+      }
     } catch {
       // Keep local queue entry so the till retries when reachable.
     }
@@ -209,7 +219,7 @@ function copyProfile(profile: ReprintPosProfile) {
 async function dispatchFiscalCopy(invoice: string, profile: ReprintPosProfile) {
   // Local queueing can succeed while the server is offline. Re-registering the
   // same invoice is idempotent and preserves a previously fulfilled fiscal job.
-  await call.post(QUEUE_REPRINT_METHOD, { invoice, delivery: deliveryForProfile(profile) });
+  if (!await registerFiscalCopy(invoice, profile)) return null;
   return printBillCopy({
     orderId: invoice, posProfile: copyProfile(profile), idempotencyKey: `efris-auto-${invoice}`,
   });
@@ -223,12 +233,14 @@ export async function flushPendingFiscalReprints(posProfile?: ReprintPosProfile 
   if (entries.length === 0) return;
   flushing = true;
   try {
-    const remaining: PendingFiscalReprintEntry[] = [];
+    const finished = new Set<string>();
     for (const entry of entries) {
       const current = await evaluateInvoiceGroup(entry.invoice, entry.partnerInvoice);
       if (current.state === 'fiscalised') {
         try {
           const result = await dispatchFiscalCopy(entry.invoice, posProfile);
+          finished.add(entry.invoice);
+          if (!result) continue;
           showToast?.success?.(
             t('payment.fiscal_reprint_printed', {
               invoice: entry.invoice,
@@ -237,15 +249,13 @@ export async function flushPendingFiscalReprints(posProfile?: ReprintPosProfile 
             }),
           );
         } catch {
-          remaining.push(entry);
+          // Keep the entry for a later delivery attempt.
         }
       } else if (current.state === 'not_applicable') {
-        // Non-EFRIS invoice no longer waits for an FDN.
-      } else {
-        remaining.push(entry);
+        finished.add(entry.invoice);
       }
     }
-    writePendingQueue(remaining);
+    writePendingQueue(readPendingQueue().filter(entry => !finished.has(entry.invoice)));
   } finally {
     flushing = false;
   }

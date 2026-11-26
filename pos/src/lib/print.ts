@@ -98,6 +98,18 @@ export async function deliverReservedCopy(
   if (result.status !== 'RESERVED') return result;
   if (!result.dispatch_token) throw new Error('Client copy dispatch lease is unavailable.');
   const attempt = { invoice, idempotency_key: key, dispatch_token: result.dispatch_token };
+  let dispatchStarted = false;
+  let claimError = false;
+  const begin = async (transport: 'qz' | 'browser') => {
+    try {
+      const response = await call.post('ury.ury_pos.api.begin_bill_copy_dispatch', { ...attempt, transport });
+      if (response?.message?.status !== 'DISPATCHING') throw new Error('Copy dispatch was not authorized.');
+      dispatchStarted = true;
+    } catch (error) {
+      claimError = true;
+      throw error;
+    }
+  };
   try {
     if (result.delivery !== 'qz' && result.delivery !== 'browser') {
       throw new Error('Client copy reservation is unavailable.');
@@ -105,18 +117,35 @@ export async function deliverReservedCopy(
     let delivered = false;
     if (result.delivery === 'qz') {
       if (!result.html) throw new Error('Authorized QZ copy is unavailable.');
-      delivered = await deliverQzReceipt(profile, result.html);
+      try {
+        await printWithQz(profile.qz_host || 'localhost', result.html, profile.printer, () => begin('qz'));
+        delivered = true;
+      } catch (error) {
+        if (error instanceof Error && error.name === 'QzSigningRefusedError') {
+          // The signing service refused before QZ could submit the signed job.
+          dispatchStarted = false;
+          throw error;
+        }
+        if (claimError) throw error;
+        if (dispatchStarted) {
+          delivered = window.confirm(`Did COPY #${result.copy_number} print? Check the printer. OK records delivery. Cancel shows recovery options.`);
+        }
+        if (!delivered && !window.confirm(dispatchStarted
+          ? 'Print the same copy in the browser? Cancel retains the unconfirmed copy without printing again.'
+          : 'QZ Tray could not start printing. Print the copy in the browser?')) throw error;
+      }
     }
     if (!delivered) {
       if (!result.print_url && !result.copy_number) throw new Error('Authorized browser copy is unavailable.');
       const { queryString } = buildLetterheadParams(profile.letter_head);
       const url = result.print_url ||
         `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(invoice)}&format=URY%20Bill%20Copy${queryString}&trigger_print=1&copy_number=${result.copy_number}`;
-      await confirmBrowserDelivery(url);
+      await confirmBrowserDelivery(url, () => begin('browser'));
     }
   } catch (error) {
-    // A disconnected till may be unable to release. The finite lease permits recovery.
-    await call.post('ury.ury_pos.api.release_bill_copy', attempt).catch(() => undefined);
+    if (!dispatchStarted && !claimError) {
+      await call.post('ury.ury_pos.api.release_bill_copy', attempt).catch(() => undefined);
+    }
     throw error;
   }
   // A lost confirmation response must never release a copy already dispatched.

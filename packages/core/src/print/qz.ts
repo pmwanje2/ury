@@ -55,7 +55,7 @@ export function disconnectQzPrinter(): void {
   if (qz?.websocket.isActive()) qz.websocket.disconnect();
 }
 
-export async function printWithQz(host: string, htmlToPrint: string, queue?: string | null): Promise<void> {
+export async function printWithQz(host: string, htmlToPrint: string, queue?: string | null, beforeDispatch?: () => Promise<void>): Promise<void> {
   return withQzDeadline(async (signal, startPrinting) => {
     const qz = await loadQz();
     return runSignedQz(qz, call.post, async () => {
@@ -64,7 +64,12 @@ export async function printWithQz(host: string, htmlToPrint: string, queue?: str
       startPrinting();
       const printer = queue?.trim() || await qz.printers.getDefault();
       signal.throwIfAborted();
-      await qz.print(qz.configs.create(printer), [{ type: 'html', format: 'plain', data: htmlToPrint }]);
+      const config = qz.configs.create(printer);
+      if (beforeDispatch) {
+        await beforeDispatch();
+        signal.throwIfAborted();
+      }
+      await qz.print(config, [{ type: 'html', format: 'plain', data: htmlToPrint }]);
     }, signal);
   });
 }

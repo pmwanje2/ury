@@ -1029,6 +1029,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             pos_profile: posProfile,
             table,
             submit_invoice: 1,
+            ...(!effectivePrintInvoice && { fiscal_receipt_requested: 0 }),
             ...tipFields,
             ...roomFields,
             ...accountApprovalFields,
@@ -1061,6 +1062,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           });
         }
         try {
+          if (efrisOutcome.outcome === 'fiscalised') {
+            await call.post('ury.ury_pos.api.close_unused_fiscal_copy', { invoice });
+          }
           await printOrder({
             orderId: invoice,
             posProfile: storePosProfile,
