@@ -830,7 +830,6 @@ frappe.ui.form.on('URY Order', {
 								const safeFmt = (!rawFmt || unsafePosFormats.has(rawFmt)) ? 'Merged POS Invoice Format' : rawFmt;
 								const configuredLetterHead = (profile.letter_head || '').trim();
 								printDeskQzInvoice(invoice, profile, safeFmt, configuredLetterHead, async () => {
-									await frappe.call({ method: "ury.ury.api.ury_print.qz_print_update", args: { invoice } });
 									frappe.show_alert({ message: __('Invoice Printed'), indicator: 'green' });
 									$('.standard-actions').addClass('hidden-xs hidden-md');
 									frappe.ui.toolbar.clear_cache();

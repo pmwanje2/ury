@@ -682,6 +682,7 @@ def _free_tables_if_no_open_invoices(
     *,
     printed=False,
     branch=None,
+    commit=True,
 ):
 
     if not restaurant_table:
@@ -700,7 +701,7 @@ def _free_tables_if_no_open_invoices(
     if _has_open_pos_invoices_for_cluster(tables):
         return
 
-    release_merge_cluster_tables(tables)
+    release_merge_cluster_tables(tables, commit=commit)
 
 
 def _copy_invoice_item_fields(item_row, qty):

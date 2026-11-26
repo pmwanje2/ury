@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { deliverQzReceipt } from '../lib/print';
+import { confirmBrowserDelivery, deliverQzReceipt } from '../lib/print';
 import { call, parseFrappeError } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
@@ -129,9 +129,12 @@ export default function SettledBills() {
       });
       if (result.delivery === 'qz' && result.html) {
         const printed = await deliverQzReceipt(usePOSStore.getState().posProfile || {}, result.html);
-        if (!printed && result.print_url) window.open(result.print_url, '_self');
+        if (!printed) {
+          if (!result.print_url) throw new Error('Authorized browser copy is unavailable.');
+          await confirmBrowserDelivery(result.print_url);
+        }
       } else if (result.delivery === 'browser' && result.print_url) {
-        window.open(result.print_url, '_blank', 'noopener,noreferrer');
+        await confirmBrowserDelivery(result.print_url);
       }
       setOutcome(result.status);
       setMessage(

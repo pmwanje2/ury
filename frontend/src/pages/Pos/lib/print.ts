@@ -1,7 +1,7 @@
-import { printWithQz } from '@ury/core';
+import { dispatchReceipt } from "@ury/core/receipt";
+import { call, printWithQz } from '@ury/core';
 import { buildLetterheadParams } from '@ury/core/print-format';
 import {
-  getInvoicePrintHtml,
   networkPrint,
   resolvePrintFormat,
   selectNetworkPrinter,
@@ -20,12 +20,8 @@ export async function printOrder({ orderId, posProfile, printFormat }: PrintOrde
   const format = resolvePrintFormat({ custom_merged_pos_invoice: null }, printFormat || print_format);
 
   if (print_type === 'qz') {
-    if (!qz_host) {
-      throw new Error('QZ host is not set');
-    }
-    const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
-    await printWithQz(qz_host, html, printer);
-    await updatePrintStatus(orderId);
+    await dispatchReceipt(call.post, { invoice: orderId, print_format: format, letterhead: letter_head },
+      html => printWithQz(qz_host || 'localhost', html, printer));
     return 'qz';
   } else if (print_type === 'network') {
     if (cashier && !multiple_cashier) {

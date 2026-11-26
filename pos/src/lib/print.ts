@@ -1,4 +1,4 @@
-import { v4 as uuid } from 'uuid';
+import { prepareReceipt, completeReceipt } from '@ury/core/receipt';
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call, isLinkDown, printWithQz } from '@ury/core';
 import { buildLetterheadParams } from '@ury/core/print-format';
@@ -7,7 +7,6 @@ import {
   networkPrint,
   resolvePrintFormat,
   selectNetworkPrinter,
-  updatePrintStatus
 } from './invoice-api';
 import { PosProfileCombined } from './pos-profile-api';
 
@@ -96,13 +95,13 @@ export async function printBillCopy({
     const url =
       result.print_url ||
       `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}&format=URY%20Bill%20Copy${letterheadParams}&trigger_print=1${copyParam}`;
-    window.open(url, fallback ? '_self' : '_blank', fallback ? undefined : 'noopener,noreferrer');
+    await confirmBrowserDelivery(url);
   }
   return result;
 }
 
-async function receiptRequest<T>(method: string, args: Record<string, unknown>): Promise<T> {
-  const post = () => call.post<T>(`ury.ury.api.ury_print.${method}`, args);
+async function receiptRequest(method: string, args: Record<string, unknown>) {
+  const post = () => call.post<{ message: unknown }>(method, args);
   try {
     return await post();
   } catch (error) {
@@ -112,7 +111,7 @@ async function receiptRequest<T>(method: string, args: Record<string, unknown>):
   }
 }
 
-async function confirmBrowserDelivery(url: string): Promise<void> {
+export async function confirmBrowserDelivery(url: string): Promise<void> {
   let popup = window.open(url, '_blank');
   if (!popup) {
     // The QZ attempt may have outlived browser user activation. An actual click
@@ -164,50 +163,38 @@ export async function printOrder({
   const format = resolvePrintFormat({ custom_merged_pos_invoice: null }, printFormat || print_format);
   const auth = approvalToken || reason || reasonNote ? { approvalToken, reason, reasonNote } : undefined;
 
-  const fallback = print_type === 'qz';
-  let deliveryId: string | undefined;
-  const completeDelivery = async () => {
-    if (!deliveryId) return;
-    try {
-      await receiptRequest('complete_receipt_delivery', { invoice: orderId, delivery_id: deliveryId });
-    } catch {
-      throw new Error('Receipt delivered, but its status could not be confirmed. Check the invoice before reprinting.');
-    }
-  };
-  if (fallback) {
-    const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
-    if (!skipStatusUpdate) {
-      const { message } = await receiptRequest<{ message: { delivery_id: string } }>(
-        'prepare_receipt_delivery', {
-          invoice: orderId, request_id: uuid(), approval_token: approvalToken,
-          reason, reason_note: reasonNote,
-        },
-      );
-      if (!message?.delivery_id) throw new Error('Receipt authorization was unavailable.');
-      deliveryId = message.delivery_id;
-    }
-    if (await deliverQzReceipt({ qz_host, printer }, html)) {
-      await completeDelivery();
-      return 'qz';
-    }
-  } else if (print_type === 'network') {
+  if (print_type === 'network') {
     if (cashier && !multiple_cashier) {
       await networkPrint(orderId, printer as string, format as string, auth);
     } else {
       await selectNetworkPrinter(orderId, name, format, auth);
     }
-    if (!skipStatusUpdate) {
-      await updatePrintStatus(orderId);
-    }
     return 'network';
   }
-  if (!fallback && !skipStatusUpdate) await updatePrintStatus(orderId, auth);
+  if (!skipStatusUpdate) {
+    const receipt = await prepareReceipt(receiptRequest, {
+      invoice: orderId, print_format: format, letterhead: letter_head,
+      approval_token: approvalToken, reason, reason_note: reasonNote,
+    });
+    if (receipt.delivered) return print_type === 'qz' ? 'qz' : 'socket';
+    const qzDelivered = print_type === 'qz' && await deliverQzReceipt({ qz_host, printer }, receipt.html);
+    if (!qzDelivered) {
+      if (!receipt.print_url) throw new Error('Authorized browser receipt is unavailable.');
+      await confirmBrowserDelivery(receipt.print_url);
+    }
+    await completeReceipt(receiptRequest, orderId, receipt);
+    return qzDelivered ? 'qz' : 'socket';
+  }
+  // Already-fiscalized receipts do not update draft check or table state.
+  if (print_type === 'qz') {
+    const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
+    if (await deliverQzReceipt({ qz_host, printer }, html)) return 'qz';
+  }
   const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
   const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
   const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
-  if (fallback) {
+  if (print_type === 'qz') {
     await confirmBrowserDelivery(url);
-    await completeDelivery();
   } else {
     window.open(url, '_blank', 'noopener,noreferrer');
   }

@@ -4,34 +4,25 @@ const deskQzReady = new Promise(resolve => {
     if (loading && typeof loading.then === 'function') loading.then(resolve, resolve);
 });
 
-async function printDeskQzInvoice(invoice, profile, safePrintFormat, configuredLetterHead, onPrinted = updateMergedInvoicePrint) {
+async function printDeskQzInvoice(invoice, profile, safePrintFormat, configuredLetterHead, onPrinted = showPrintedInvoice) {
     let signing;
     let printed = false;
     try {
         signing = await import('/assets/ury/js/qz-signing.js');
         await deskQzReady;
-        const { message } = await frappe.call({
-            method: "frappe.www.printview.get_html_and_style",
-            args: {
-                doc: "POS Invoice",
-                name: invoice,
-                print_format: safePrintFormat,
-                no_letterhead: configuredLetterHead ? 0 : 1,
-                letterhead: configuredLetterHead || "No Letterhead",
-                _lang: 'en',
-            },
-        });
-        if (!message?.html) throw new Error("Invoice print content is unavailable");
-
-        await signing.runSignedQz(qz, (method, args) => frappe.call({ method, args, silent: true }), async () => {
+        const receipt = await import('/assets/ury/js/receipt-delivery.js');
+        const post = (method, args) => frappe.call({ method, args, silent: true });
+        await receipt.dispatchReceipt(post, {
+            invoice, print_format: safePrintFormat, letterhead: configuredLetterHead,
+        }, html => signing.runSignedQz(qz, post, async () => {
             await signing.connectQz(qz, async () => {
                 const { message } = await frappe.call({ method: "ury.ury.api.ury_print.qz_certificate" });
                 return message;
             }, profile.qz_host);
             const printer = profile.custom_qz_receipt_queue?.trim() || await qz.printers.getDefault();
-            await qz.print(qz.configs.create(printer), [{ type: 'html', format: 'plain', data: message.html }]);
-        });
-        printed = true;
+            await qz.print(qz.configs.create(printer), [{ type: 'html', format: 'plain', data: html }]);
+            printed = true;
+        }));
         await onPrinted(invoice);
     } catch (error) {
         let message = __("Could not print the invoice. Check the printer and try again.");
@@ -63,6 +54,10 @@ async function updateMergedInvoicePrint(invoice) {
         },
     });
 
+    showPrintedInvoice();
+}
+
+function showPrintedInvoice() {
     cur_frm.set_value(
         "invoice_printed",
         1,

@@ -390,6 +390,7 @@ def _submit_single_print_job(
             return (
                 {
                     "status": "Success",
+                    "tracking_disabled": True,
                     "cups_job_id": cups_job_id,
                     "print_job_id": print_job_id,
                     "printer": printer_setting,

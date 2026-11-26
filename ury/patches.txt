@@ -71,3 +71,4 @@ ury.patches.v3_46.add_floor_lifecycle_fields
 ury.patches.v3_46.add_split_balance_field
 ury.patches.v3_46.drop_kitchen_ticket_owner_view
 ury.patches.v3_46.initialize_table_seating_checks
+execute:frappe.get_attr("ury.ury.doctype.ury_production_unit.station_scope.prune_station_shares")()

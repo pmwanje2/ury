@@ -2,11 +2,14 @@
  "doctype": "DocType",
  "name": "URY Receipt Delivery",
  "module": "URY",
+ "modified": "2026-11-26 00:00:00.000000",
  "engine": "InnoDB",
  "field_order": [
   "invoice",
   "print_number",
   "reprint_label",
+  "invoice_revision",
+  "receipt_html",
   "delivered"
  ],
  "fields": [
@@ -27,6 +30,18 @@
    "fieldname": "reprint_label",
    "fieldtype": "Data",
    "label": "Reprint Label"
+  },
+  {
+   "fieldname": "invoice_revision",
+   "fieldtype": "Data",
+   "label": "Authorized Invoice Revision",
+   "read_only": 1
+  },
+  {
+   "fieldname": "receipt_html",
+   "fieldtype": "Long Text",
+   "label": "Authorized Receipt HTML",
+   "read_only": 1
   },
   {
    "fieldname": "delivered",
