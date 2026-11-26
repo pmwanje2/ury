@@ -624,7 +624,11 @@
   },
   "settings": {
     "title": "Paramètres",
-    "coming_soon": "D'autres paramètres arrivent bientôt.",
+    "security": "Sécurité et accès",
+    "personal_pin_note": "Définissez votre code d’approbation avec votre mot de passe. Ce code est personnel. Ne le partagez jamais.",
+    "manage_my_pin": "Gérer mon code d’approbation",
+    "floor_devices": "Tablettes de salle et codes des serveurs",
+    "waiter_pin_note": "Les serveurs utilisent un code de salle (4 chiffres par défaut) pour changer de compte sur une tablette associée. Les dérogations en caisse nécessitent un code d’approbation distinct.",
     "end_of_day": "Fin de journée",
     "close_pos_title": "Clôturer la session POS",
     "close_pos_description": "Réconciliez votre tiroir-caisse et clôturez la session POS d'aujourd'hui pour cet appareil.",

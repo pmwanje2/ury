@@ -750,7 +750,11 @@
   },
   "settings": {
     "title": "Settings",
-    "coming_soon": "More settings coming soon.",
+    "security": "Security & Access",
+    "personal_pin_note": "Set your own approval PIN using your password. It is personal. Never share it.",
+    "manage_my_pin": "Manage my approval PIN",
+    "floor_devices": "Floor devices & waiter PINs",
+    "waiter_pin_note": "Waiters use floor PINs (4 digits by default) to switch users on paired tablets. Till overrides require a separate approval PIN.",
     "end_of_day": "End of Day",
     "close_pos_title": "Close POS Session",
     "close_pos_description": "Reconcile your cash drawer and close out today's POS session for this device.",

@@ -692,7 +692,11 @@
   },
   "settings": {
     "title": "Configuración",
-    "coming_soon": "Pronto habrá más opciones.",
+    "security": "Seguridad y acceso",
+    "personal_pin_note": "Configura tu PIN de aprobación con tu contraseña. Es personal. Nunca lo compartas.",
+    "manage_my_pin": "Gestionar mi PIN de aprobación",
+    "floor_devices": "Tabletas de sala y PIN de camareros",
+    "waiter_pin_note": "Los camareros usan un PIN de sala (4 dígitos por defecto) para cambiar de usuario en las tabletas vinculadas. Las autorizaciones de caja requieren un PIN de aprobación distinto.",
     "end_of_day": "Cierre del día",
     "close_pos_title": "Cerrar sesión de POS",
     "close_pos_description": "Cuadra la caja y cierra la sesión de POS de hoy en este dispositivo.",

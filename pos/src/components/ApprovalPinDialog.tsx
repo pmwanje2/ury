@@ -24,7 +24,7 @@ import {
 
 const PIN_RE = /^[0-9]{4,8}$/;
 
-function PinStatusBadges({ has_pin, must_reset, locked }: Pick<MyPinStatus, 'has_pin' | 'must_reset' | 'locked'>) {
+export function PinStatusBadges({ has_pin, must_reset, locked }: Pick<MyPinStatus, 'has_pin' | 'must_reset' | 'locked'>) {
   return (
     <div className="flex flex-wrap gap-1.5">
       <Badge variant={has_pin ? 'success' : 'outline'}>

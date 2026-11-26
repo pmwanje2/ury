@@ -1,8 +1,11 @@
 import type { User } from '../store/slices/auth-slice';
+import { hasManagementRole } from './roles';
 
-export function homePath(user?: Pick<User, 'name' | 'roles'> | null): '/orders' | '/dashboard' | '/order' {
-  const isCashier = user?.roles.includes('URY Cashier') === true;
-  const isCaptain = user?.roles.includes('URY Captain') === true;
-  if (isCaptain && !isCashier) return '/order';
-  return isCashier ? '/orders' : '/dashboard';
+export function homePath(user?: Pick<User, 'name' | 'roles'> | null): '/orders' | '/order' {
+  const roles = user?.roles ?? [];
+  const isManagerOrDesk = user?.name === 'Administrator' || hasManagementRole(roles)
+    || ['Desk User', 'Floor Lead', 'Restaurant Manager'].some((role) => roles.includes(role));
+  return roles.includes('URY Captain') && !roles.includes('URY Cashier') && !isManagerOrDesk
+    ? '/order'
+    : '/orders';
 }

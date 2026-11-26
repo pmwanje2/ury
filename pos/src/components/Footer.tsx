@@ -13,8 +13,6 @@ import { cn } from '@ury/ui';
 import { t } from '../i18n';
 import { usePOSStore } from '../store/pos-store';
 import { getBranchReservationSettings } from '../lib/table-api';
-import { useRootStore } from '../store/root-store';
-import { homePath } from '../lib/home-route';
 
 /**
  * The bottom rail is a *same-app* router. Cross-app jumps (the management SPA
@@ -56,17 +54,14 @@ const Footer = () => {
     };
   }, [branch]);
 
-  const user = useRootStore((state) => state.user);
-  const home = homePath(user);
-
   const navItems = [
-    { icon: Gauge, label: t('footer.dashboard'), path: home },
+    { icon: ReceiptText, label: t('footer.orders'), path: '/orders' },
     { icon: ShoppingCart, label: t('footer.pos'), path: '/register' },
     { icon: Armchair, label: t('footer.tables'), path: '/tables' },
     ...(reservationEnabled
       ? [{ icon: BookLock, label: t('footer.reservations'), path: '/reservations' }]
       : []),
-    { icon: ReceiptText, label: t(home === '/orders' ? 'footer.analytics' : 'footer.orders'), path: home === '/orders' ? '/dashboard' : '/orders' },
+    { icon: Gauge, label: t('footer.dashboard'), path: '/dashboard' },
     { icon: Wallet, label: t('footer.sessions'), path: '/open-entries' },
     { icon: Settings, label: t('footer.settings'), path: '/settings' },
   ];
