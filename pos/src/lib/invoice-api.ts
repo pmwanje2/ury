@@ -1,3 +1,4 @@
+import { assertNetworkAcknowledgement } from '@ury/core/receipt';
 import {
   call,
   db,
@@ -425,10 +426,6 @@ export async function networkPrint(orderId: string, printer: string, printFormat
   assertNetworkAcknowledgement(res?.message);
 }
 
-function assertNetworkAcknowledgement(result?: string | {status?: string; message?: string} | null) {
-  if (result === 'Success' || (typeof result === 'object' && result?.status === 'Success')) return;
-  throw new Error((typeof result === 'string' ? result : result?.message) || 'The printer did not acknowledge the job.');
-}
 
 export async function selectNetworkPrinter(
   orderId: string,

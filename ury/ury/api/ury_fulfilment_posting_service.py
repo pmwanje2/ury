@@ -1175,7 +1175,7 @@ def recover_pending_posting_intents(limit=100):
 	return queued
 
 
-def post_intents_for_kot(kot, actor=None):
+def post_intents_for_kot(kot, actor=None, *, require_intent=False):
 	"""Create and enqueue/process posting intents for all MADE_TO_ORDER items on a KOT.
 	Safe to call at KOT creation or Bill Print. Idempotent.
 	"""
@@ -1214,19 +1214,23 @@ def post_intents_for_kot(kot, actor=None):
 		doc = frappe.get_doc(ITEM_EXECUTION_DOCTYPE, row["name"])
 		try:
 			intent = create_or_get_posting_intent_for_ready(doc, actor=actor)
-			results.append(intent)
-			if intent.get("name"):
-				enqueue_posting_intent(intent["name"])
-				if intent.get("status") != POSTED:
-					try:
-						process_posting_intent(intent["name"])
-					except Exception:
-						frappe.logger("ury_fulfilment_posting_service").exception(
-							f"Immediate process_posting_intent failed for {intent.get('name')}, background queue will recover"
-						)
-		except Exception as e:
+		except Exception:
+			if require_intent:
+				raise
 			frappe.logger("ury_fulfilment_posting_service").exception(
-				f"Failed to post intent for item execution {row['name']}: {e}"
+				f"Failed to create posting intent for item execution {row['name']}"
+			)
+			continue
+		results.append(intent)
+		if not intent.get("name"):
+			continue
+		try:
+			enqueue_posting_intent(intent["name"])
+			if intent.get("status") != POSTED:
+				process_posting_intent(intent["name"])
+		except Exception:
+			frappe.logger("ury_fulfilment_posting_service").exception(
+				f"Dispatch failed for durable intent {intent['name']}; the recovery worker can retry"
 			)
 	return results
 
@@ -1251,7 +1255,7 @@ def post_intents_for_pos_invoice(invoice, actor=None):
 
 	results = []
 	for kot_name in kots:
-		res = post_intents_for_kot(kot_name, actor=actor)
+		res = post_intents_for_kot(kot_name, actor=actor, require_intent=True)
 		results.extend(res)
 	return results
 

@@ -1,4 +1,4 @@
-import { prepareReceipt, completeReceipt } from '@ury/core/receipt';
+import { prepareReceipt, completeReceipt, confirmBrowserDelivery } from '@ury/core/receipt';
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call, isLinkDown, printWithQz } from '@ury/core';
 import { buildLetterheadParams } from '@ury/core/print-format';
@@ -81,23 +81,39 @@ export async function printBillCopy({
     ...(reason ? { reason } : {}),
     ...(reasonNote ? { reason_note: reasonNote } : {}),
   });
-  const result: PrintBillCopyResult = response?.message ?? { status: 'COMPLETED', delivery };
-  if (result.status === 'FAILED') {
-    throw new Error(result.failure_reason || 'Copy print failed');
-  }
-  let fallback = false;
-  if (delivery === 'qz' && result.html) {
-    fallback = !await deliverQzReceipt(posProfile, result.html);
-  }
-  if (delivery === 'browser' || fallback) {
-    const copyParam = result.copy_number ? `&copy_number=${result.copy_number}` : '';
-    const { queryString: letterheadParams } = buildLetterheadParams(posProfile.letter_head);
-    const url =
-      result.print_url ||
-      `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}&format=URY%20Bill%20Copy${letterheadParams}&trigger_print=1${copyParam}`;
-    await confirmBrowserDelivery(url);
+  if (!response?.message) throw new Error('Copy reservation was unavailable.');
+  const result = await deliverReservedCopy(orderId, idempotencyKey, posProfile, response.message);
+  if (result.status !== 'COMPLETED' && result.status !== 'SUBMITTED') {
+    throw new Error(result.failure_reason || 'Copy delivery was not acknowledged.');
   }
   return result;
+}
+
+export async function deliverReservedCopy(
+  invoice: string, key: string,
+  profile: { qz_host?: string | null; printer?: string | null; letter_head?: string | null },
+  result: PrintBillCopyResult,
+): Promise<PrintBillCopyResult> {
+  if (result.status !== 'RESERVED') return result;
+  if (result.delivery !== 'qz' && result.delivery !== 'browser') {
+    throw new Error('Client copy reservation is unavailable.');
+  }
+  let delivered = false;
+  if (result.delivery === 'qz') {
+    if (!result.html) throw new Error('Authorized QZ copy is unavailable.');
+    delivered = await deliverQzReceipt(profile, result.html);
+  }
+  if (!delivered) {
+    if (!result.print_url && !result.copy_number) throw new Error('Authorized browser copy is unavailable.');
+    const { queryString } = buildLetterheadParams(profile.letter_head);
+    const url = result.print_url ||
+      `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(invoice)}&format=URY%20Bill%20Copy${queryString}&trigger_print=1&copy_number=${result.copy_number}`;
+    await confirmBrowserDelivery(url);
+  }
+  const response = await receiptRequest('ury.ury_pos.api.confirm_bill_copy', { invoice, idempotency_key: key });
+  const confirmed = response.message as Partial<PrintBillCopyResult> | undefined;
+  if (confirmed?.status !== 'COMPLETED') throw new Error('Copy delivery confirmation was unavailable.');
+  return { ...result, ...confirmed };
 }
 
 async function receiptRequest(method: string, args: Record<string, unknown>) {
@@ -109,44 +125,6 @@ async function receiptRequest(method: string, args: Record<string, unknown>) {
     if (!isLinkDown(error)) throw error;
     return post();
   }
-}
-
-export async function confirmBrowserDelivery(url: string): Promise<void> {
-  let popup = window.open(url, '_blank');
-  if (!popup) {
-    // The QZ attempt may have outlived browser user activation. An actual click
-    // opens printview without repeating the receipt authorization.
-    popup = await new Promise<Window>((resolve, reject) => {
-      const dialog = document.createElement('dialog');
-      const open = document.createElement('button');
-      open.textContent = 'Open receipt for browser printing';
-      const cancel = document.createElement('button');
-      cancel.textContent = 'Cancel';
-      dialog.append(open, cancel);
-      document.body.append(dialog);
-      const dismiss = () => {
-        dialog.remove();
-        reject(new Error('Browser printing was cancelled.'));
-      };
-      cancel.onclick = dismiss;
-      dialog.oncancel = dismiss;
-      open.onclick = () => {
-        const receipt = window.open(url, '_blank');
-        if (!receipt) {
-          open.textContent = 'Allow pop-ups, then open receipt';
-          return;
-        }
-        dialog.remove();
-        resolve(receipt);
-      };
-      dialog.showModal();
-    });
-  }
-  popup.opener = null;
-  // Frappe closes printview after the native dialog. Browsers cannot report
-  // whether the operator printed or cancelled, so confirm the physical receipt.
-  while (!popup.closed) await new Promise(resolve => setTimeout(resolve, 300));
-  if (!window.confirm('Did the browser print the receipt?')) throw new Error('Receipt delivery was not confirmed.');
 }
 
 export async function printOrder({

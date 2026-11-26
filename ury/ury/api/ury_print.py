@@ -62,11 +62,19 @@ def network_printing(
     approval_token=None,
     reason=None,
     reason_note=None,
-    _reprint_meta=None,
+):
+    return _network_print_internal(
+        doctype, name, printer_setting, print_format, doc, no_letterhead,
+        approval_token=approval_token, reason=reason, reason_note=reason_note,
+    )
+
+
+def _network_print_internal(
+    doctype, name, printer_setting, print_format=None, doc=None, no_letterhead=0,
+    *, approval_token=None, reason=None, reason_note=None, reprint_meta=None,
 ):
     target = frappe.get_doc(doctype, name)
     validate_print_permission(target)
-    reprint_meta = _reprint_meta
     if doctype == "POS Invoice":
         check_split_target_access(target, "write")
         if int(getattr(target, "docstatus", 0) or 0) == 0:
@@ -236,8 +244,8 @@ def select_network_printer(
 
     if bill_printers:
         for printer in bill_printers:
-            print_result = network_printing(
-                "POS Invoice", invoice_id, printer, print_format, _reprint_meta=reprint_meta
+            print_result = _network_print_internal(
+                "POS Invoice", invoice_id, printer, print_format, reprint_meta=reprint_meta
             )
             print_jobs.append(print_result)
 

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { confirmBrowserDelivery, deliverQzReceipt } from '../lib/print';
 import { call, parseFrappeError } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
@@ -9,7 +8,7 @@ import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-a
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import TipAdjustDialog from '../components/TipAdjustDialog';
 import { usePOSStore } from '../store/pos-store';
-import { printOrder } from '../lib/print';
+import { deliverReservedCopy, printOrder, type PrintBillCopyResult } from '../lib/print';
 import { resolvePrintFormat } from '../lib/invoice-api';
 import { formatMoneyAmount } from '../lib/void-return-api';
 import ReturnCheckDialog from '../components/ReturnCheckDialog';
@@ -111,31 +110,14 @@ export default function SettledBills() {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         throw new Error(t('offline.refused', { action: 'closed receipt copy' }));
       }
-      const { message: result } = await call.post<{
-        message: {
-          status: string;
-          failure_reason?: string;
-          delivery?: string;
-          html?: string;
-          print_url?: string;
-          copy_number?: number;
-        };
-      }>(method + 'print_bill_copy', {
+      const { message: reservation } = await call.post<{ message: PrintBillCopyResult }>(method + 'print_bill_copy', {
         invoice: targetBill.name,
         idempotency_key: key,
         ...(approval?.token ? { approval_token: approval.token } : {}),
         ...(approval?.reason ? { reason: approval.reason } : {}),
         ...(approval?.note ? { reason_note: approval.note } : {}),
       });
-      if (result.delivery === 'qz' && result.html) {
-        const printed = await deliverQzReceipt(usePOSStore.getState().posProfile || {}, result.html);
-        if (!printed) {
-          if (!result.print_url) throw new Error('Authorized browser copy is unavailable.');
-          await confirmBrowserDelivery(result.print_url);
-        }
-      } else if (result.delivery === 'browser' && result.print_url) {
-        await confirmBrowserDelivery(result.print_url);
-      }
+      const result = await deliverReservedCopy(targetBill.name, key, usePOSStore.getState().posProfile || {}, reservation);
       setOutcome(result.status);
       setMessage(
         [tData('Copy'), result.copy_number ? `#${result.copy_number}` : '', result.status, result.failure_reason]

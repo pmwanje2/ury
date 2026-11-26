@@ -223,6 +223,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const navigate = useNavigate();
   const location = useLocation();
   const mounted = useRef(false);
+  const copyKeys = useRef(new Map<string, string>());
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [voidChoice, setVoidChoice] = React.useState('');
@@ -738,14 +739,17 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           reasonNote: approval?.note,
         });
       } else {
+        const key = copyKeys.current.get(selectedOrder.name) || crypto.randomUUID();
+        copyKeys.current.set(selectedOrder.name, key);
         await printBillCopy({
           orderId: selectedOrder.name,
           posProfile: posStore.posProfile,
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: key,
           approvalToken: approval?.token,
           reason: approval?.reason,
           reasonNote: approval?.note,
         });
+        copyKeys.current.delete(selectedOrder.name);
       }
       showToast.success(t('success.printed'));
       if (isOpenBill && selectedOrder && typeof selectedOrder === 'object') {

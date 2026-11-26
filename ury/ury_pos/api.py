@@ -3597,26 +3597,13 @@ def _copy_result(job, *, doc=None, delivery=None):
     copy_number = cint(job.get('copy_number'))
     if copy_number:
         result['copy_number'] = copy_number
-    if job.get('status') == 'COMPLETED':
-        resolved_delivery = delivery
-        if not resolved_delivery:
-            if job.get('printer'):
-                resolved_delivery = 'network'
-            elif doc is not None:
-                resolved_delivery = (
-                    'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
-                )
-            else:
-                resolved_delivery = 'browser'
-        result['delivery'] = resolved_delivery
-        invoice = job.get('invoice') or (doc.name if doc is not None else None)
-        if doc is not None and invoice and copy_number:
-            html, copy_timestamp = _render_copy_html(doc, invoice, copy_number)
-            result['copy_timestamp'] = copy_timestamp
-            result['html'] = html
-            result['print_url'] = _copy_print_url(
-                invoice, copy_number, letter_head=_resolve_invoice_letter_head(doc)
-            )
+    if job.get('status') == 'RESERVED' and doc is not None and copy_number:
+        result['delivery'] = delivery or (
+            'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
+        )
+        invoice = job.get('invoice') or doc.name
+        result['html'], result['copy_timestamp'] = _render_copy_html(doc, invoice, copy_number)
+        result['print_url'] = _copy_print_url(invoice, copy_number, letter_head=_resolve_invoice_letter_head(doc))
     return result
 
 
@@ -3770,7 +3757,7 @@ def _is_retryable_copy_race_error(exc: Exception) -> bool:
 
 
 _COPY_LOG_LOOKUP_FIELDS = [
-    'name', 'print_job_id', 'invoice', 'status', 'failure_reason', 'attempt', 'copy_number', 'printer',
+    'name', 'print_job_id', 'invoice', 'status', 'failure_reason', 'attempt', 'copy_number', 'printer', 'job_owner',
 ]
 _DISABLED_REPRINT_OWNER_REASON = 'Requester account is disabled; reprint from Settled Bills.'
 
@@ -3833,6 +3820,34 @@ def _mark_pending_fiscal_reprint_dispatched(invoice: str):
         frappe.db.set_value(_COPY_LOG, pending_id, {'status': 'DISPATCHED'})
 
 
+def _copy_request_key(invoice, idempotency_key):
+    from hashlib import sha256
+
+    if not idempotency_key or len(idempotency_key) > 128:
+        frappe.throw('A copy request key is required (maximum 128 characters).')
+    return sha256(json.dumps([invoice, idempotency_key]).encode()).hexdigest()
+
+
+@frappe.whitelist(methods=['POST'])
+def confirm_bill_copy(invoice: str, idempotency_key: str):
+    from ury.ury_pos.privileged_auth import assert_not_offline_replay
+
+    assert_not_offline_replay()
+    _closed_invoice(invoice, _closed_branch())
+    record = frappe.db.get_value(
+        _COPY_LOG, {'invoice': invoice, 'request_key': _copy_request_key(invoice, idempotency_key),
+                    'job_owner': frappe.session.user},
+        ['name', 'status', 'printer', 'copy_number'], as_dict=True, order_by='attempt desc', for_update=True,
+    )
+    if not record or record.printer or record.status not in ('RESERVED', 'COMPLETED'):
+        frappe.throw('No client copy reservation for this request.', frappe.PermissionError)
+    if record.status == 'RESERVED':
+        frappe.db.set_value(_COPY_LOG, record.name, 'status', 'COMPLETED')
+        if idempotency_key == f'efris-auto-{invoice}':
+            _mark_pending_fiscal_reprint_dispatched(invoice)
+    return {'status': 'COMPLETED', 'copy_number': record.copy_number, 'print_job_id': record.name}
+
+
 @frappe.whitelist(methods=['POST'])
 def print_bill_copy(
     invoice: str,
@@ -3843,8 +3858,6 @@ def print_bill_copy(
     reason: str | None = None,
     reason_note: str | None = None,
 ):
-    from hashlib import sha256
-
     from ury.ury.api.ury_print import _bill_printers
     from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
     from ury.ury.printing.file_store import save_job
@@ -3860,12 +3873,10 @@ def print_bill_copy(
 
     assert_not_offline_replay()
 
-    if not idempotency_key or len(idempotency_key) > 128:
-        frappe.throw('A copy request key is required (maximum 128 characters).')
+    # Idempotent per invoice and copy key, whoever dispatches (cashier till or scheduler).
+    key = _copy_request_key(invoice, idempotency_key)
     branch = _closed_branch()
     owner = frappe.session.user
-    # Idempotent per invoice and copy key, whoever dispatches (cashier till or scheduler).
-    key = sha256(json.dumps([invoice, idempotency_key]).encode()).hexdigest()
     requested_delivery = (delivery or '').strip().lower() or None
     is_auto_fiscal = idempotency_key == f'efris-auto-{invoice}'
 
@@ -3973,11 +3984,9 @@ def print_bill_copy(
                     'attempt': attempt,
                     'copy_number': number,
                     'retry_of': previous.name if previous else None,
-                    'status': 'COMPLETED' if transport in ('browser', 'qz') else 'SUBMITTING',
+                    'status': 'RESERVED' if transport in ('browser', 'qz') else 'SUBMITTING',
                 }
                 frappe.get_doc(record).insert(ignore_permissions=True)
-                if transport in ('browser', 'qz') and is_auto_fiscal:
-                    _mark_pending_fiscal_reprint_dispatched(invoice)
                 if claim_db is not None:
                     claim_db.commit()
                 break
@@ -4001,6 +4010,12 @@ def print_bill_copy(
                 raise
 
     if replayed is not None:
+        if replayed.status == 'RESERVED':
+            if requested_delivery == 'network':
+                # The scheduler must leave client reservations for the reserving till.
+                return _copy_result(replayed)
+            if replayed.job_owner != owner:
+                frappe.throw('The client copy is reserved by another cashier.', frappe.PermissionError)
         return _copy_result(replayed, doc=doc, delivery=requested_delivery)
 
     if transport in ('browser', 'qz'):
