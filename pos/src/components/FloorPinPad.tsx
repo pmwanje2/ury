@@ -3,7 +3,7 @@ import { auth, call, parseFrappeError } from '@ury/core';
 import { Button, Input } from '@ury/ui';
 import { t } from '../i18n';
 import { withOutboxLogin } from '../offline/outbox';
-import { clearFloorLogoutFailureMarker, getFloorPad, setFloorSessionMarker } from '../lib/floor-session';
+import { confirmVerifiedLogin, getFloorPad } from '../lib/floor-session';
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
@@ -26,8 +26,7 @@ async function signedIn(owner?: string) {
   if (!user || user === 'Guest' || (owner && user !== owner)) {
     throw new Error(t('floor_pin.login_failed'));
   }
-  await clearFloorLogoutFailureMarker();
-  setFloorSessionMarker(user, !!owner);
+  await confirmVerifiedLogin(user, !!owner);
   window.location.reload();
 }
 

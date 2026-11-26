@@ -28,3 +28,11 @@ export async function writeLogoutMarker(user: string | null): Promise<void> {
   if (user === null) await markerRequest('readwrite', store => store.delete('failed'));
   else await markerRequest('readwrite', store => store.put(user, 'failed'));
 }
+
+export async function readGeneration(): Promise<string | undefined> {
+  return markerRequest('readonly', store => store.get('generation'));
+}
+
+export async function writeGeneration(generation: string): Promise<void> {
+  await markerRequest('readwrite', store => store.put(generation, 'generation'));
+}

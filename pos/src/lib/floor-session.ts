@@ -1,7 +1,8 @@
-import { readLogoutMarker, writeLogoutMarker } from './logout-store';
+import { v4 as uuid } from 'uuid';
+import { readGeneration, writeGeneration, readLogoutMarker, writeLogoutMarker } from './logout-store';
 import { withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
-import { clearTabConfirmation } from './floor-tab';
+import { boundTabGeneration, clearTabConfirmation, setFloorSessionMarker } from './floor-tab';
 export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
 import { useEffect } from 'react';
 import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
@@ -50,10 +51,53 @@ export function openFloorLogoutChannel(): BroadcastChannel | undefined {
   try { return new BroadcastChannel('ury-floor-logout'); } catch { return undefined; }
 }
 
-function writeLogoutCookie(failed: boolean): void {
+const GENERATION_KEY = 'ury_floor_generation';
+
+function cookieValue(key: string): string {
+  return document.cookie.split('; ').find(pair => pair.startsWith(key + '='))?.slice(key.length + 1) ?? '';
+}
+
+function writePosCookie(key: string, value: string): void {
   const secure = location.protocol === 'https:' ? '; Secure' : '';
-  const value = failed ? '1; Max-Age=34560000' : '; Max-Age=0';
-  document.cookie = FLOOR_LOGOUT_FAILED_MARKER + '=' + value + '; Path=/pos; SameSite=Strict' + secure;
+  document.cookie = key + '=' + value + '; Path=/pos; SameSite=Strict' + secure;
+}
+
+function writeLogoutCookie(failed: boolean): void {
+  writePosCookie(FLOOR_LOGOUT_FAILED_MARKER, failed ? '1; Max-Age=34560000' : '; Max-Age=0');
+}
+
+// A read-only store can retain an older token. The logical timestamp orders the
+// replicas, and the UUID distinguishes simultaneous writers without Web Locks.
+function newestGeneration(durable: string | undefined): string {
+  let local = '';
+  try { local = localStorage.getItem(GENERATION_KEY) || ''; } catch { /* Other replicas remain readable. */ }
+  let cookie = '';
+  try { cookie = cookieValue(GENERATION_KEY); } catch { /* A cookie policy can disable the mirror. */ }
+  return [durable || '', local, cookie].sort().pop()!;
+}
+
+export async function currentFloorGeneration(): Promise<string> {
+  return newestGeneration(await readGeneration());
+}
+
+async function rotateGeneration(current: string): Promise<string> {
+  const time = Math.max(Date.now(), Number(current.split(':')[0]) + 1);
+  const generation = String(time).padStart(16, '0') + ':' + uuid();
+  let saved = false;
+  try { await writeGeneration(generation); saved = true; } catch { /* A full database can remain readable. */ }
+  try { localStorage.setItem(GENERATION_KEY, generation); saved = true; } catch { /* Quota or storage policy. */ }
+  try {
+    writePosCookie(GENERATION_KEY, generation + '; Max-Age=34560000');
+    saved ||= cookieValue(GENERATION_KEY) === generation;
+  } catch { /* Cookie storage may be disabled. */ }
+  if (!saved) throw new Error('Unable to persist POS session generation');
+  return generation;
+}
+
+function announceSessionChange(type: 'logout' | 'login', generation?: string): void {
+  const channel = openFloorLogoutChannel();
+  try { channel?.postMessage({ type, generation }); } catch { /* Mounted guards also poll. */ }
+  finally { channel?.close(); }
 }
 
 function hasLogoutCookie(): boolean {
@@ -89,6 +133,14 @@ export async function clearFloorLogoutFailureMarker(): Promise<void> {
   // A verified login can clear a cookie-only failure even when IndexedDB is read-only.
   if (await readLogoutMarker()) await writeLogoutMarker(null);
   clearLogoutMirrors();
+}
+
+export async function confirmVerifiedLogin(user: string, recovery: boolean): Promise<void> {
+  // Publish the new generation durably before removing evidence of a failed logout.
+  const generation = await rotateGeneration(await currentFloorGeneration());
+  await clearFloorLogoutFailureMarker();
+  setFloorSessionMarker(user, recovery, generation);
+  announceSessionChange('login', generation);
 }
 
 export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
@@ -141,7 +193,17 @@ export async function floorSignOut(stillRequested?: () => boolean, retryingFaile
   let outcome: SignOutResult = 'cancelled';
   try {
     await withEmptyOutbox(async () => {
-      if (stillRequested && !stillRequested()) return;
+      if (stillRequested) {
+        // An overdue idle timer can fire on the same wake event as the generation check.
+        // Recheck under the login lock before ending the shared server session.
+        const bound = boundTabGeneration();
+        if (bound === null || (bound !== undefined && bound !== await currentFloorGeneration())) return;
+        if (retryingFailedLogout && !await readFloorLogoutFailureMarker()) {
+          outcome = 'signed_out';
+          return;
+        }
+        if (!stillRequested()) return;
+      }
       outcome = await endFloorSession(retryingFailedLogout);
     });
     return outcome;
@@ -172,9 +234,11 @@ export async function logoutWithFloorMarker(): Promise<boolean> {
       catch { /* Still attempt server logout if the browser also refuses cookies. */ }
     }
   }
-  const channel = openFloorLogoutChannel();
-  try { channel?.postMessage(null); } catch { /* Mounted guards also poll the marker. */ }
-  finally { channel?.close(); }
+  // Even an unreadable database must not prevent revocation through the other replicas.
+  const current = await currentFloorGeneration().catch(() => newestGeneration(undefined));
+  let generation: string | undefined;
+  try { generation = await rotateGeneration(current); } catch { /* Still attempt to end the server session. */ }
+  announceSessionChange('logout', generation);
   try {
     if (await logout() === false) return false;
   } catch {

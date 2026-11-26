@@ -7,13 +7,14 @@ import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
 import OutboxPanel from './OutboxPanel';
 import { assertOutboxEmpty, onOutboxMembershipChange, queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
-import { clearTabConfirmation } from '../lib/floor-tab';
+import { boundTabGeneration, clearTabConfirmation, revokeTabConfirmation } from '../lib/floor-tab';
 import { getPosProfileFull } from '../lib/pos-profile-api';
 import {
   retryFloorSignOut,
   needsFloorReconciliation,
   hasFloorLogoutFailureMarker,
   readFloorLogoutFailureMarker,
+  currentFloorGeneration,
   openFloorLogoutChannel,
   hasFloorSessionMarker,
   hasRecoveryConfirmation,
@@ -136,23 +137,45 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
   const floorPadActive = isFloorPadActive();
-  const [failedLogout, setFailedLogout] = useState<boolean | null>(null);
+  const [gate, setGate] = useState<'checking' | 'ready' | 'failed' | 'revoked'>('checking');
   useEffect(() => {
     let active = true;
     let locked = false;
+    const lockTab = () => {
+      locked = true;
+      try { revokeTabConfirmation(); } catch { /* Still close the mounted workspace. */ }
+      setGate('revoked');
+    };
     const check = async () => {
       if (locked) return;
-      const failed = await readFloorLogoutFailureMarker();
-      if (!active || locked) return;
-      if (failed) {
-        // Keep this tab locked until a new authenticated page replaces it.
-        locked = true;
-        try { clearTabConfirmation(); } catch { /* A storage error must still lock the workspace. */ }
+      try {
+        const [failed, generation] = await Promise.all([readFloorLogoutFailureMarker(), currentFloorGeneration()]);
+        if (!active || locked) return;
+        const bound = boundTabGeneration();
+        if (bound !== undefined && bound !== generation) {
+          // Another tab can already own the server cookie. Only lock this workspace.
+          lockTab();
+        } else if (failed) {
+          locked = true;
+          setGate('failed');
+          clearTabConfirmation();
+        } else setGate('ready');
+      } catch {
+        if (active) lockTab();
       }
-      setFailedLogout(failed);
     };
     const channel = openFloorLogoutChannel();
-    if (channel) channel.onmessage = check;
+    if (channel) channel.onmessage = ({ data }) => {
+      if (!active || locked) return;
+      try {
+        const bound = boundTabGeneration();
+        if (bound !== undefined && (data?.type === 'logout' || (data?.type === 'login' && bound !== data.generation))) {
+          lockTab();
+          return;
+        }
+      } catch { lockTab(); return; }
+      void check();
+    };
     const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
     window.addEventListener('focus', check);
     document.addEventListener('visibilitychange', check);
@@ -165,7 +188,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
       document.removeEventListener('visibilitychange', check);
     };
   }, []);
-  const logoutFailed = failedLogout || hasFloorLogoutFailureMarker();
+  const logoutFailed = gate === 'failed' || hasFloorLogoutFailureMarker();
   const recovery = needsFloorReconciliation();
 
   // A surviving cookie on a paired tablet must not admit the previous waiter.
@@ -175,7 +198,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   );
 
   const showFloorPad = floorPadActive && (!user || user.provisional || coldBoot || logoutFailed);
-  useFloorIdle(showFloorPad || logoutFailed || recovery ? null : user, posProfile);
+  useFloorIdle(gate === 'revoked' || showFloorPad || logoutFailed || recovery ? null : user, posProfile);
 
   useEffect(() => {
     const onLogoutMarker = (event: StorageEvent) => {
@@ -205,13 +228,15 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   }, [user, posProfile, fetchPosProfile]);
 
   // Show loading state while either auth or config is loading
-  if (failedLogout === null || authLoading || (user && configLoading) || isRechecking) {
+  if (gate === 'checking' || authLoading || (user && configLoading) || isRechecking) {
     return (
       <div className="min-h-screen">
         <Spinner  message={t('common.loading')} />
       </div>
     );
   }
+
+  if (gate === 'revoked') return <FloorPinPad usernameOnly offline={user?.provisional} />;
 
   if ((coldBoot || logoutFailed || recovery) && user && !user.provisional) {
     return <ColdBootSignOut key={JSON.stringify([posProfile?.name, user.name])} profile={posProfile} user={user} failedLogout={!!logoutFailed} passwordOnly={!!logoutFailed || !floorPadActive} />;

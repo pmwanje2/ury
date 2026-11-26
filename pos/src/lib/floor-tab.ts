@@ -10,6 +10,25 @@ function currentTabId(): string {
   return window.name;
 }
 
+const REVOKED = 'revoked';
+
+// undefined identifies an unconfirmed tab; null identifies a revoked or pre-generation confirmation.
+export function boundTabGeneration(): string | null | undefined {
+  for (const key of [FLOOR_SESSION_MARKER, RECOVERY_MARKER]) {
+    const value = sessionStorage.getItem(key);
+    if (value === REVOKED) return null;
+    if (!value?.startsWith('{')) continue;
+    const record = JSON.parse(value);
+    if (record.tabId === currentTabId()) return record.generation ?? null;
+  }
+  return undefined;
+}
+
+export function revokeTabConfirmation(): void {
+  sessionStorage.setItem(FLOOR_SESSION_MARKER, REVOKED);
+  sessionStorage.removeItem(RECOVERY_MARKER);
+}
+
 function confirmedInTab(key: string, user: string): boolean {
   try {
     const record = JSON.parse(sessionStorage.getItem(key) || 'null');
@@ -31,9 +50,9 @@ export function isFloorSessionConfirmedForTab(user?: string): boolean {
   return !!user && (hasFloorSessionMarker(user) || hasRecoveryConfirmation(user));
 }
 
-export function setFloorSessionMarker(user: string, recovery: boolean): void {
+export function setFloorSessionMarker(user: string, recovery: boolean, generation = ''): void {
   sessionStorage.removeItem(recovery ? FLOOR_SESSION_MARKER : RECOVERY_MARKER);
-  sessionStorage.setItem(recovery ? RECOVERY_MARKER : FLOOR_SESSION_MARKER, JSON.stringify({ user, tabId: currentTabId() }));
+  sessionStorage.setItem(recovery ? RECOVERY_MARKER : FLOOR_SESSION_MARKER, JSON.stringify({ user, tabId: currentTabId(), generation }));
 }
 
 export function clearTabConfirmation(): void {
