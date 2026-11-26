@@ -21,7 +21,7 @@ vi.mock('@ury/core', async () => {
   };
 });
 
-import { call } from '@ury/core';
+import { call, printWithQz } from '@ury/core';
 import {
   MERGED_POS_INVOICE_PRINT_FORMAT,
   UNSAFE_POS_INVOICE_PRINT_FORMATS,
@@ -112,6 +112,18 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
       ...overrides,
     };
   }
+
+  it('offers browser receipt delivery when the local tray cannot connect', async () => {
+    vi.mocked(printWithQz).mockRejectedValueOnce(new Error('QZ_NOT_RUNNING'));
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
+    const delivery = await printOrder({ orderId: 'INV-1', posProfile: makeProfile({
+      print_type: 'qz', printer: 'Front Desk',
+    }) });
+    expect(printWithQz).toHaveBeenCalledWith('localhost', expect.any(String), 'Front Desk');
+    expect(delivery).toBe('socket');
+    expect(openSpy.mock.lastCall?.[0]).toContain('trigger_print=1');
+    expect(call.post).toHaveBeenCalledTimes(1);
+  });
 
   it('uses configured letterhead and defaults to Merged POS Invoice Format when print_format is empty or unsafe', async () => {
     await printOrder({

@@ -5,7 +5,7 @@ import ProductionDashboard from "./ProductionDashboard.vue";
 import { createProductionScope, productionScopeKey } from "../../composables/productionScope";
 
 const db = vi.hoisted(() => ({ getDocList: vi.fn(), getCount: vi.fn() }));
-vi.mock("frappe-js-sdk", () => ({ FrappeApp: class { db() { return db; } } }));
+vi.mock("frappe-js-sdk", () => ({ FrappeApp: class { db() { return db; } call() { return { post: async () => ({ message: {} }) }; } } }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -68,7 +68,7 @@ describe("ProductionDashboard filtering", () => {
     const wrapper = mountDashboard(scope);
     await flushPromises();
     expect(db.getDocList).toHaveBeenLastCalledWith("URY Production Unit", expect.objectContaining({
-      fields: ["name", "enabled"], filters: [["company", "=", "URY UAE"], ["branch", "=", "URY JVC"]], limit: 0,
+      fields: ["name", "enabled"], filters: [["branch", "=", "URY JVC"]], orFilters: [["company", "=", "URY UAE"], ["company", "is", "not set"]], limit: 0,
     }));
     expect(wrapper.findAllComponents({ name: "ProductionCard" })[1].props("disabled")).toBe(true);
     scope.branch = "all";

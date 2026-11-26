@@ -77,7 +77,7 @@ function callDouble({ html = "<div>Kitchen ticket</div>", signature = "signed" }
     get: async (method, args) => {
       calls.push({ method, args });
       if (method === "frappe.www.printview.get_html_and_style") return { message: { html } };
-      if (method === "ury.ury.api.ury_print.qz_certificate") return { message: "qz-cert.pem" };
+      if (method === "ury.ury.api.ury_print.qz_certificate") return { message: "-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----" };
       return { message: {} };
     },
     post: async (method, args) => {
@@ -146,7 +146,7 @@ test("QZ failure writes a failed comment while the caller can keep the ticket di
   assert.ok(call.calls.some(({ method, args }) => method === "frappe.desk.form.utils.add_comment" && args.content === "[KOT-PRINT-FAILED] QZ_UNAVAILABLE"));
 });
 
-test("an eight-second printer timeout writes PRINTER_TIMEOUT and does not reject the display update", async () => {
+test("a stalled printer writes PRINTER_TIMEOUT and does not reject the display update", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   onTestFinishedRealTimers();
   const { printer, call } = await makePrinter({
@@ -154,7 +154,7 @@ test("an eight-second printer timeout writes PRINTER_TIMEOUT and does not reject
   });
   const pending = printer.process(ticket("TIMEOUT"));
   await new Promise(setImmediate);
-  vi.advanceTimersByTime(8000);
+  vi.advanceTimersByTime(30000);
 
   assert.deepEqual(await pending, { printed: false, code: "PRINTER_TIMEOUT" });
   assert.ok(call.calls.some(({ method, args }) => method === "frappe.desk.form.utils.add_comment" && args.content === "[KOT-PRINT-FAILED] PRINTER_TIMEOUT"));
@@ -672,4 +672,16 @@ test("G28: hydrateFromServer never merges remote backupHost onto a local backupP
   );
   assert.match(htmlWithNetBackup, /Backup printer host/);
   assert.match(htmlWithNetBackup, /Backup printer port/);
+});
+
+test("a stalled first connection reports a trust timeout without dispatching", async () => {
+  vi.useFakeTimers();
+  onTestFinishedRealTimers();
+  const bridge = qzDouble({ active: false });
+  bridge.qz.websocket.connect = () => new Promise(() => {});
+  const { printer } = await makePrinter({ qzDouble: bridge });
+  const result = printer.process(ticket("TRUST"));
+  await vi.advanceTimersByTimeAsync(60000);
+  assert.deepEqual(await result, { printed: false, code: "QZ_TRUST_TIMEOUT" });
+  assert.equal(bridge.calls.prints.length, 0);
 });

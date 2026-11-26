@@ -21,7 +21,7 @@ it('loads one Frappe bridge, connects, signs and prints to the default printer',
   post.mockImplementation(async (_method, { toSign }) => ({
     message: sign('RSA-SHA512', Buffer.from(toSign), privateKey).toString('base64'),
   }));
-  vi.spyOn(axios, 'get').mockResolvedValue({ data: 'test certificate' });
+  vi.spyOn(axios, 'get').mockResolvedValue({ data: { message: '-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----' } });
   const bridge = {
     security: { setCertificatePromise: vi.fn(), setSignatureAlgorithm: vi.fn(), setSignaturePromise: vi.fn() },
     websocket: { isActive: vi.fn(() => true), connect: vi.fn(), disconnect: vi.fn() },
@@ -38,8 +38,9 @@ it('loads one Frappe bridge, connects, signs and prints to the default printer',
   Object.assign(window, { qz: bridge });
   scripts()[0].dispatchEvent(new Event('load'));
   await Promise.all([connect, print]);
-  expect(bridge.websocket.connect).toHaveBeenCalledWith({ host: 'localhost', usingSecure: false });
-  await expect(new Promise(bridge.security.setCertificatePromise.mock.calls[0][0])).resolves.toBe('test certificate');
+  expect(bridge.websocket.connect).toHaveBeenCalledWith({ host: 'localhost', usingSecure: true });
+  await expect(new Promise(bridge.security.setCertificatePromise.mock.calls[0][0])).resolves.toContain('BEGIN CERTIFICATE');
+  expect(axios.get).toHaveBeenCalledWith('/api/method/ury.ury.api.ury_print.qz_certificate');
   expect(bridge.security.setSignatureAlgorithm).toHaveBeenCalledWith('SHA512');
   const callback = bridge.security.setSignaturePromise.mock.calls[0][0];
   const sig = await new Promise<string>(callback('challenge'));

@@ -347,7 +347,11 @@ class TestQzCertificate(FrappeTestCase):
 	@patch("ury.ury.api.ury_print.frappe.get_site_config")
 	def test_qz_certificate_returns_cert(self, mock_get_config):
 		"""Test qz_certificate returns certificate from config."""
-		cert_value = "-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----"
+		from certifi import where
+		from cryptography import x509
+		from cryptography.hazmat.primitives.serialization import Encoding
+		from pathlib import Path
+		cert_value = x509.load_pem_x509_certificates(Path(where()).read_bytes())[0].public_bytes(Encoding.PEM).decode()
 		mock_get_config.return_value = {"qz_cert": cert_value}
 
 		result = qz_certificate()
@@ -362,6 +366,11 @@ class TestQzCertificate(FrappeTestCase):
 		result = qz_certificate()
 
 		self.assertIsNone(result)
+
+	@patch("ury.ury.api.ury_print.frappe.get_site_config", return_value={"qz_cert": "-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----"})
+	def test_qz_certificate_rejects_key_in_certificate_setting(self, _config):
+		with self.assertRaises(frappe.ValidationError):
+			qz_certificate()
 
 	def test_qz_certificate_guest_denied(self):
 		"""Test qz_certificate denies Guest user."""

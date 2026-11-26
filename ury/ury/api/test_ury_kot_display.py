@@ -197,3 +197,18 @@ class TestURYKOTDisplaySEC06(FrappeTestCase):
         self.assertEqual(mock_set_value.call_count, 2)
         mock_set_value.assert_any_call("URY KOT", "KOT-001", "verified", 1)
         mock_set_value.assert_any_call("URY KOT", "KOT-001", "verified_by", "Administrator")
+
+
+class TestLegacyStationSettings(FrappeTestCase):
+    def test_legacy_department_does_not_block_valid_device_update(self):
+        from ury.ury.api import ury_kot_display as api
+        unit = MagicMock(department=None)
+        unit.flags.ignore_mandatory = False
+        def save():
+            if not unit.flags.ignore_mandatory:
+                raise frappe.MandatoryError("department")
+        unit.save.side_effect = save
+        with patch.object(api.frappe, "request", None), patch.object(api.frappe, "get_doc", return_value=unit), patch.object(api.frappe, "has_permission", return_value=True), patch.object(api, "is_kitchen_admin", return_value=True), patch.object(api, "_extract_station_device_config"):
+            api.save_station_device_config("Kitchen", {"enabled": True, "printer": "Kitchen", "printFormat": "KOT"})
+        self.assertEqual(unit.custom_primary_printer, "Kitchen")
+        unit.save.assert_called_once()
