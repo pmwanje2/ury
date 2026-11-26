@@ -682,6 +682,7 @@ def _free_tables_if_no_open_invoices(
     *,
     printed=False,
     branch=None,
+    commit=True,
 ):
 
     if not restaurant_table:
@@ -700,7 +701,7 @@ def _free_tables_if_no_open_invoices(
     if _has_open_pos_invoices_for_cluster(tables):
         return
 
-    release_merge_cluster_tables(tables)
+    release_merge_cluster_tables(tables, commit=commit)
 
 
 def _copy_invoice_item_fields(item_row, qty):
@@ -6861,6 +6862,7 @@ def make_invoice(
     approval=None,
     clear_discount=0,
     complimentary=0,
+    fiscal_receipt_requested=1,
 ):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     tip = flt(tip)
@@ -7287,7 +7289,8 @@ def make_invoice(
             "reason": rc_outcome.get("override_reason"),
         }
     try:
-        _submit_and_release_tables(invoice, pos_prof, customer_disabled, target)
+        _submit_and_release_tables(invoice, pos_prof, customer_disabled, target,
+                                   fiscal_receipt_requested=frappe.utils.cint(fiscal_receipt_requested))
     finally:
         frappe.flags.kamra_room_charge_override = prev_rc_flag
     return {"name": invoice.name, "status": "Submitted"}
@@ -7312,6 +7315,7 @@ def _submit_and_release_tables(
     *,
     on_account_approval=None,
     on_account_reason=None,
+    fiscal_receipt_requested=True,
 ):
     credit_partner = None
     if target:
@@ -7347,6 +7351,9 @@ def _submit_and_release_tables(
                 frappe.flags.in_bill_merge_sync = previous
         else:
             invoice.submit()
+        if fiscal_receipt_requested:
+            from ury.ury_pos.api import _record_settlement_fiscal_intent
+            _record_settlement_fiscal_intent(invoice)
     except frappe.PermissionError:
         raise
     except Exception as e:

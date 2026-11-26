@@ -170,22 +170,8 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 		crafted["posting_time"] = '<img src=x onerror="window.__pt_xss=1">'
 
 		for fn in (get_html_and_style, guarded_get_html_and_style):
-			with self.subTest(endpoint=fn.__module__):
-				out = fn(
-					doc=json.dumps(crafted, default=str),
-					print_format="URY Bill Copy",
-					no_letterhead=1,
-				)
-				html = out.get("html") or ""
-				self.assertIn("COPY #1", html)
-				for raw in (
-					'onerror="window.__copy_xss=1"',
-					'<script>window.__ts_xss=1</script>',
-					'onerror="window.__pd_xss=1"',
-					'onerror="window.__pt_xss=1"',
-					'<script>window.__xss=1;alert(1)</script>',
-				):
-					self.assertNotIn(raw, html, f"Exploitable raw XSS leaked: {raw}")
+			with self.subTest(endpoint=fn.__module__), self.assertRaises((frappe.PermissionError, frappe.PrintFormatError)):
+				fn(doc=json.dumps(crafted, default=str), print_format="URY Bill Copy", no_letterhead=1)
 
 	def test_05_server_pdf_with_local_logo_does_not_fail_wkhtmltopdf_network_error(self):
 		"""P1-5: Local logos inline as data URIs (never HTTP host URLs) and render cleanly via wkhtmltopdf."""
@@ -235,12 +221,20 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 			):
 				for fmt in (GUEST_CHECK_PRINT_FORMAT, "URY Bill Copy"):
 					with self.subTest(print_format=fmt):
-						out = get_html_and_style(
-							doc=json.dumps(doc.as_dict(), default=str),
-							print_format=fmt,
-							no_letterhead=0,
-						)
-						html = out.get("html") or ""
+						if fmt == "URY Bill Copy":
+							from ury.ury_pos.api import _render_copy_html
+
+							# Exercise the server renderer used after reserving a numbered QZ copy.
+							doc.docstatus = 1
+							from frappe.www.printview import get_rendered_template
+
+							full_html, _timestamp = _render_copy_html(doc, doc.name, copy_number=2)
+							self.assertIn("data:image/svg+xml;base64,", full_html)
+							html = get_rendered_template(doc, print_format=frappe.get_doc("Print Format", fmt), no_letterhead=1)
+							self.assertIn("COPY #2", html)
+						else:
+							out = get_html_and_style(doc=json.dumps(doc.as_dict(), default=str), print_format=fmt, no_letterhead=0)
+							html = out.get("html") or ""
 						self.assertIn("data:image/svg+xml;base64,", html)
 						self.assertNotIn("/files/_test_maximus_logo.svg", html)
 						# Standalone HTML renders to valid PDF bytes via wkhtmltopdf with zero network fetches

@@ -1,3 +1,4 @@
+import { assertNetworkAcknowledgement } from '@ury/core/receipt';
 import {
   call,
   db,
@@ -413,7 +414,7 @@ export interface InvoicePrintAuth {
 }
 
 export async function networkPrint(orderId: string, printer: string, printFormat: string, auth?: InvoicePrintAuth) {
-  await call.post('ury.ury.api.ury_print.network_printing', {
+  const res = await call.post('ury.ury.api.ury_print.network_printing', {
     doctype: 'POS Invoice',
     name: orderId,
     printer_setting: printer,
@@ -422,7 +423,9 @@ export async function networkPrint(orderId: string, printer: string, printFormat
     ...(auth?.reason ? { reason: auth.reason } : {}),
     ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
+  assertNetworkAcknowledgement(res?.message);
 }
+
 
 export async function selectNetworkPrinter(
   orderId: string,
@@ -441,9 +444,7 @@ export async function selectNetworkPrinter(
   if (res?.message === null || res?.message === undefined) {
     throw new Error('No bill printer configured for this order. Please configure a bill printer in POS Profile or Room.');
   }
-  if (res?.message?.status === 'Failure') {
-    throw new Error(res?.message?.message || 'Print job failed');
-  }
+  assertNetworkAcknowledgement(res.message);
 }
 
 

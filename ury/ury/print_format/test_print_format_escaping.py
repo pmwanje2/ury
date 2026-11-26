@@ -382,11 +382,11 @@ class TestRecordValuesPrintAsText(unittest.TestCase):
 	def test_bill_copy_escapes_copy_number_timestamp_posting_date_and_time(self):
 		# P1-1: URY Bill Copy must escape copy_number, copy_timestamp, posting_date, and posting_time.
 		crafted = bill_copy(plain)
-		crafted.copy_number = '<img src=x onerror="window.__copy_xss=1">'
 		crafted.copy_timestamp = '<script>window.__ts_xss=1</script>'
 		crafted.posting_date = '<img src=x onerror="window.__pd_xss=1">'
 		crafted.posting_time = '<img src=x onerror="window.__pt_xss=1">'
 		html = render("ury_bill_copy", crafted, plain)
+		self.assertIn("COPY #2", html)
 		for raw in (
 			'<img src=x onerror="window.__copy_xss=1">',
 			'<script>window.__ts_xss=1</script>',

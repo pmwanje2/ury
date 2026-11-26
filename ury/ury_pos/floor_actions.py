@@ -109,7 +109,7 @@ def authorize_and_count_bill_print(
             "reason": "",
         }
 
-    resolved_profile = pos_profile or row.get("pos_profile")
+    resolved_profile = row.get("pos_profile") or pos_profile
     company = row.get("company") if _is_valid_str(row.get("company")) else None
 
     raw_max_free = (

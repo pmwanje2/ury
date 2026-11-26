@@ -80,6 +80,7 @@ const emptyPosForm = () => ({
   select_print_heading: '',
   qz_print: false,
   qz_host: '',
+  custom_qz_receipt_queue: '',
   custom_enable_kot_reprint: false,
   custom_reprint_kot_format: '',
   custom_table_order_printer: '',
@@ -358,6 +359,7 @@ export const PrinterConfigPage: React.FC = () => {
       select_print_heading: doc.select_print_heading || '',
       qz_print: doc.qz_print === 1,
       qz_host: doc.qz_host || '',
+      custom_qz_receipt_queue: doc.custom_qz_receipt_queue || '',
       custom_enable_kot_reprint: doc.custom_enable_kot_reprint === 1,
       custom_reprint_kot_format: doc.custom_reprint_kot_format || '',
       custom_table_order_printer: doc.custom_table_order_printer || '',
@@ -495,6 +497,7 @@ export const PrinterConfigPage: React.FC = () => {
                 select_print_heading: posForm.select_print_heading,
                 qz_print: posForm.qz_print ? 1 : 0,
                 qz_host: posForm.qz_host,
+                custom_qz_receipt_queue: posForm.custom_qz_receipt_queue.trim(),
                 custom_enable_kot_reprint: posForm.custom_enable_kot_reprint ? 1 : 0,
                 custom_reprint_kot_format: posForm.custom_reprint_kot_format,
                 custom_table_order_printer: posForm.custom_table_order_printer,
@@ -856,6 +859,16 @@ export const PrinterConfigPage: React.FC = () => {
                     value={posForm.qz_host}
                     onChange={(e) => setPosForm((prev) => ({ ...prev, qz_host: e.target.value }))}
                     placeholder={__('localhost')}
+                    disabled={!posForm.qz_print}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="custom_qz_receipt_queue" className="block text-xs font-medium text-muted-foreground mb-1.5">{__('QZ Receipt Queue')}</label>
+                  <Input
+                    id="custom_qz_receipt_queue"
+                    value={posForm.custom_qz_receipt_queue}
+                    onChange={(e) => setPosForm((prev) => ({ ...prev, custom_qz_receipt_queue: e.target.value }))}
+                    placeholder={__('Workstation default printer')}
                     disabled={!posForm.qz_print}
                   />
                 </div>

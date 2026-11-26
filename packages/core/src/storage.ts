@@ -6,27 +6,71 @@ const APP_SESSION_STORAGE_KEYS = [
   'posProfile', 'menuCategories', 'customerGroups', 'territories', 'payment_modes',
   'ury.setup.configureState',
 ];
-const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session'];
+const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session', 'ury_pending_bill_copy'];
+
+// A tab may keep printing when browser storage is unavailable. Clear its fallback on logout too.
+const pendingBillCopies = new Map<string, { value: string | null; persisted: boolean }>();
+
+export function readPendingBillCopy(slot: string): string | null {
+  const fallback = pendingBillCopies.get(slot);
+  if (fallback && !fallback.persisted) return fallback.value;
+  try {
+    const value = sessionStorage.getItem(slot);
+    if (value === null) pendingBillCopies.delete(slot);
+    else pendingBillCopies.set(slot, { value, persisted: true });
+    return value;
+  } catch {
+    return fallback?.value ?? null;
+  }
+}
+
+export function storePendingBillCopy(slot: string, value: string | null): void {
+  try {
+    if (value === null) {
+      sessionStorage.removeItem(slot);
+      pendingBillCopies.delete(slot);
+    } else {
+      sessionStorage.setItem(slot, value);
+      pendingBillCopies.set(slot, { value, persisted: true });
+    }
+  } catch {
+    // A failed write lives only in this tab. A failed removal masks the old disk value.
+    pendingBillCopies.set(slot, { value, persisted: false });
+  }
+}
+
+function removeStorageKeys(
+  area: 'localStorage' | 'sessionStorage',
+  keys: readonly string[],
+  matches: (key: string) => boolean,
+): void {
+  try {
+    const store = globalThis[area];
+    const remove = (key: string) => {
+      try {
+        store.removeItem(key);
+      } catch {
+        // Continue with the other keys if this removal is refused.
+      }
+    };
+    keys.forEach(remove);
+    // Removing entries changes the indices of the entries that follow them.
+    for (let index = store.length - 1; index >= 0; index--) {
+      const key = store.key(index);
+      if (key && matches(key)) remove(key);
+    }
+  } catch {
+    // Browser policy may prevent obtaining or enumerating this storage area.
+  }
+}
 
 export function clearAppStorage({ includeMosaicStrikes = true } = {}): void {
-  APP_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
-  APP_SESSION_STORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
-  // Walk backwards because removeItem changes the storage indices.
-  for (let index = localStorage.length - 1; index >= 0; index--) {
-    const key = localStorage.key(index);
-    if (key && (key.startsWith('posOrderTabsData:') || (includeMosaicStrikes && /^.+_.+_strike$/.test(key)))) {
-      localStorage.removeItem(key);
-    }
-  }
-  for (let index = sessionStorage.length - 1; index >= 0; index--) {
-    const key = sessionStorage.key(index);
-    if (key && (
-      USER_SESSION_STORAGE_KEYS.some((prefix) => key.startsWith(`${prefix}:`)) ||
-      key.startsWith('ury_rooms_') || key.startsWith('ury_room_counts_')
-    )) {
-      sessionStorage.removeItem(key);
-    }
-  }
+  pendingBillCopies.clear();
+  removeStorageKeys('localStorage', APP_LOCAL_STORAGE_KEYS, key =>
+    key.startsWith('posOrderTabsData:') || (includeMosaicStrikes && /^.+_.+_strike$/.test(key)));
+  removeStorageKeys('sessionStorage', APP_SESSION_STORAGE_KEYS, key =>
+    USER_SESSION_STORAGE_KEYS.some(prefix => key.startsWith(prefix + ':')) ||
+    key.startsWith('ury_rooms_') || key.startsWith('ury_room_counts_'));
 }
 
 export const storage = {
@@ -123,12 +167,8 @@ async function settle(step: () => Promise<unknown>): Promise<void> {
 // Ends the POS worker session, deletes ury-pos-* caches, unregisters only the
 // /pos worker and drops the offline per-user session keys. Never rejects.
 export async function purgeOfflineSession(): Promise<void> {
-  if (typeof sessionStorage !== 'undefined') {
-    for (let index = sessionStorage.length - 1; index >= 0; index--) {
-      const key = sessionStorage.key(index);
-      if (key && OFFLINE_SESSION_PREFIXES.some((prefix) => key.startsWith(`${prefix}:`))) sessionStorage.removeItem(key);
-    }
-  }
+  removeStorageKeys('sessionStorage', [], key =>
+    OFFLINE_SESSION_PREFIXES.some(prefix => key.startsWith(prefix + ':')));
   let registrations: ServiceWorkerRegistration[] = [];
   await settle(async () => {
     if (typeof navigator !== 'undefined' && navigator.serviceWorker?.getRegistrations) {

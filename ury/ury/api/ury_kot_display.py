@@ -724,6 +724,7 @@ def record_station_heartbeat(production_unit):
         return {"status": "Ignored"}
 
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    _require_station_scope(unit_doc)
     can_heartbeat = frappe.has_permission("URY Production Unit", "write", doc=unit_doc) or (
         frappe.has_permission("URY Production Unit", "read", doc=unit_doc)
         and frappe.has_permission("URY KOT", "write")
@@ -819,12 +820,41 @@ def _extract_station_device_config(production_unit):
     }
 
 
+def _require_station_scope(unit_doc):
+    # Invoke the station permission hook directly too: Frappe can short-circuit
+    # its document checks for Administrator or grant access via a document share.
+    if not frappe.call("ury.ury.doctype.ury_production_unit.station_scope.has_station_permission", doc=unit_doc):
+        frappe.throw(_("This station is outside your company or branch scope."), frappe.PermissionError)
+
+
+@frappe.whitelist()
+def get_production_units(company=None, branch=None):
+    from ury.ury.doctype.ury_production_unit.station_scope import station_company
+
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and branch and branch != session_branch:
+        return []
+    selected_branch = session_branch or branch
+    rows = frappe.get_list(
+        "URY Production Unit", fields=["name", "enabled", "branch", "company"],
+        filters={"branch": selected_branch} if selected_branch else {},
+        order_by="name asc", limit_page_length=0,
+    )
+    result = []
+    for unit in rows:
+        owner = station_company(unit)
+        if owner and (not company or owner == company):
+            result.append({"name": unit.name, "enabled": unit.enabled})
+    return result
+
+
 @frappe.whitelist()
 def get_station_device_config(production_unit):
     """Return server-stored order device & backup printer settings for a Production Unit."""
     if not production_unit:
         return None
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    _require_station_scope(unit_doc)
     if not frappe.has_permission("URY Production Unit", "read", doc=unit_doc):
         frappe.throw(
             coded_message("KOT-DEVICE-NOT-PERMITTED", _("You do not have permission to read station settings.")),
@@ -856,6 +886,7 @@ def save_station_device_config(production_unit, config):
         )
 
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    _require_station_scope(unit_doc)
     if not frappe.has_permission("URY Production Unit", "write", doc=unit_doc):
         frappe.throw(
             coded_message("KOT-DEVICE-NOT-PERMITTED", _("You do not have permission to update station settings.")),
@@ -871,22 +902,34 @@ def save_station_device_config(production_unit, config):
 
     printer = str(config.get("printer") or "").strip()
     host = str(config.get("host") or "").strip()
-    port = _cint(config.get("port") or 9100) or 9100
+    def station_port(key):
+        value = config.get(key)
+        if value is None or value == "":
+            return 9100
+        if not str(value).isdecimal() or not 1 <= int(value) <= 65535:
+            frappe.throw(_("Printer port must be a whole number from 1 to 65535."))
+        return int(value)
+
+    port = station_port("port") if host else 9100
     primary_value = printer or (f"{host}:{port}" if host else "")
 
     backup_printer = str(config.get("backupPrinter") or "").strip()
     backup_host = str(config.get("backupHost") or "").strip()
-    backup_port = _cint(config.get("backupPort") or 9100) or 9100
+    backup_port = station_port("backupPort") if backup_host else 9100
     backup_value = backup_printer or (f"{backup_host}:{backup_port}" if backup_host else "")
 
     page_width = str(config.get("pageWidth") or 576)
     if page_width not in ("576", "384"):
-        page_width = "576"
+        frappe.throw(_("Choose a supported printer paper width."))
     command_mode = str(config.get("commandMode") or "standard")
     if command_mode not in ("standard", "raster"):
-        command_mode = "standard"
+        frappe.throw(_("Choose a supported printer command mode."))
 
-    enabled = bool(config.get("enabled"))
+    enabled = bool(_cint(config.get("enabled")))
+    if (printer and host) or (backup_printer and backup_host):
+        frappe.throw(_("Choose either an installed printer or a network host for each target."))
+    if enabled and (not primary_value or not str(config.get("printFormat") or "").strip()):
+        frappe.throw(_("Auto print requires a primary printer and a print format."))
     unit_doc.custom_primary_printer = primary_value
     unit_doc.custom_backup_printer = backup_value
     unit_doc.custom_print_format = str(config.get("printFormat") or "").strip()
@@ -897,7 +940,7 @@ def save_station_device_config(production_unit, config):
         unit_doc.custom_printer_transport = "QZ Tray"
     elif getattr(unit_doc, "custom_device_mode", None) == "KDS + Auto Print":
         unit_doc.custom_device_mode = "KDS Display"
-    unit_doc.save()
+    unit_doc.save_device_settings()
     return _extract_station_device_config(production_unit)
 
 
@@ -1321,6 +1364,7 @@ def kot_list(production_unit=None):
     availability_branch = branch
     if production_unit:
         unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+        _require_station_scope(unit_doc)
         if not frappe.has_permission("URY Production Unit", "read", doc=unit_doc):
             frappe.throw(
                 coded_message(

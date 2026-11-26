@@ -30,7 +30,8 @@ vi.mock("../lib/print", () => ({
   printBillCopy: vi.fn().mockResolvedValue({ status: "COMPLETED", copy_number: 1 }),
 }));
 
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async () => ({
+  ...await vi.importActual<typeof import("@ury/core")>("@ury/core"),
   formatCurrency: (amount: number) => `UGX ${amount.toFixed(2)}`,
   parseFrappeError: vi.fn((err: unknown, fallback?: string) =>
     err && typeof err === "object" && "message" in err && typeof err.message === "string"
@@ -93,8 +94,10 @@ describe("PaymentDialog fiscal receipt order", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    document.cookie = "user_id=user1; path=/";
     vi.mocked(call.get).mockResolvedValue({ message: { efris_status: null, fdn: null } });
-    vi.mocked(call.post).mockResolvedValue({ ok: true });
+    vi.mocked(call.post).mockImplementation(async method => method === QUEUE_REPRINT
+      ? { message: { status: "AWAITING_FDN" } } : { ok: true });
     vi.mocked(printOrder).mockResolvedValue("qz");
     vi.mocked(printBillCopy).mockResolvedValue({ status: "COMPLETED", copy_number: 1 });
     mockUsePOSStore.mockReturnValue({
@@ -156,6 +159,28 @@ describe("PaymentDialog fiscal receipt order", () => {
     expect(errors[0]).toContain("Printer is offline");
     expect(errors.join(" ")).not.toContain("payment.payment_not_processed");
   });
+
+  it.each(["success", "print refused", "retirement refused"])(
+    "retires recovery only after acknowledged primary delivery (%s)", async outcome => {
+      const close = "ury.ury_pos.api.close_unused_fiscal_copy";
+      vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN-1", efris_status: "Submitted" } });
+      vi.mocked(call.post).mockImplementation(async method => {
+        if (method === close && outcome === "retirement refused") throw new Error("Request interrupted");
+        return { ok: true };
+      });
+      if (outcome === "print refused") vi.mocked(printOrder).mockRejectedValueOnce(new Error("No receipt delivered"));
+      const props = renderDialog();
+      fireEvent.click(screen.getByText(/payment.pay_button/));
+      await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+      expect(printOrder).toHaveBeenCalledOnce();
+      if (outcome === "print refused") {
+        expect(call.post).not.toHaveBeenCalledWith(close, expect.anything());
+      } else {
+        expect(callOrder(close)).toBeGreaterThan(vi.mocked(printOrder).mock.invocationCallOrder[0]);
+        expect(showToast.error).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("polls get_efris_status until the FDN arrives before printing the fiscal receipt", async () => {
     let pollCount = 0;
@@ -267,18 +292,98 @@ describe("PaymentDialog fiscal receipt order", () => {
 
     // 3) flushPendingFiscalReprints keeps entry in localStorage across transient errors and prints once reachable.
     await queuePendingFiscalReprint({ invoice: "INV-T2", posProfile: profile });
-    expect(localStorage.getItem("ury_pending_fiscal_reprints")).toContain("INV-T2");
+    expect(localStorage.getItem("ury_pending_fiscal_reprints:user1")).toContain("INV-T2");
 
     await flushPendingFiscalReprints(profile);
     expect(printBillCopy).not.toHaveBeenCalled();
-    expect(localStorage.getItem("ury_pending_fiscal_reprints")).toContain("INV-T2");
+    expect(localStorage.getItem("ury_pending_fiscal_reprints:user1")).toContain("INV-T2");
 
     vi.mocked(call.get).mockResolvedValueOnce({ message: { efris_status: "Submitted", fdn: "324013570002" } });
     await flushPendingFiscalReprints(profile);
     expect(printBillCopy).toHaveBeenCalledWith(
       expect.objectContaining({ orderId: "INV-T2", idempotencyKey: "efris-auto-INV-T2" }),
     );
+    expect(localStorage.getItem("ury_pending_fiscal_reprints:user1")).toBeNull();
+  });
+
+  it("removes a permanently refused registration without dispatch or another retry", async () => {
+    const { queuePendingFiscalReprint, flushPendingFiscalReprints } = await import("../lib/efris-print");
+    const profile = { print_type: "qz" } as const;
+    await queuePendingFiscalReprint({ invoice: "OLD", posProfile: profile });
+    vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN-1" } });
+    vi.mocked(call.post).mockClear().mockRejectedValue({ httpStatus: 410, exc_type: "PermissionError" });
+    await flushPendingFiscalReprints(profile);
+    await flushPendingFiscalReprints(profile);
+    expect(localStorage.getItem("ury_pending_fiscal_reprints:user1")).toBeNull();
+    expect(call.post).toHaveBeenCalledTimes(1);
+    expect(printBillCopy).not.toHaveBeenCalled();
+  });
+
+  it.each(["registration", "flush"])("retains the active cashier's invoice after a 403 during %s", async phase => {
+    const { queuePendingFiscalReprint, flushPendingFiscalReprints } = await import("../lib/efris-print");
+    const profile = { print_type: "qz" } as const;
+    vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN" } });
+    const forbidden = { httpStatus: 403, exc_type: "PermissionError" };
+    if (phase === "registration") vi.mocked(call.post).mockRejectedValueOnce(forbidden);
+    await queuePendingFiscalReprint({ invoice: "PRIVATE", posProfile: profile });
+    vi.mocked(call.post).mockRejectedValueOnce(forbidden);
+    await flushPendingFiscalReprints(profile);
+    expect(printBillCopy).not.toHaveBeenCalled();
+    vi.mocked(call.post).mockResolvedValue({ message: { status: "AWAITING_FDN" } });
+    await flushPendingFiscalReprints(profile);
+    expect(printBillCopy).toHaveBeenCalledWith(expect.objectContaining({orderId: "PRIVATE"}));
+  });
+
+  it("keeps queued invoices separate when cashiers switch on the same till", async () => {
+    const { queuePendingFiscalReprint, flushPendingFiscalReprints } = await import("../lib/efris-print");
+    const profile = { print_type: "qz" } as const;
+    vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN" } });
+    await queuePendingFiscalReprint({ invoice: "FIRST", posProfile: profile });
+    document.cookie = "user_id=user2; path=/";
+    await queuePendingFiscalReprint({ invoice: "SECOND", posProfile: profile });
+    vi.mocked(call.post).mockClear().mockImplementation(async (_method, args) => {
+      if (args.invoice === "FIRST") throw { httpStatus: 403 };
+      return { message: { status: "AWAITING_FDN" } };
+    });
+    await flushPendingFiscalReprints(profile);
+    expect(call.post).not.toHaveBeenCalledWith(QUEUE_REPRINT, expect.objectContaining({invoice: "FIRST"}));
+    expect(printBillCopy).toHaveBeenCalledWith(expect.objectContaining({orderId: "SECOND"}));
+    document.cookie = "user_id=user1; path=/";
+    vi.mocked(call.post).mockResolvedValue({ message: { status: "AWAITING_FDN" } });
+    await flushPendingFiscalReprints(profile);
+    expect(printBillCopy).toHaveBeenCalledWith(expect.objectContaining({orderId: "FIRST"}));
+  });
+
+  it("retains an ownerless pre-upgrade entry until its cashier can register it", async () => {
+    const { flushPendingFiscalReprints } = await import("../lib/efris-print");
+    const profile = { print_type: "qz" } as const;
+    localStorage.setItem("ury_pending_fiscal_reprints", JSON.stringify([{invoice: "LEGACY", queuedAt: "2026-01-01"}]));
+    vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN" } });
+    vi.mocked(call.post).mockRejectedValueOnce({ httpStatus: 403 });
+    await flushPendingFiscalReprints(profile);
+    expect(localStorage.getItem("ury_pending_fiscal_reprints")).toContain("LEGACY");
+    expect(call.get).not.toHaveBeenCalled();
+    document.cookie = "user_id=original-cashier; path=/";
+    vi.mocked(call.post).mockResolvedValue({ message: { status: "AWAITING_FDN" } });
+    await flushPendingFiscalReprints(profile);
+    expect(printBillCopy).toHaveBeenCalledWith(expect.objectContaining({orderId: "LEGACY"}));
     expect(localStorage.getItem("ury_pending_fiscal_reprints")).toBeNull();
+  });
+
+  it.each(["pending", "immediate"])("passes the named receipt queue through %s fiscal replay", async path => {
+    const { queuePendingFiscalReprint, flushPendingFiscalReprints, triggerPostReplayFiscalPrint } = await import("../lib/efris-print");
+    const profile = { print_type: "qz" as const, qz_host: "localhost", printer: "Receipt" };
+    vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN-1", efris_status: "Submitted" } });
+    if (path === "pending") {
+      await queuePendingFiscalReprint({ invoice: "INV-Q", posProfile: profile });
+      await flushPendingFiscalReprints(profile);
+    } else {
+      await triggerPostReplayFiscalPrint({ invoice: "INV-Q", posProfile: profile });
+    }
+    expect(call.post).toHaveBeenCalledWith(QUEUE_REPRINT, { invoice: "INV-Q", delivery: "qz" });
+    expect(printBillCopy).toHaveBeenCalledWith(expect.objectContaining({
+      posProfile: expect.objectContaining({ printer: "Receipt" }),
+    }));
   });
 
   it("blocks double-click race synchronously across step 1 with a ref mutex", async () => {

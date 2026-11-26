@@ -10,7 +10,8 @@ const assets = resolve(import.meta.dirname, '../../../ury/public/js');
 const release = process.env.QZ_TRAY_TEST_CLIENT;
 const qzSource = readFileSync(release || resolve(assets, 'qz-tray.js'), 'utf8');
 const signMethod = 'ury.ury.api.ury_print.signature_promise';
-const markPrinted = 'ury.ury.api.ury_print.qz_print_update';
+const markPrinted = 'ury.ury.api.ury_print.complete_receipt_delivery';
+const prepare = 'ury.ury.api.ury_print.prepare_receipt_delivery';
 const denied = { httpStatus: 403, message: 'Internal permission traceback' };
 
 type Bridge = NonNullable<Window['qz']> & { version: string };
@@ -99,7 +100,7 @@ it('Desk unfreezes after an approved printer lookup followed by a refused print'
   Object.assign(sandbox, {
     __: (message: string) => message,
     fetch: async () => ({ ok: true, text: async () => 'certificate' }),
-    cur_frm: frm,
+    cur_frm: frm, crypto,
     frappe: {
       require: (path: string, done: () => void) => {
         if (path.endsWith('/sign-message.js')) runAsset('sign-message.js');
@@ -121,7 +122,8 @@ it('Desk unfreezes after an approved printer lookup followed by a refused print'
           return Promise.reject(denied);
         }
         const message = method === signMethod ? 'approved signature'
-          : method.endsWith('qz_certificate') ? 'certificate.pem'
+          : method === prepare ? { delivery_id: 'test-delivery', invoice_revision: 'v1', html: '<p>receipt</p>' }
+          : method.endsWith('qz_certificate') ? '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----'
             : method.endsWith('get_html_and_style') ? { html: '<p>receipt</p>' } : { status: 'Success' };
         return Promise.resolve({ message }).then((response) => { callback?.(response); return response; });
       },
@@ -135,6 +137,7 @@ it('Desk unfreezes after an approved printer lookup followed by a refused print'
   await vi.waitFor(() => expect(unfreeze).toHaveBeenCalledOnce(), { timeout: 250 });
   expect(msgprint).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/printer signing was refused/i) }));
   expect(requests.filter((call) => call === 'print')).toHaveLength(0);
+  expect(methods[0]).toBe(prepare);
   expect(methods).not.toContain(markPrinted);
 
   denyPrint = false;

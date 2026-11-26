@@ -21,7 +21,7 @@ it('loads one Frappe bridge, connects, signs and prints to the default printer',
   post.mockImplementation(async (_method, { toSign }) => ({
     message: sign('RSA-SHA512', Buffer.from(toSign), privateKey).toString('base64'),
   }));
-  vi.spyOn(axios, 'get').mockResolvedValue({ data: 'test certificate' });
+  vi.spyOn(axios, 'get').mockResolvedValue({ data: { message: '-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----' } });
   const bridge = {
     security: { setCertificatePromise: vi.fn(), setSignatureAlgorithm: vi.fn(), setSignaturePromise: vi.fn() },
     websocket: { isActive: vi.fn(() => true), connect: vi.fn(), disconnect: vi.fn() },
@@ -31,15 +31,17 @@ it('loads one Frappe bridge, connects, signs and prints to the default printer',
   };
   disconnectQzPrinter();
   expect(scripts()).toHaveLength(0);
-  bridge.websocket.isActive.mockReturnValueOnce(false);
+  bridge.websocket.isActive.mockReturnValue(false);
+  bridge.websocket.connect.mockImplementation(async () => { bridge.websocket.isActive.mockReturnValue(true); });
   const connect = loadQzPrinter('localhost');
   const print = printWithQz('localhost', '<p>receipt</p>');
   expect(scripts()).toHaveLength(1);
   Object.assign(window, { qz: bridge });
   scripts()[0].dispatchEvent(new Event('load'));
   await Promise.all([connect, print]);
-  expect(bridge.websocket.connect).toHaveBeenCalledWith({ host: 'localhost', usingSecure: false });
-  await expect(new Promise(bridge.security.setCertificatePromise.mock.calls[0][0])).resolves.toBe('test certificate');
+  expect(bridge.websocket.connect).toHaveBeenCalledWith({ host: 'localhost', usingSecure: true });
+  await expect(new Promise(bridge.security.setCertificatePromise.mock.calls[0][0])).resolves.toContain('BEGIN CERTIFICATE');
+  expect(axios.get).toHaveBeenCalledWith('/api/method/ury.ury.api.ury_print.qz_certificate');
   expect(bridge.security.setSignatureAlgorithm).toHaveBeenCalledWith('SHA512');
   const callback = bridge.security.setSignaturePromise.mock.calls[0][0];
   const sig = await new Promise<string>(callback('challenge'));
@@ -59,4 +61,18 @@ it('reports failed or empty script loads and permits retry', async () => {
     await expect(attempt).rejects.toThrow(/QZ_UNAVAILABLE/);
     expect(scripts()).toHaveLength(0);
   }
+});
+
+it('checks copy dispatch authority after resolving the printer and before spooling', async () => {
+  const spool = vi.fn();
+  const bridge = {
+    security: { setSignatureAlgorithm: vi.fn(), setSignaturePromise: vi.fn() },
+    websocket: { isActive: () => true }, printers: { getDefault: async () => 'Receipt' },
+    configs: { create: () => ({}) }, print: spool,
+  };
+  Object.assign(window, { qz: bridge });
+  await expect(printWithQz('localhost', 'COPY #1', 'Receipt', async () => {
+    throw new Error('Copy reclaimed');
+  })).rejects.toThrow('Copy reclaimed');
+  expect(spool).not.toHaveBeenCalled();
 });

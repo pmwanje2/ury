@@ -101,6 +101,7 @@
         <label class="mt-3 block font-semibold">{{ __("Print format") }}
           <input v-model="stationSettings.printFormat" class="mt-1 w-full rounded border p-2" type="text" required>
         </label>
+        <button type="button" class="mt-3 underline" @click="downloadQzCertificate">{{ __("Download QZ Certificate (.pem)") }}</button>
         <label class="mt-3 block font-semibold">{{ __("Paper width") }}
           <select v-model.number="stationSettings.pageWidth" class="mt-1 w-full rounded border p-2">
             <option value="576">80 mm</option>
@@ -762,6 +763,19 @@ export default {
         this.printError = kitchenErrorMessage(error, t("Could not open station printing settings."));
       }
     },
+    async downloadQzCertificate() {
+      try {
+        const pem = await this.stationPrinter.publicCertificate();
+        const url = URL.createObjectURL(new Blob([pem], { type: "application/x-pem-file" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "qz-certificate.pem";
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (error) {
+        this.stationSettingsError = kitchenErrorMessage(error, t("Could not download the QZ certificate."));
+      }
+    },
     async loadInstalledPrinters() {
       this.printerListError = "";
       try {
@@ -788,7 +802,7 @@ export default {
           this.call.post("ury.ury.api.ury_kot_display.save_station_device_config", {
             production_unit: this.production,
             config: JSON.stringify(this.stationSettings),
-          }).catch(() => {});
+          }).catch(error => { this.printError = kitchenErrorMessage(error, t("Settings saved on this device only.")); });
         }
       } catch (error) {
         this.stationSettingsError = clientMessage(error.message || t("Could not load printer settings."));

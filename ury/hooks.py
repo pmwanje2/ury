@@ -230,7 +230,13 @@ before_uninstall = "ury.uninstall.uninstall"
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }
 
+has_permission = {
+    "URY Production Unit": "ury.ury.doctype.ury_production_unit.station_scope.has_station_permission",
+}
+
 permission_query_conditions = {
+    "URY Production Unit": "ury.ury.doctype.ury_production_unit.station_scope.station_query_conditions",
+    "URY KOT": "ury.ury.doctype.ury_production_unit.station_scope.station_query_conditions",
     "Quality Review": "ury.ury.hooks.checklist.permission_checklists",
 }
 
@@ -334,7 +340,14 @@ doc_events = {
     },
     "POS Profile": {"validate": "ury.ury.hooks.ury_pos_profile.validate"},
     "Mode of Payment": {"validate": "ury.ury.hooks.ury_pos_tender.validate_mode_of_payment_halo"},
-    "Branch": {"validate": "ury.ury.api.table_reservation.validate_branch_reservation_settings"},
+    "Branch": {
+        "validate": "ury.ury.api.table_reservation.validate_branch_reservation_settings",
+        "on_update": "ury.ury.doctype.ury_production_unit.station_scope.branch_owner_updated",
+    },
+    "User Permission": {
+        "on_update": "ury.ury.doctype.ury_production_unit.station_scope.user_scope_updated",
+        "after_delete": "ury.ury.doctype.ury_production_unit.station_scope.user_scope_updated",
+    },
     "Sales Invoice": {
         "before_validate": "ury.ury.doctype.ury_order.ury_order.ensure_share_quantity_precision",
         "validate": "ury.ury.hooks.ury_sales_invoice.validate",
@@ -722,6 +735,7 @@ fixtures = [
                     "POS Profile-printer_settings",
                     "POS Profile-qz_print",
                     "POS Profile-qz_host",
+                    "POS Profile-custom_qz_receipt_queue",
                     "POS Profile-section_break_tjhrm",
                     "POS Profile-transfer_role_permissions",
                     "POS Profile-role_allowed_for_billing",

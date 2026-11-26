@@ -1,0 +1,62 @@
+{
+ "doctype": "DocType",
+ "name": "URY Receipt Delivery",
+ "module": "URY",
+ "modified": "2026-11-26 16:00:00.000000",
+ "engine": "InnoDB",
+ "field_order": [
+  "invoice",
+  "print_number",
+  "reprint_label",
+  "invoice_revision",
+  "receipt_html",
+  "browser_rendered",
+  "delivered"
+ ],
+ "fields": [
+  {
+   "fieldname": "invoice",
+   "fieldtype": "Link",
+   "options": "POS Invoice",
+   "label": "Invoice",
+   "reqd": 1
+  },
+  {
+   "fieldname": "print_number",
+   "fieldtype": "Int",
+   "label": "Authorized Print Number",
+   "reqd": 1
+  },
+  {
+   "fieldname": "reprint_label",
+   "fieldtype": "Data",
+   "label": "Reprint Label"
+  },
+  {
+   "fieldname": "invoice_revision",
+   "fieldtype": "Data",
+   "label": "Authorized Invoice Revision",
+   "read_only": 1
+  },
+  {
+   "fieldname": "receipt_html",
+   "fieldtype": "Long Text",
+   "label": "Authorized Receipt HTML",
+   "read_only": 1
+  },
+  {
+   "fieldname": "browser_rendered",
+   "fieldtype": "Check",
+   "label": "Browser Receipt Rendered",
+   "read_only": 1,
+   "default": "0"
+  },
+  {
+   "fieldname": "delivered",
+   "fieldtype": "Check",
+   "label": "Delivered",
+   "default": "0"
+  }
+ ],
+ "permissions": []
+}

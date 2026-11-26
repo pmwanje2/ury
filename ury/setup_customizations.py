@@ -643,6 +643,14 @@ def get_custom_fields():
 				"translatable": 0,
 			},
 			{
+				"depends_on": "qz_print",
+				"fieldname": "custom_qz_receipt_queue",
+				"fieldtype": "Data",
+				"label": "QZ Receipt Queue",
+				"description": "Installed OS printer name. Leave blank to use the workstation default.",
+				"insert_after": "qz_host",
+			},
+			{
 				"fieldname": "custom_enable_payment_without_printing",
 				"fieldtype": "Check",
 				"label": "Enable Payment Without Printing",

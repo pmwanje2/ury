@@ -1,4 +1,5 @@
 import { loadQz } from './qz-runtime';
+import { connectQz, withQzDeadline } from '../../../../ury/public/js/qz-signing.js';
 import axios from 'axios';
 import { call } from '../frappe/client';
 import { runSignedQz } from './qz-signing';
@@ -38,16 +39,15 @@ export function resolveDrawerKickHex(opts?: {
   throw new Error(`Unsupported cash drawer pin "${String(rawPin)}". Use Pin 2 or Pin 5.`);
 }
 
-export async function loadQzPrinter(host: string): Promise<void> {
+export async function loadQzPrinter(host: string, signal?: AbortSignal): Promise<void> {
   const qz = await loadQz();
-  qz.security.setCertificatePromise((resolve, reject) => {
-    axios.get('/assets/ury/files/cert.pem')
-      .then(({ data }) => resolve(data))
-      .catch((err) => reject('Error fetching certificate: ' + String(err)));
-  });
-  if (!qz.websocket.isActive()) {
-    await qz.websocket.connect({ host, usingSecure: false });
-  }
+  await connectQz(qz, async requestSignal => {
+    const endpoint = '/api/method/ury.ury.api.ury_print.qz_certificate';
+    const { data } = signal
+      ? await axios.get(endpoint, { signal: requestSignal })
+      : await axios.get(endpoint);
+    return data.message;
+  }, host, signal);
 }
 
 export function disconnectQzPrinter(): void {
@@ -55,14 +55,22 @@ export function disconnectQzPrinter(): void {
   if (qz?.websocket.isActive()) qz.websocket.disconnect();
 }
 
-export async function printWithQz(host: string, htmlToPrint: string): Promise<void> {
-  const qz = await loadQz();
-
-  return runSignedQz(qz, call.post, async () => {
-    if (!qz.websocket.isActive()) await loadQzPrinter(host);
-    const printer = await qz.printers.getDefault();
-    const data = [{ type: 'html', format: 'plain', data: htmlToPrint }];
-    await qz.print(qz.configs.create(printer), data);
+export async function printWithQz(host: string, htmlToPrint: string, queue?: string | null, beforeDispatch?: () => Promise<void>): Promise<void> {
+  return withQzDeadline(async (signal, startPrinting) => {
+    const qz = await loadQz();
+    return runSignedQz(qz, call.post, async () => {
+      if (!qz.websocket.isActive()) await loadQzPrinter(host, signal);
+      signal.throwIfAborted();
+      startPrinting();
+      const printer = queue?.trim() || await qz.printers.getDefault();
+      signal.throwIfAborted();
+      const config = qz.configs.create(printer);
+      if (beforeDispatch) {
+        await beforeDispatch();
+        signal.throwIfAborted();
+      }
+      await qz.print(config, [{ type: 'html', format: 'plain', data: htmlToPrint }]);
+    }, signal);
   });
 }
 

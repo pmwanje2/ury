@@ -1,4 +1,4 @@
-import { call } from '@ury/core';
+import { call, getSessionUser, getUserSessionStorageKey } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { t } from '../i18n';
 import { printBillCopy } from './print';
@@ -30,7 +30,10 @@ export interface PendingFiscalReprintEntry {
   queuedAt: string;
 }
 
-export type ReprintPosProfile = Pick<Partial<PosProfileCombined>, 'print_type' | 'qz_host' | 'efris_print_wait_seconds'>;
+export type ReprintPosProfile = Pick<Partial<PosProfileCombined>, 'print_type' | 'qz_host' | 'printer' | 'efris_print_wait_seconds'> & {
+  qz_receipt_queue?: string | null;
+  custom_qz_receipt_queue?: string | null;
+};
 
 export function resolveEfrisPrintWaitSeconds(raw: unknown): number {
   if (raw === undefined || raw === null || raw === '') {
@@ -138,10 +141,10 @@ export async function waitForEfrisFdn({
   }
 }
 
-function readPendingQueue(): PendingFiscalReprintEntry[] {
+function readPendingQueue(key: string): PendingFiscalReprintEntry[] {
   if (typeof localStorage === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as PendingFiscalReprintEntry[]) : [];
@@ -150,17 +153,21 @@ function readPendingQueue(): PendingFiscalReprintEntry[] {
   }
 }
 
-function writePendingQueue(entries: PendingFiscalReprintEntry[]): void {
+function writePendingQueue(key: string, entries: PendingFiscalReprintEntry[]): void {
   if (typeof localStorage === 'undefined') return;
   try {
     if (entries.length === 0) {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(key);
     } else {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+      localStorage.setItem(key, JSON.stringify(entries));
     }
   } catch {
     // Storage quota or restricted mode; server queue still retains the intent.
   }
+}
+
+function removePendingEntry(key: string, invoice: string) {
+  writePendingQueue(key, readPendingQueue(key).filter(entry => entry.invoice !== invoice));
 }
 
 function deliveryForProfile(posProfile?: ReprintPosProfile | null): 'network' | 'qz' | 'browser' {
@@ -169,69 +176,102 @@ function deliveryForProfile(posProfile?: ReprintPosProfile | null): 'network' | 
   return 'browser';
 }
 
+async function registerFiscalCopy(invoice: string, profile?: ReprintPosProfile | null): Promise<boolean> {
+  try {
+    const response = await call.post(QUEUE_REPRINT_METHOD, { invoice, delivery: deliveryForProfile(profile) });
+    const status = response?.message?.status;
+    if (status === 'AWAITING_FDN') return true;
+    if (['DISPATCHED', 'NOT_REQUIRED', 'FAILED', 'CANCELED'].includes(status)) return false;
+    throw new Error('Fiscal copy registration was not acknowledged.');
+  } catch (error) {
+    if ((error as { httpStatus?: number } | null)?.httpStatus === 410) return false;
+    throw error;
+  }
+}
+
 export async function queuePendingFiscalReprint({
   invoice,
   partnerInvoice,
   posProfile,
+  cashier = getSessionUser(),
 }: {
   invoice: string;
   partnerInvoice?: string | null;
   posProfile?: ReprintPosProfile | null;
+  cashier?: string | null;
 }): Promise<void> {
-  const existing = readPendingQueue();
+  const key = getUserSessionStorageKey(STORAGE_KEY, cashier);
+  if (!key) return;
+  const existing = readPendingQueue(key);
   if (!existing.some((entry) => entry.invoice === invoice)) {
     existing.push({ invoice, partnerInvoice: partnerInvoice ?? null, queuedAt: new Date().toISOString() });
-    writePendingQueue(existing);
+    writePendingQueue(key, existing);
   }
-  if (typeof call.post === 'function') {
+  if (cashier === getSessionUser() && typeof call.post === 'function') {
     try {
-      await call.post(QUEUE_REPRINT_METHOD, {
-        invoice,
-        delivery: deliveryForProfile(posProfile),
-      });
+      if (!await registerFiscalCopy(invoice, posProfile)) {
+        removePendingEntry(key, invoice);
+      }
     } catch {
       // Keep local queue entry so the till retries when reachable.
     }
   }
 }
 
-let flushing = false;
+function copyProfile(profile: ReprintPosProfile) {
+  return {
+    print_type: profile.print_type ?? 'socket',
+    qz_host: profile.qz_host ?? null,
+    printer: profile.printer || profile.qz_receipt_queue || profile.custom_qz_receipt_queue || null,
+  };
+}
+
+function printFiscalCopy(invoice: string, profile: ReprintPosProfile) {
+  return printBillCopy({
+    orderId: invoice, posProfile: copyProfile(profile), idempotencyKey: `efris-auto-${invoice}`,
+  });
+}
+
+const flushing = new Set<string>();
 
 export async function flushPendingFiscalReprints(posProfile?: ReprintPosProfile | null): Promise<void> {
-  if (flushing || !posProfile) return;
-  const entries = readPendingQueue();
-  if (entries.length === 0) return;
-  flushing = true;
+  const cashier = getSessionUser();
+  const key = getUserSessionStorageKey(STORAGE_KEY, cashier);
+  if (!key || !posProfile || flushing.has(key)) return;
+  flushing.add(key);
   try {
-    const remaining: PendingFiscalReprintEntry[] = [];
-    for (const entry of entries) {
-      const current = await evaluateInvoiceGroup(entry.invoice, entry.partnerInvoice);
-      if (current.state === 'fiscalised') {
+    // Old tills stored ownerless entries under STORAGE_KEY. The server must verify
+    // ownership before this cashier polls, prints, or removes one.
+    for (const source of [key, STORAGE_KEY]) {
+      for (const entry of readPendingQueue(source)) {
+        if (cashier !== getSessionUser()) return;
         try {
-          const result = await printBillCopy({
-            orderId: entry.invoice,
-            posProfile: { print_type: posProfile.print_type ?? 'socket', qz_host: posProfile.qz_host ?? null },
-            idempotencyKey: `efris-auto-${entry.invoice}`,
-          });
-          showToast?.success?.(
-            t('payment.fiscal_reprint_printed', {
-              invoice: entry.invoice,
-              copy: result.copy_number ?? 1,
-              fdn: current.fdn ?? '',
-            }),
-          );
+          const pending = await registerFiscalCopy(entry.invoice, posProfile);
+          if (cashier !== getSessionUser()) return;
+          if (!pending) {
+            removePendingEntry(source, entry.invoice);
+            continue;
+          }
+          const current = await evaluateInvoiceGroup(entry.invoice, entry.partnerInvoice);
+          if (cashier !== getSessionUser()) return;
+          if (current.state === 'not_applicable') {
+            removePendingEntry(source, entry.invoice);
+          } else if (current.state === 'fiscalised') {
+            const result = await printFiscalCopy(entry.invoice, posProfile);
+            removePendingEntry(source, entry.invoice);
+            showToast?.success?.(
+              t('payment.fiscal_reprint_printed', {
+                invoice: entry.invoice, copy: result.copy_number ?? 1, fdn: current.fdn ?? '',
+              }),
+            );
+          }
         } catch {
-          remaining.push(entry);
+          // A permission refusal or interrupted delivery leaves the owning cashier's entry intact.
         }
-      } else if (current.state === 'not_applicable') {
-        // Non-EFRIS invoice no longer waits for an FDN.
-      } else {
-        remaining.push(entry);
       }
     }
-    writePendingQueue(remaining);
   } finally {
-    flushing = false;
+    flushing.delete(key);
   }
 }
 
@@ -239,25 +279,29 @@ export async function triggerPostReplayFiscalPrint({
   invoice,
   partnerInvoice,
   posProfile,
+  cashier = getSessionUser(),
 }: {
   invoice: string;
   partnerInvoice?: string | null;
   posProfile?: ReprintPosProfile | null;
+  cashier?: string | null;
 }): Promise<void> {
   if (!posProfile) return;
   const waitSeconds = resolveEfrisPrintWaitSeconds(posProfile.efris_print_wait_seconds);
   const outcome = await waitForEfrisFdn({ invoice, partnerInvoice, timeoutSeconds: waitSeconds });
-  if (outcome.outcome === 'timed_out') {
-    await queuePendingFiscalReprint({ invoice, partnerInvoice, posProfile });
+  if (outcome.outcome === 'timed_out' || cashier !== getSessionUser()) {
+    await queuePendingFiscalReprint({ invoice, partnerInvoice, posProfile, cashier });
+    return;
+  }
+  if (outcome.outcome === 'not_applicable') {
+    await printBillCopy({ orderId: invoice, posProfile: copyProfile(posProfile), idempotencyKey: `offline-copy-${invoice}` });
     return;
   }
   try {
-    await printBillCopy({
-      orderId: invoice,
-      posProfile: { print_type: posProfile.print_type ?? 'socket', qz_host: posProfile.qz_host ?? null },
-      idempotencyKey: `efris-auto-${invoice}`,
-    });
+    if (!await registerFiscalCopy(invoice, posProfile)) return;
+    if (cashier === getSessionUser()) await printFiscalCopy(invoice, posProfile);
+    else await queuePendingFiscalReprint({ invoice, partnerInvoice, posProfile, cashier });
   } catch {
-    await queuePendingFiscalReprint({ invoice, partnerInvoice, posProfile });
+    await queuePendingFiscalReprint({ invoice, partnerInvoice, posProfile, cashier });
   }
 }

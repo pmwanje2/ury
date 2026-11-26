@@ -4,8 +4,8 @@ import { reactive } from "vue";
 import ProductionDashboard from "./ProductionDashboard.vue";
 import { createProductionScope, productionScopeKey } from "../../composables/productionScope";
 
-const db = vi.hoisted(() => ({ getDocList: vi.fn(), getCount: vi.fn() }));
-vi.mock("frappe-js-sdk", () => ({ FrappeApp: class { db() { return db; } } }));
+const db = vi.hoisted(() => ({ getDocList: vi.fn(), getCount: vi.fn(), list: vi.fn() }));
+vi.mock("frappe-js-sdk", () => ({ FrappeApp: class { db() { return db; } call() { return { get: db.list, post: async () => ({ message: {} }) }; } } }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -64,30 +64,28 @@ describe("Mosaic scope", () => {
 describe("ProductionDashboard filtering", () => {
   it("filters by company and branch, then permits all branches within that company", async () => {
     const scope = reactive({ ready: true, company: "URY UAE", branch: "URY JVC", loading: false });
-    db.getDocList.mockResolvedValue([{ name: "Kitchen JVC", enabled: 1 }, { name: "Bar JVC", enabled: 0 }]);
+    db.list.mockResolvedValue({ message: [{ name: "Kitchen JVC", enabled: 1 }, { name: "Bar JVC", enabled: 0 }] });
     const wrapper = mountDashboard(scope);
     await flushPromises();
-    expect(db.getDocList).toHaveBeenLastCalledWith("URY Production Unit", expect.objectContaining({
-      fields: ["name", "enabled"], filters: [["company", "=", "URY UAE"], ["branch", "=", "URY JVC"]], limit: 0,
-    }));
-    expect(wrapper.findAllComponents({ name: "ProductionCard" })[1].props("disabled")).toBe(true);
+    db.list.mockResolvedValue({ message: [{ name: "Legacy Kitchen", enabled: 1 }] });
     scope.branch = "all";
     await flushPromises();
-    expect(db.getDocList).toHaveBeenLastCalledWith("URY Production Unit", expect.objectContaining({
-      filters: [["company", "=", "URY UAE"]],
-    }));
+    expect(db.list).toHaveBeenLastCalledWith("ury.ury.api.ury_kot_display.get_production_units", {
+      company: "URY UAE", branch: null,
+    });
+    expect(wrapper.text()).toContain("Legacy Kitchen");
     wrapper.unmount();
   });
 
   it("ignores late results from the previous branch", async () => {
     let finishOldRequest;
-    db.getDocList.mockReturnValueOnce(new Promise((resolve) => { finishOldRequest = resolve; }))
-      .mockResolvedValueOnce([{ name: "Kitchen Barsha", enabled: 1 }]);
+    db.list.mockReturnValueOnce(new Promise((resolve) => { finishOldRequest = resolve; }))
+      .mockResolvedValueOnce({ message: [{ name: "Kitchen Barsha", enabled: 1 }] });
     const scope = reactive({ ready: true, company: "URY UAE", branch: "URY JVC", loading: false });
     const wrapper = mountDashboard(scope);
     scope.branch = "URY Barsha";
     await flushPromises();
-    finishOldRequest([{ name: "Kitchen JVC", enabled: 1 }]);
+    finishOldRequest({ message: [{ name: "Kitchen JVC", enabled: 1 }] });
     await flushPromises();
     expect(wrapper.text()).toContain("Kitchen Barsha");
     expect(wrapper.text()).not.toContain("Kitchen JVC");
@@ -95,10 +93,10 @@ describe("ProductionDashboard filtering", () => {
   });
 
   it("shows an empty state for a scope with no units", async () => {
-    db.getDocList.mockResolvedValue([]);
+    db.list.mockResolvedValue({ message: [] });
     const wrapper = mountDashboard(reactive({ ready: true, company: "all", branch: "all", loading: false }));
     await flushPromises();
-    expect(db.getDocList).toHaveBeenLastCalledWith("URY Production Unit", expect.objectContaining({ filters: [] }));
+    expect(db.list).toHaveBeenLastCalledWith("ury.ury.api.ury_kot_display.get_production_units", { company: null, branch: null });
     expect(wrapper.text()).toContain("No production units");
     wrapper.unmount();
   });

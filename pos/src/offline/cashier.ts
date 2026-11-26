@@ -66,8 +66,9 @@ export function cashierOutbox(profile: OfflineProfile, user: OfflineUser): Offli
       profile,
       user,
       print: stationPrint,
-      onSettled: async ({ invoice }) => {
-        await triggerPostReplayFiscalPrint({ invoice, posProfile: profile });
+      onSettled: async ({ invoice, entry }) => {
+        if (entry.settlement?.fiscal_receipt_requested === 0) return;
+        await triggerPostReplayFiscalPrint({ invoice, posProfile: profile, cashier: user.name });
       },
     });
     users.set(user, queue);
@@ -120,10 +121,11 @@ export function resolveOfflineTender(
 }
 
 export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
-  clientOrderId, amount, due, modeOfPayment, reference, referenceDate, roomNumber, discount, tip, orderType, onlineSettle }: {
+  clientOrderId, amount, due, modeOfPayment, reference, referenceDate, roomNumber, discount, tip, orderType, fiscalReceiptRequested = 1, onlineSettle }: {
   profile: OfflineProfile; user: OfflineUser; invoice: string; customer?: string; table?: string | null;
   cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; due: number; modeOfPayment: string;
   reference?: string; referenceDate?: string; roomNumber?: string; discount?: number; tip?: number; orderType?: string;
+  fiscalReceiptRequested?: 0 | 1;
   onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
 }) {
   const queue = cashierOutbox(profile, user);
@@ -155,7 +157,7 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
     queue.reachable = false;
     const cleanedRoom = roomNumber?.trim() || undefined;
     const settlement: OfflineSettlement = {
-      kind: kind!, mode_of_payment: modeOfPayment, amount, reference,
+      kind: kind!, mode_of_payment: modeOfPayment, amount, reference, fiscal_receipt_requested: fiscalReceiptRequested,
       ...(referenceDate ? { reference_date: referenceDate } : {}),
       ...(cleanedRoom ? { room_number: cleanedRoom } : {}),
     };

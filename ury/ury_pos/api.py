@@ -607,15 +607,8 @@ def get_production_units_for_branch():
 	if not branch:
 		return {"production_units": []}
 
-	productions = frappe.get_all(
-		"URY Production Unit",
-		filters={"branch": branch},
-		fields=["name"]
-	)
-
-	production_names = [p.name for p in productions]
-
-	return {"production_units": production_names}
+	from ury.ury.api.ury_kot_display import get_production_units
+	return {"production_units": [unit["name"] for unit in get_production_units(branch=branch)]}
 
 
 def format_merged_table_label(primary, merged_tables=None):
@@ -1277,7 +1270,8 @@ def getPosProfile(pos_profile=None):
 
         if qz_print == 1:
             print_type = "qz"
-            qz_host = pos_profiles.qz_host
+            qz_host = pos_profiles.qz_host or "localhost"
+            printer = pos_profiles.get("custom_qz_receipt_queue") or None
 
         elif bill_present == True:
             print_type = "network"
@@ -3600,29 +3594,19 @@ def _render_copy_html(doc, invoice: str, copy_number: int) -> tuple[str, str]:
 
 def _copy_result(job, *, doc=None, delivery=None):
     result = {key: job.get(key) for key in ('status', 'failure_reason', 'print_job_id')}
+    if job.get('status') in ('QZ_DISPATCHING', 'BROWSER_DISPATCHING', 'DISPATCHING'):
+        result['failure_reason'] = 'Copy dispatch has started. Check the printer and original till before printing again.'
     copy_number = cint(job.get('copy_number'))
     if copy_number:
         result['copy_number'] = copy_number
-    if job.get('status') == 'COMPLETED':
-        resolved_delivery = delivery
-        if not resolved_delivery:
-            if job.get('printer'):
-                resolved_delivery = 'network'
-            elif doc is not None:
-                resolved_delivery = (
-                    'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
-                )
-            else:
-                resolved_delivery = 'browser'
-        result['delivery'] = resolved_delivery
-        invoice = job.get('invoice') or (doc.name if doc is not None else None)
-        if doc is not None and invoice and copy_number:
-            html, copy_timestamp = _render_copy_html(doc, invoice, copy_number)
-            result['copy_timestamp'] = copy_timestamp
-            result['html'] = html
-            result['print_url'] = _copy_print_url(
-                invoice, copy_number, letter_head=_resolve_invoice_letter_head(doc)
-            )
+    if job.get('status') == 'RESERVED' and doc is not None and copy_number:
+        result['delivery'] = delivery or (
+            'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
+        )
+        invoice = job.get('invoice') or doc.name
+        if result['delivery'] == 'qz':
+            result['html'], result['copy_timestamp'] = _render_copy_html(doc, invoice, copy_number)
+        result['print_url'] = _copy_print_url(invoice, copy_number, letter_head=_resolve_invoice_letter_head(doc))
     return result
 
 
@@ -3776,7 +3760,8 @@ def _is_retryable_copy_race_error(exc: Exception) -> bool:
 
 
 _COPY_LOG_LOOKUP_FIELDS = [
-    'name', 'print_job_id', 'invoice', 'status', 'failure_reason', 'attempt', 'copy_number', 'printer',
+    'name', 'print_job_id', 'invoice', 'status', 'failure_reason', 'attempt', 'copy_number', 'printer', 'job_owner',
+    'dispatch_token_hash', 'dispatch_until', 'render_grant_hash', 'qz_session_hash', 'fiscal_event',
 ]
 _DISABLED_REPRINT_OWNER_REASON = 'Requester account is disabled; reprint from Settled Bills.'
 
@@ -3839,6 +3824,218 @@ def _mark_pending_fiscal_reprint_dispatched(invoice: str):
         frappe.db.set_value(_COPY_LOG, pending_id, {'status': 'DISPATCHED'})
 
 
+def _copy_request_key(invoice, idempotency_key):
+    from hashlib import sha256
+
+    if not idempotency_key or len(idempotency_key) > 128:
+        frappe.throw('A copy request key is required (maximum 128 characters).')
+    return sha256(json.dumps([invoice, idempotency_key]).encode()).hexdigest()
+
+
+def _fiscal_statuses(doc):
+    """Read the authoritative fiscal provider for the invoice and its linked bill."""
+    try:
+        from uganda_compliance.efris.efris_queue import get_efris_status
+    except ImportError:
+        return []
+    primary = get_efris_status('POS Invoice', doc.name) or {}
+    events = [primary]
+    partner = getattr(doc, 'custom_merged_pos_invoice', None)
+    if partner:
+        linked = get_efris_status('POS Invoice', partner) or {}
+        if linked.get('efris_status') or linked.get('fdn'):
+            events.append(linked)
+    return events
+
+
+def _issued_fiscal_event(events):
+    from hashlib import sha256
+
+    fdns = []
+    for event in events:
+        fdn = str(event.get('fdn') or '').strip()
+        status = str(event.get('efris_status') or '').strip().lower()
+        if not fdn or status in ('pending', 'failed', 'cancelled', 'rejected'):
+            return None
+        fdns.append(fdn)
+    return sha256(json.dumps(fdns).encode()).hexdigest() if fdns else None
+
+
+def _require_fiscal_event(doc):
+    pending = frappe.db.get_value(
+        _COPY_LOG, {'name': f'PENDING-EFRIS-{doc.name}', 'invoice': doc.name,
+                    'job_owner': frappe.session.user, 'status': 'AWAITING_FDN'},
+        'name', for_update=True,
+    )
+    event = _issued_fiscal_event(_fiscal_statuses(doc)) if pending else None
+    if not event:
+        frappe.throw('Automatic fiscal copy is unavailable. Request a manual copy from Settled Bills.', frappe.PermissionError)
+    return event
+
+
+def _lease_hash(token):
+    from hashlib import sha256
+    return sha256(token.encode()).hexdigest()
+
+
+def _qz_dispatch_session():
+    sid = frappe.session.sid
+    request = getattr(frappe.local, 'request', None)
+    # API-key authentication can set sid to the username across unrelated clients.
+    if request is not None and (sid == frappe.session.user or request.cookies.get('sid') != sid):
+        return None
+    return sid
+
+
+def _browser_copy_rendered(record):
+    return record.status == 'BROWSER_DISPATCHING' and not record.render_grant_hash and not record.dispatch_until
+
+
+def _expired_browser_grant(record):
+    from frappe.utils import get_datetime, now_datetime
+
+    return bool(record.status == 'BROWSER_DISPATCHING' and record.render_grant_hash and record.dispatch_until
+                and get_datetime(record.dispatch_until) <= now_datetime())
+
+
+def _matches_dispatch_session(record, sid):
+    from hmac import compare_digest
+
+    return bool(sid and record.qz_session_hash and compare_digest(record.qz_session_hash, _lease_hash(sid)))
+
+
+def _qz_recovery_token(record):
+    """A recovery credential grants confirmation or browser fallback, never QZ dispatch."""
+    import hmac
+
+    sid = _qz_dispatch_session()
+    if record.job_owner != frappe.session.user or not _matches_dispatch_session(record, sid):
+        return None
+    attempt = json.dumps(['qz-recovery', record.name, record.dispatch_token_hash, record.job_owner])
+    return hmac.digest(sid.encode(), attempt.encode(), 'sha256').hex()
+
+
+def _new_copy_lease():
+    from secrets import token_urlsafe
+    from frappe.utils import now_datetime
+
+    token = token_urlsafe(32)
+    return token, {'dispatch_token_hash': _lease_hash(token), 'dispatch_until': now_datetime() + timedelta(minutes=5)}
+
+
+def _consume_browser_render_grant(invoice, copy_number, grant):
+    from frappe.utils import get_datetime, now_datetime
+
+    if not isinstance(grant, str) or len(grant) != 43 or not copy_number:
+        frappe.throw('Open the numbered copy from its original till.', frappe.PermissionError)
+    branch = _closed_branch()
+    # GET printview requests normally roll back. Consume the one-use grant in a
+    # short transaction using the same parent/attempt lock order as confirmation.
+    with _IsolatedCopyLogDB(invoice) as claim_db:
+        if claim_db is None:
+            frappe.throw("Browser copy authorization is temporarily unavailable.")
+        doc = _closed_invoice(invoice, branch, for_update=True)
+        record = frappe.db.get_value(
+            _COPY_LOG, {'invoice': invoice, 'copy_number': copy_number, 'job_owner': frappe.session.user,
+                        'status': 'BROWSER_DISPATCHING', 'render_grant_hash': _lease_hash(grant)},
+            ['name', 'dispatch_until', 'fiscal_event', 'qz_session_hash'], as_dict=True, for_update=True,
+        )
+        if not record or not record.dispatch_until or get_datetime(record.dispatch_until) <= now_datetime():
+            frappe.throw('This browser copy has expired or was already used.', frappe.PermissionError)
+        if not _matches_dispatch_session(record, _qz_dispatch_session()):
+            frappe.throw('Open this browser copy in the cashier session that started it.', frappe.PermissionError)
+        if record.fiscal_event and record.fiscal_event != _require_fiscal_event(doc):
+            frappe.throw('The reserved fiscal receipt has changed.', frappe.PermissionError)
+        frappe.db.set_value(_COPY_LOG, record.name, {'render_grant_hash': None, 'dispatch_until': None})
+        claim_db.commit()
+    return copy_number
+
+
+def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
+    from secrets import compare_digest, token_urlsafe
+    from frappe.utils import get_datetime, now_datetime
+    from ury.ury_pos.privileged_auth import assert_not_offline_replay
+
+    assert_not_offline_replay()
+    key = _copy_request_key(invoice, idempotency_key)
+    branch = _closed_branch()
+    # The request may already have a MariaDB snapshot. Start a short serialized
+    # transaction, then lock the parent before the attempt and fiscal queue rows.
+    with _IsolatedCopyLogDB(invoice) as claim_db:
+        doc = _closed_invoice(invoice, branch, for_update=True)
+        record = frappe.db.get_value(
+            _COPY_LOG, {'invoice': invoice, 'request_key': key, 'job_owner': frappe.session.user},
+            _COPY_LOG_LOOKUP_FIELDS, as_dict=True, order_by='attempt desc', for_update=True,
+        )
+        if not record or record.printer or record.status not in ('RESERVED', 'QZ_DISPATCHING', 'BROWSER_DISPATCHING', 'DISPATCHING', 'COMPLETED'):
+            frappe.throw('No client copy reservation for this request.', frappe.PermissionError)
+        owns_lease = dispatch_token and compare_digest(record.dispatch_token_hash or '', _lease_hash(dispatch_token))
+        if not owns_lease:
+            recovery = _qz_recovery_token(record) if action in ('browser', 'confirm') else None
+            if not recovery or not dispatch_token or not compare_digest(recovery, dispatch_token):
+                frappe.throw('This print attempt no longer owns the copy.', frappe.PermissionError)
+        result = {'copy_number': record.copy_number, 'print_job_id': record.name}
+        if action in ('qz', 'browser'):
+            # A cashier may explicitly switch a possibly spooled QZ copy to browser
+            # once. Each transport claims the physical dispatch before it starts.
+            fallback = record.status == 'QZ_DISPATCHING' and action == 'browser'
+            valid_lease = (record.status == 'RESERVED' and record.dispatch_until
+                           and get_datetime(record.dispatch_until) > now_datetime())
+            sid = _qz_dispatch_session()
+            if action == 'browser' and (not sid or (record.status != 'RESERVED' and not _matches_dispatch_session(record, sid))):
+                frappe.throw('Start browser delivery in the original cashier session.', frappe.PermissionError)
+            renew_browser = action == 'browser' and _expired_browser_grant(record)
+            if not (fallback or valid_lease or renew_browser):
+                frappe.throw('Copy dispatch expired or already started. Check the original till.', frappe.PermissionError)
+            if record.fiscal_event and _require_fiscal_event(doc) != record.fiscal_event:
+                frappe.throw('The reserved fiscal receipt has changed.', frappe.PermissionError)
+            update = {'status': 'QZ_DISPATCHING', 'dispatch_until': None}
+            if action == 'browser':
+                grant = token_urlsafe(32)
+                update.update(status='BROWSER_DISPATCHING', render_grant_hash=_lease_hash(grant),
+                              dispatch_until=now_datetime() + timedelta(minutes=5))
+                result['render_grant'] = grant
+            if record.status == 'RESERVED' and sid:
+                update['qz_session_hash'] = _lease_hash(sid)
+            frappe.db.set_value(_COPY_LOG, record.name, update)
+            record.status = 'DISPATCHING'
+        elif action == 'release':
+            if record.status != 'RESERVED':
+                frappe.throw('Dispatch already started. Check the original till.', frappe.PermissionError)
+            frappe.db.set_value(_COPY_LOG, record.name, {'dispatch_token_hash': None, 'dispatch_until': None})
+        elif record.status != 'COMPLETED':
+            if record.status != 'QZ_DISPATCHING' and not _browser_copy_rendered(record):
+                frappe.throw('Start printing and render the browser copy before confirming delivery.', frappe.PermissionError)
+            if idempotency_key == f'efris-auto-{invoice}':
+                if _require_fiscal_event(doc) != record.fiscal_event:
+                    frappe.throw('Fiscal receipt changed before delivery confirmation.', frappe.PermissionError)
+                _mark_pending_fiscal_reprint_dispatched(invoice)
+            record.status = 'COMPLETED'
+            frappe.db.set_value(_COPY_LOG, record.name, {
+                'status': record.status, 'dispatch_until': None, 'render_grant_hash': None,
+            })
+        if claim_db is not None:
+            claim_db.commit()
+        return dict(result, status=record.status)
+
+
+@frappe.whitelist(methods=['POST'])
+def begin_bill_copy_dispatch(invoice: str, idempotency_key: str, dispatch_token: str, transport: str = 'browser'):
+    if transport not in ('qz', 'browser'):
+        frappe.throw('Select a client print transport.')
+    return _finish_copy_attempt(invoice, idempotency_key, dispatch_token, action=transport)
+
+
+@frappe.whitelist(methods=['POST'])
+def confirm_bill_copy(invoice: str, idempotency_key: str, dispatch_token: str):
+    return _finish_copy_attempt(invoice, idempotency_key, dispatch_token, action='confirm')
+
+
+@frappe.whitelist(methods=['POST'])
+def release_bill_copy(invoice: str, idempotency_key: str, dispatch_token: str):
+    return _finish_copy_attempt(invoice, idempotency_key, dispatch_token, action='release')
+
+
 @frappe.whitelist(methods=['POST'])
 def print_bill_copy(
     invoice: str,
@@ -3849,8 +4046,6 @@ def print_bill_copy(
     reason: str | None = None,
     reason_note: str | None = None,
 ):
-    from hashlib import sha256
-
     from ury.ury.api.ury_print import _bill_printers
     from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
     from ury.ury.printing.file_store import save_job
@@ -3866,12 +4061,10 @@ def print_bill_copy(
 
     assert_not_offline_replay()
 
-    if not idempotency_key or len(idempotency_key) > 128:
-        frappe.throw('A copy request key is required (maximum 128 characters).')
+    # Idempotent per invoice and copy key, whoever dispatches (cashier till or scheduler).
+    key = _copy_request_key(invoice, idempotency_key)
     branch = _closed_branch()
     owner = frappe.session.user
-    # Idempotent per invoice and copy key, whoever dispatches (cashier till or scheduler).
-    key = sha256(json.dumps([invoice, idempotency_key]).encode()).hexdigest()
     requested_delivery = (delivery or '').strip().lower() or None
     is_auto_fiscal = idempotency_key == f'efris-auto-{invoice}'
 
@@ -3879,6 +4072,7 @@ def print_bill_copy(
     transport = None
     record = None
     replayed = None
+    dispatch_token = None
     number = 0
     job_id = ''
     chosen_printer = printer
@@ -3891,11 +4085,36 @@ def print_bill_copy(
                 frappe.db.savepoint(savepoint)
             try:
                 previous = _find_previous_copy_log(invoice, key, owner, idempotency_key, is_auto_fiscal)
-                if previous and previous.status not in ('FAILED', 'CANCELED'):
-                    if is_auto_fiscal and previous.status in ('SUBMITTED', 'COMPLETED'):
-                        _mark_pending_fiscal_reprint_dispatched(invoice)
-                        if claim_db is not None:
-                            claim_db.commit()
+                if previous and previous.status not in ('RESERVED', 'FAILED', 'CANCELED'):
+                    # A replay reports the original outcome without granting another dispatch.
+                    result = _copy_result(previous)
+                    renew_browser = _expired_browser_grant(previous)
+                    qz_started = previous.status == 'QZ_DISPATCHING' and requested_delivery != 'network'
+                    if renew_browser or _browser_copy_rendered(previous) or qz_started:
+                        recovery = _qz_recovery_token(previous)
+                        if recovery:
+                            result['recovery_token'] = recovery
+                            if renew_browser:
+                                # The popup claims its replacement under lock in begin_bill_copy_dispatch.
+                                result['recovery_action'] = 'renew_browser'
+                    return result
+
+                fiscal_event = _require_fiscal_event(doc) if is_auto_fiscal else None
+                if previous and previous.status == 'RESERVED':
+                    from frappe.utils import get_datetime, now_datetime
+
+                    if previous.job_owner != owner:
+                        frappe.throw('The client copy is reserved by another cashier.', frappe.PermissionError)
+                    active = previous.dispatch_until and get_datetime(previous.dispatch_until) > now_datetime()
+                    if requested_delivery == 'network' or active:
+                        return {'status': 'IN_FLIGHT', 'copy_number': previous.copy_number,
+                                'failure_reason': 'Copy already reserved for client printing. Check the original till.'}
+                    if previous.fiscal_event and fiscal_event != previous.fiscal_event:
+                        frappe.throw('The reserved fiscal receipt has changed.', frappe.PermissionError)
+                    dispatch_token, lease = _new_copy_lease()
+                    frappe.db.set_value(_COPY_LOG, previous.name, dict(lease, fiscal_event=fiscal_event))
+                    if claim_db is not None:
+                        claim_db.commit()
                     replayed = previous
                     break
 
@@ -3930,8 +4149,8 @@ def print_bill_copy(
 
                 # Enforce free closed-copy cap (`custom_max_free_closed_copies`, default 0 on configured profiles)
                 # and `reprint_bill` privilege / Manager PIN + reason on every manual copy beyond the free cap.
-                # Automatic EFRIS post-fiscalisation dispatches (`efris-auto-<invoice>`) are exempt.
-                if not previous and not is_auto_fiscal:
+                # The verified pending fiscal event authorizes one automatic copy.
+                if not previous and not fiscal_event:
                     raw_profile = _doc_get(doc, 'pos_profile')
                     raw_max_free = (
                         frappe.db.get_value('POS Profile', raw_profile, 'custom_max_free_closed_copies')
@@ -3979,11 +4198,13 @@ def print_bill_copy(
                     'attempt': attempt,
                     'copy_number': number,
                     'retry_of': previous.name if previous else None,
-                    'status': 'COMPLETED' if transport in ('browser', 'qz') else 'SUBMITTING',
+                    'status': 'RESERVED' if transport in ('browser', 'qz') else 'SUBMITTING',
                 }
+                record['fiscal_event'] = fiscal_event
+                if transport in ('browser', 'qz'):
+                    dispatch_token, lease = _new_copy_lease()
+                    record.update(lease)
                 frappe.get_doc(record).insert(ignore_permissions=True)
-                if transport in ('browser', 'qz') and is_auto_fiscal:
-                    _mark_pending_fiscal_reprint_dispatched(invoice)
                 if claim_db is not None:
                     claim_db.commit()
                 break
@@ -4006,11 +4227,15 @@ def print_bill_copy(
                     continue
                 raise
 
-    if replayed is not None:
-        return _copy_result(replayed, doc=doc, delivery=requested_delivery)
-
-    if transport in ('browser', 'qz'):
-        return _copy_result(record, doc=doc, delivery=transport)
+    if dispatch_token:
+        try:
+            result = _copy_result(replayed or record, doc=doc, delivery=requested_delivery or transport)
+        except Exception:
+            # No printable payload left the server. Return the attempt for immediate retry.
+            _finish_copy_attempt(invoice, idempotency_key, dispatch_token, action='release')
+            raise
+        result['dispatch_token'] = dispatch_token
+        return result
     doc.copy_timestamp = frappe.utils.now()
     doc.copy_number = number
     doc._ury_copy_render = _COPY_RENDER_MARKER
@@ -4067,34 +4292,61 @@ def print_bill_copy(
     return _copy_result(final_record, doc=doc, delivery='network')
 
 
+def _record_settlement_fiscal_intent(doc):
+    """Called in the submission transaction, once for the primary receipt."""
+    from ury.ury_pos.tax_determination import _is_company_efris_enabled
+
+    events = _fiscal_statuses(doc)
+    if _issued_fiscal_event(events):
+        # Offline replay still owes the first fiscal receipt at this transition.
+        if not getattr(doc, 'ury_offline_captured_at', None):
+            return
+    elif not any(event.get('efris_status') or event.get('fdn') for event in events):
+        if not _is_company_efris_enabled(getattr(doc, 'company', None)):
+            return
+
+    job_id = f'PENDING-EFRIS-{doc.name}'
+    frappe.get_doc({
+        'doctype': _COPY_LOG, 'print_job_id': job_id, 'name': job_id,
+        'invoice': doc.name, 'job_owner': frappe.session.user,
+        'request_key': f'efris-auto:{doc.name}', 'copy_slot': f'{doc.name}:0:0',
+        'attempt': 0, 'copy_number': 0, 'status': 'PENDING_RECEIPT',
+    }).insert(ignore_permissions=True)
+
+
+def _settlement_fiscal_job(invoice):
+    _closed_invoice(invoice, _closed_branch(), for_update=True)
+    job = frappe.db.get_value(
+        _COPY_LOG, {'name': f'PENDING-EFRIS-{invoice}', 'invoice': invoice},
+        ['name', 'status', 'job_owner'], as_dict=True, for_update=True,
+    )
+    if job and job.job_owner != frappe.session.user:
+        frappe.throw('Fiscal receipt is reserved for the original cashier.', frappe.PermissionError)
+    return job
+
+
+@frappe.whitelist(methods=['POST'])
+def close_unused_fiscal_copy(invoice: str):
+    """The primary receipt includes the FDN. Retire its unused copy authority."""
+    job = _settlement_fiscal_job(invoice)
+    if job and job.status == 'PENDING_RECEIPT':
+        frappe.db.set_value(_COPY_LOG, job.name, 'status', 'NOT_REQUIRED')
+
+
 @frappe.whitelist(methods=['POST'])
 def queue_fiscal_reprint(invoice: str, delivery: str | None = None):
-    """Queue an automatic COPY #n reprint once URA EFRIS issues the FDN."""
-    branch = _closed_branch()
-    _closed_invoice(invoice, branch)
-    job_id = f'PENDING-EFRIS-{invoice}'
-    if not frappe.db.exists(_COPY_LOG, job_id):
-        record = {
-            'doctype': _COPY_LOG,
-            'name': job_id,
-            'print_job_id': job_id,
-            'request_key': f'efris-auto:{invoice}',
-            'copy_slot': f'{invoice}:0:0',
-            'invoice': invoice,
-            'printer': None,
-            'job_owner': frappe.session.user,
-            'attempt': 0,
-            'copy_number': 0,
-            'retry_of': None,
-            'status': 'AWAITING_FDN',
-            'failure_reason': (delivery or '').strip().lower() or None,
-        }
-        try:
-            frappe.get_doc(record).insert(ignore_permissions=True)
-        except Exception as exc:
-            if not _is_retryable_copy_race_error(exc):
-                raise
-    return {'status': 'AWAITING_FDN', 'print_job_id': job_id, 'invoice': invoice}
+    job = _settlement_fiscal_job(invoice)
+    if not job:
+        # A missing settlement intent is terminal. An ownership refusal remains retryable.
+        error = frappe.PermissionError('No pending fiscal receipt. Request a manual copy from Settled Bills.')
+        error.http_status_code = 410
+        raise error
+    if job.status == 'PENDING_RECEIPT':
+        frappe.db.set_value(_COPY_LOG, job.name, {
+            'status': 'AWAITING_FDN', 'failure_reason': (delivery or '').strip().lower() or None,
+        })
+        job.status = 'AWAITING_FDN'
+    return {'status': job.status, 'print_job_id': job.name, 'invoice': invoice}
 
 
 def process_pending_fiscal_reprints():

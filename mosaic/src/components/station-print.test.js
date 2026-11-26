@@ -77,7 +77,7 @@ function callDouble({ html = "<div>Kitchen ticket</div>", signature = "signed" }
     get: async (method, args) => {
       calls.push({ method, args });
       if (method === "frappe.www.printview.get_html_and_style") return { message: { html } };
-      if (method === "ury.ury.api.ury_print.qz_certificate") return { message: "qz-cert.pem" };
+      if (method === "ury.ury.api.ury_print.qz_certificate") return { message: "-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----" };
       return { message: {} };
     },
     post: async (method, args) => {
@@ -146,7 +146,7 @@ test("QZ failure writes a failed comment while the caller can keep the ticket di
   assert.ok(call.calls.some(({ method, args }) => method === "frappe.desk.form.utils.add_comment" && args.content === "[KOT-PRINT-FAILED] QZ_UNAVAILABLE"));
 });
 
-test("an eight-second printer timeout writes PRINTER_TIMEOUT and does not reject the display update", async () => {
+test("a stalled printer writes PRINTER_TIMEOUT and does not reject the display update", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   onTestFinishedRealTimers();
   const { printer, call } = await makePrinter({
@@ -154,7 +154,7 @@ test("an eight-second printer timeout writes PRINTER_TIMEOUT and does not reject
   });
   const pending = printer.process(ticket("TIMEOUT"));
   await new Promise(setImmediate);
-  vi.advanceTimersByTime(8000);
+  vi.advanceTimersByTime(30000);
 
   assert.deepEqual(await pending, { printed: false, code: "PRINTER_TIMEOUT" });
   assert.ok(call.calls.some(({ method, args }) => method === "frappe.desk.form.utils.add_comment" && args.content === "[KOT-PRINT-FAILED] PRINTER_TIMEOUT"));
@@ -403,6 +403,7 @@ async function renderSettings(stationSettings, installedPrinters) {
 test("the settings dialog offers installed printers plus a manual network host option", async () => {
   const html = await renderSettings(settings({ host: "", printer: "KITCHEN-RAW" }), ["KITCHEN-RAW", "BAR-RAW"]);
 
+  assert.match(html, /Download QZ Certificate \(\.pem\)/);
   assert.match(html, /<select[^>]*>/);
   // Vue SSR writes an empty value as a bare attribute and has no SSR props for v-model selection.
   assert.match(html, /<option value>Network printer \(host and port\)<\/option>/);
@@ -672,4 +673,61 @@ test("G28: hydrateFromServer never merges remote backupHost onto a local backupP
   );
   assert.match(htmlWithNetBackup, /Backup printer host/);
   assert.match(htmlWithNetBackup, /Backup printer port/);
+});
+
+test("a stalled first connection reports a trust timeout without dispatching", async () => {
+  vi.useFakeTimers();
+  onTestFinishedRealTimers();
+  const bridge = qzDouble({ active: false });
+  bridge.qz.websocket.connect = () => new Promise(() => {});
+  const { printer } = await makePrinter({ qzDouble: bridge });
+  const result = printer.process(ticket("TRUST"));
+  await vi.advanceTimersByTimeAsync(60000);
+  assert.deepEqual(await result, { printed: false, code: "QZ_TRUST_TIMEOUT" });
+  assert.equal(bridge.calls.prints.length, 0);
+});
+
+test("hostless Mosaic connections always request TLS", async () => {
+  const bridge = qzDouble({ active: false });
+  bridge.qz.websocket.connect = vi.fn();
+  const { printer } = await makePrinter({ qzDouble: bridge });
+  await printer.listPrinters();
+  assert.deepEqual(bridge.qz.websocket.connect.mock.calls, [[{ usingSecure: true }]]);
+});
+
+test("a timed-out certificate cannot connect late or block the next attempt", async () => {
+  vi.useFakeTimers();
+  onTestFinishedRealTimers();
+  const bridge = qzDouble({ active: false });
+  bridge.qz.websocket.connect = vi.fn();
+  const call = callDouble();
+  const get = call.get;
+  let release;
+  let acquisitions = 0;
+  call.get = (method, args) => {
+    if (method.endsWith("qz_certificate") && ++acquisitions === 1) {
+      return new Promise(resolve => { release = resolve; });
+    }
+    return get(method, args);
+  };
+  const { printer } = await makePrinter({ call, qzDouble: bridge });
+  const first = printer.process(ticket("CERT-STALL"));
+  await vi.advanceTimersByTimeAsync(60000);
+  assert.equal((await first).code, "QZ_TRUST_TIMEOUT");
+  const second = printer.retry();
+  await vi.advanceTimersByTimeAsync(0);
+  assert.equal(acquisitions, 2);
+  assert.equal((await second)[0].printed, true);
+  release({ message: "-----BEGIN CERTIFICATE-----late" });
+  await vi.advanceTimersByTimeAsync(0);
+  assert.equal(bridge.qz.websocket.connect.mock.calls.length, 1);
+});
+
+test("invalid site certificate reports QZ_CERT_ERROR before opening a socket", async () => {
+  const call = callDouble();
+  const original = call.get;
+  call.get = (method, args) => method.endsWith("qz_certificate")
+    ? Promise.resolve({ message: null }) : original(method, args);
+  const { printer } = await makePrinter({ call, qzDouble: qzDouble({ active: false }) });
+  assert.equal((await printer.process(ticket("BAD-CERT"))).code, "QZ_CERT_ERROR");
 });

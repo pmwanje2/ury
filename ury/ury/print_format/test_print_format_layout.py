@@ -999,7 +999,7 @@ class TestDefaultPrintFormatAndHardening(unittest.TestCase):
 			)
 			client_doc.get = lambda k, d=None: client_doc.__dict__.get(k, d)
 			pi_mod.CustomPOSInvoice.before_print(client_doc)
-			self.assertEqual(client_doc.copy_number, 3)
+			self.assertIsNone(client_doc.copy_number)
 			self.assertIsNone(client_doc.copy_timestamp)
 
 			# 2. Internal copy render with _COPY_RENDER_MARKER preserves integer copy_number & server copy_timestamp

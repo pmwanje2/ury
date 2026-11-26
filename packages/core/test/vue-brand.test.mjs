@@ -71,7 +71,7 @@ test('classic POS browser printview explicitly suppresses letterhead', async () 
   assert.equal(target.searchParams.get('settings'), '{}');
 });
 
-test('classic POS QZ leaves letterhead selection to native printview', async () => {
+test('classic POS QZ applies the default receipt letterhead settings', async () => {
   let request;
   const store = classicStore();
   await store.printFunction.call({ recentOrders: {}, invoiceNumber: 'INV-1', print_type: 'qz',
@@ -82,5 +82,5 @@ test('classic POS QZ leaves letterhead selection to native printview', async () 
     } },
   });
   assert.deepEqual(request, { method: 'frappe.www.printview.get_html_and_style', doc: 'POS Invoice',
-    name: 'INV-1', print_format: 'Receipt', _lang: 'en' });
+    name: 'INV-1', print_format: 'Receipt', no_letterhead: 1, letterhead: 'No Letterhead', _lang: 'en' });
 });

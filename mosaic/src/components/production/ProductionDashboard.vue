@@ -50,7 +50,6 @@ export default {
     return {
       loading: true,
       dashboard: [],
-      db: frappe.db(),
       error: "",
       requestId: 0,
     };
@@ -78,20 +77,10 @@ export default {
       this.loading = true;
       if (!this.scope.ready) return;
       try {
-        const filters = [];
-        if (this.scope.company !== "all") filters.push(["company", "=", this.scope.company]);
-        if (this.scope.branch !== "all") filters.push(["branch", "=", this.scope.branch]);
-        const result = await this.db.getDocList("URY Production Unit", {
-          fields: ["name", "enabled"],
-          filters,
-          limit: 0,
-          orderBy: {
-            field: "name",
-            order: "asc",
-          },
+        const { message: units } = await frappe.call().get("ury.ury.api.ury_kot_display.get_production_units", {
+          company: this.scope.company === "all" ? null : this.scope.company,
+          branch: this.scope.branch === "all" ? null : this.scope.branch,
         });
-
-        const units = result || [];
 
         // Same time window/filters as the per-unit KOT view (server-side).
         const counts = await frappe.call().post("ury.ury.api.ury_kot_display.production_unit_counts", {

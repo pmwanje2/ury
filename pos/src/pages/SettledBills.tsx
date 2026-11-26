@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { call, parseFrappeError, printWithQz } from '@ury/core';
+import { call, parseFrappeError } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
 import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
@@ -8,7 +8,8 @@ import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-a
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import TipAdjustDialog from '../components/TipAdjustDialog';
 import { usePOSStore } from '../store/pos-store';
-import { printOrder } from '../lib/print';
+import { usePendingBillCopies } from '../lib/pending-bill-copy';
+import { deliverReservedCopy, printOrder, type PrintBillCopyResult } from '../lib/print';
 import { resolvePrintFormat } from '../lib/invoice-api';
 import { formatMoneyAmount } from '../lib/void-return-api';
 import ReturnCheckDialog from '../components/ReturnCheckDialog';
@@ -67,7 +68,8 @@ export default function SettledBills() {
   const [start, setStart] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const [keys] = useState(() => new Map<string, string>());
+  const copies = usePendingBillCopies();
+  const displayedRetry = bill ? copies.pending(bill.name) : null;
   const [outcome, setOutcome] = useState('');
   const [showReturnDialog, setShowReturnDialog] = useState(false);
   const [showReopenDialog, setShowReopenDialog] = useState(false);
@@ -102,45 +104,32 @@ export default function SettledBills() {
   async function print(approval?: ManagerApprovalResult, overrideKey?: string) {
     const targetBill = pendingCopyApproval?.bill ?? bill;
     if (!targetBill || busy) return;
-    const key = overrideKey || keys.get(targetBill.name) || crypto.randomUUID();
-    keys.set(targetBill.name, key);
+    let key: string | undefined;
     setBusy(true);
     setMessage('');
     try {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         throw new Error(t('offline.refused', { action: 'closed receipt copy' }));
       }
-      const { message: result } = await call.post<{
-        message: {
-          status: string;
-          failure_reason?: string;
-          delivery?: string;
-          html?: string;
-          print_url?: string;
-          copy_number?: number;
-        };
-      }>(method + 'print_bill_copy', {
+      if (copies.verifySession) await copies.verifySession();
+      key = copies.start(targetBill.name, displayedRetry, overrideKey);
+      const { message: reservation } = await call.post<{ message: PrintBillCopyResult }>(method + 'print_bill_copy', {
         invoice: targetBill.name,
         idempotency_key: key,
         ...(approval?.token ? { approval_token: approval.token } : {}),
         ...(approval?.reason ? { reason: approval.reason } : {}),
         ...(approval?.note ? { reason_note: approval.note } : {}),
       });
-      if (result.delivery === 'qz' && result.html) {
-        const qzHost = usePOSStore.getState().posProfile?.qz_host;
-        if (qzHost) await printWithQz(qzHost, result.html);
-      } else if (result.delivery === 'browser' && result.print_url) {
-        window.open(result.print_url, '_blank', 'noopener,noreferrer');
-      }
+      const result = await deliverReservedCopy(targetBill.name, key, usePOSStore.getState().posProfile || {}, reservation);
+      if (result.status === 'COMPLETED' || result.status === 'CANCELED') copies.discard(targetBill.name, key);
       setOutcome(result.status);
       setMessage(
         [tData('Copy'), result.copy_number ? `#${result.copy_number}` : '', result.status, result.failure_reason]
           .filter(Boolean)
           .join(' · '),
       );
-      if (result.status === 'COMPLETED') keys.delete(targetBill.name);
     } catch (error) {
-      if (!approval?.token && (isAuthRequiredError(error) || isReasonRequiredError(error))) {
+      if (key && !approval?.token && (isAuthRequiredError(error) || isReasonRequiredError(error))) {
         const challenge = extractAuthChallenge(error);
         setPendingCopyApproval({
           bill: targetBill,
@@ -153,7 +142,7 @@ export default function SettledBills() {
         });
         return;
       }
-      setOutcome('ERROR');
+      setOutcome(key ? 'ERROR' : '');
       setMessage(overrideActionErrorMessage(error));
     } finally {
       setBusy(false);
@@ -212,7 +201,7 @@ export default function SettledBills() {
               onClick={() => {
                 select(row);
                 setMessage('');
-                setOutcome(keys.has(row.name) ? 'SUBMITTED' : '');
+                setOutcome(copies.pending(row.name) ? 'SUBMITTED' : '');
               }}
             >
               <strong>{row.name}</strong> · {row.posting_date} · {row.pos_profile} · {row.status} ·{' '}
@@ -335,13 +324,8 @@ export default function SettledBills() {
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-2">
             <Button disabled={busy} className="min-h-11" onClick={() => void print()}>
-              {tData(
-                ['FAILED', 'CANCELED', 'ERROR'].includes(outcome)
-                  ? 'Retry copy'
-                  : keys.has(bill.name)
-                    ? 'Check / retry copy'
-                    : 'Print copy',
-              )}
+              {t(!displayedRetry ? 'order.print_receipt'
+                : ['FAILED', 'ERROR'].includes(outcome) ? 'order.retry_copy' : 'order.check_copy')}
             </Button>
             <Button
               type="button"
@@ -448,7 +432,10 @@ export default function SettledBills() {
             setPendingCopyApproval(null);
             void print(res, pending.idempotencyKey);
           }}
-          onCancel={() => setPendingCopyApproval(null)}
+          onCancel={() => {
+            copies.discard(pendingCopyApproval.bill.name, pendingCopyApproval.idempotencyKey);
+            setPendingCopyApproval(null);
+          }}
         />
       )}
 

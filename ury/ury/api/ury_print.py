@@ -3,6 +3,8 @@ from frappe import _
 
 import base64
 import os
+from pathlib import Path
+from cryptography import x509
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -60,11 +62,19 @@ def network_printing(
     approval_token=None,
     reason=None,
     reason_note=None,
-    _reprint_meta=None,
+):
+    return _network_print_internal(
+        doctype, name, printer_setting, print_format, doc, no_letterhead,
+        approval_token=approval_token, reason=reason, reason_note=reason_note,
+    )
+
+
+def _network_print_internal(
+    doctype, name, printer_setting, print_format=None, doc=None, no_letterhead=0,
+    *, approval_token=None, reason=None, reason_note=None, reprint_meta=None,
 ):
     target = frappe.get_doc(doctype, name)
     validate_print_permission(target)
-    reprint_meta = _reprint_meta
     if doctype == "POS Invoice":
         check_split_target_access(target, "write")
         if int(getattr(target, "docstatus", 0) or 0) == 0:
@@ -140,8 +150,14 @@ def network_printing(
     if isinstance(result, dict) and result.get("status") == "Success":
         result["invoice"] = name
 
-        from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
-        trigger_manufacture_on_bill_print(name)
+        if doctype == "POS Invoice" and result.get("tracking_disabled") and target.docstatus == 0:
+            # No CUPS finalizer will run for an unmonitored outlet. Apply the
+            # already-authorized bill once, only after the queue accepts it.
+            if _record_delivered_bill(name, target, reprint_meta)["status"] != "Success":
+                frappe.throw(_("Receipt delivery could not be recorded."))
+        else:
+            from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
+            trigger_manufacture_on_bill_print(name)
 
     return PrintResult(result) if isinstance(result, dict) else result
 
@@ -186,7 +202,7 @@ def select_network_printer(
     reason=None,
     reason_note=None,
 ):
-    invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
+    invoice_doc = frappe.get_doc("POS Invoice", invoice_id, for_update=True)
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
@@ -197,12 +213,13 @@ def select_network_printer(
         validate_efris_readiness(invoice_doc, throw=True)
     from ury.ury_pos.floor_actions import authorize_and_count_bill_print
 
+    pos_profile = getattr(invoice_doc, "pos_profile", None) or pos_profile
     reprint_meta = authorize_and_count_bill_print(
         invoice_id,
         approval_token=approval_token,
         reason=reason,
         reason_note=reason_note,
-        pos_profile=pos_profile or getattr(invoice_doc, "pos_profile", None),
+        pos_profile=pos_profile,
     )
 
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
@@ -228,8 +245,8 @@ def select_network_printer(
 
     if bill_printers:
         for printer in bill_printers:
-            print_result = network_printing(
-                "POS Invoice", invoice_id, printer, print_format, _reprint_meta=reprint_meta
+            print_result = _network_print_internal(
+                "POS Invoice", invoice_id, printer, print_format, reprint_meta=reprint_meta
             )
             print_jobs.append(print_result)
 
@@ -251,9 +268,8 @@ def select_network_printer(
     })
 
 
-@frappe.whitelist()
-def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None):
-    invoice_doc = frappe.get_doc("POS Invoice", invoice)
+def _receipt_invoice(invoice):
+    invoice_doc = frappe.get_doc("POS Invoice", invoice, for_update=True)
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
@@ -262,9 +278,13 @@ def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None)
         from ury.ury_pos.tax_determination import validate_efris_readiness
 
         validate_efris_readiness(invoice_doc, throw=True)
+    return invoice_doc
+
+
+def _authorize_receipt(invoice_doc, invoice, approval_token, reason, reason_note):
     from ury.ury_pos.floor_actions import authorize_and_count_bill_print
 
-    reprint_meta = authorize_and_count_bill_print(
+    return authorize_and_count_bill_print(
         invoice,
         approval_token=approval_token,
         reason=reason,
@@ -272,6 +292,136 @@ def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None)
         pos_profile=getattr(invoice_doc, "pos_profile", None),
     )
 
+
+def _invoice_revision(doc):
+    import hashlib
+    import json
+
+    # Include child rows, outlet, amounts and modified. Print bookkeeping is
+    # independent of the guest check and must not invalidate another reservation.
+    data = doc.as_dict()
+    for field in ("custom_bill_print_count", "invoice_printed", "custom_printing_time"):
+        data.pop(field, None)
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _delivery_response(delivery):
+    if not delivery.invoice_revision or not delivery.receipt_html:
+        frappe.throw(_("Receipt authorization has expired. Prepare the receipt again."))
+    return {
+        "delivery_id": delivery.name,
+        "delivered": bool(delivery.delivered),
+        "invoice_revision": delivery.invoice_revision,
+        "print_number": delivery.print_number,
+        "copy_label": delivery.reprint_label or "",
+        "html": delivery.receipt_html,
+        "print_url": f"/api/method/ury.ury.api.ury_print.receipt_delivery_view?delivery_id={delivery.name}",
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def prepare_receipt_delivery(invoice: str, request_id: str, approval_token=None, reason=None,
+                            reason_note=None, print_format: str | None = None, letterhead: str | None = None):
+    from html import escape
+    import json
+    from uuid import NAMESPACE_URL, UUID, uuid5
+
+    from ury.ury.print_format.defaults import resolve_safe_pos_print_format, validate_pos_invoice_print_format
+    from frappe.www.printview import get_html_and_style
+
+    invoice_doc = _receipt_invoice(invoice)
+    try:
+        request = str(UUID(request_id))
+    except (AttributeError, TypeError, ValueError):
+        frappe.throw(_("Invalid receipt request ID."))
+    delivery_id = uuid5(NAMESPACE_URL, json.dumps([frappe.session.user, invoice, request])).hex
+    existing = frappe.db.get_value(
+        "URY Receipt Delivery", delivery_id,
+        ["name", "delivered", "invoice_revision", "print_number", "reprint_label", "receipt_html"],
+        as_dict=True, for_update=True,
+    )
+    if existing:
+        return _delivery_response(existing)
+
+    print_format = print_format or resolve_safe_pos_print_format()
+    validate_pos_invoice_print_format(invoice_doc, print_format)
+    meta = _authorize_receipt(invoice_doc, invoice, approval_token, reason, reason_note)
+    rendered = get_html_and_style(invoice_doc.as_dict(), print_format=print_format,
+                                  no_letterhead=not bool(letterhead), letterhead=letterhead)
+    if not rendered.get("html"):
+        frappe.throw(_("Receipt content is unavailable."))
+    label = meta.get("reprint_label") or ""
+    heading = f'<div class="receipt-copy-label"><strong>{escape(label)}</strong></div>' if label else ""
+    styles = (rendered.get("style") or "") + (rendered.get("page_style") or "")
+    delivery = frappe.get_doc({
+        "doctype": "URY Receipt Delivery", "invoice": invoice,
+        "print_number": meta["print_number"], "reprint_label": label,
+        "invoice_revision": _invoice_revision(invoice_doc),
+        "receipt_html": f"<style>{styles}</style>{heading}{rendered['html']}",
+    }).insert(ignore_permissions=True, set_name=delivery_id)
+    return _delivery_response(delivery)
+
+
+@frappe.whitelist(methods=["GET"])
+def receipt_delivery_view(delivery_id: str):
+    from secrets import token_urlsafe
+    from werkzeug.wrappers import Response
+
+    filters = {"name": delivery_id, "owner": frappe.session.user}
+    invoice = frappe.db.get_value("URY Receipt Delivery", filters, "invoice")
+    if not invoice:
+        frappe.throw(_("Invalid receipt delivery."), frappe.PermissionError)
+    _receipt_invoice(invoice)
+    try:
+        row = frappe.db.get_value(
+            "URY Receipt Delivery", dict(filters, invoice=invoice),
+            ["receipt_html", "delivered", "browser_rendered"], as_dict=True, for_update=True,
+        )
+    except frappe.QueryDeadlockError:
+        # MariaDB rejects a locking read when another request claimed this snapshot.
+        frappe.throw(_("The receipt changed while opening it. Return to the till."), frappe.PermissionError)
+    if not row or not row.receipt_html or row.delivered or row.browser_rendered:
+        frappe.throw(_("This receipt is unavailable. Request another print from the till."), frappe.PermissionError)
+    frappe.db.set_value("URY Receipt Delivery", delivery_id, "browser_rendered", 1)
+    # Frappe normally rolls back GET requests. Persist the claim on successful response.
+    frappe.local.flags.commit = True
+    nonce = token_urlsafe(24)
+    script = f'<script nonce="{nonce}">onafterprint=()=>window.close();onload=()=>window.print()</script>'
+    return Response("<!doctype html><meta charset=utf-8>" + row.receipt_html + script, mimetype="text/html",
+                    headers={"Cache-Control": "private, no-store", "Content-Security-Policy":
+                             f"default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                             f"font-src 'self' data:; script-src 'nonce-{nonce}'; base-uri 'none'; frame-ancestors 'none'"})
+
+
+@frappe.whitelist(methods=["POST"])
+def complete_receipt_delivery(invoice: str, delivery_id: str):
+    invoice_doc = _receipt_invoice(invoice)
+    delivery = frappe.db.get_value(
+        "URY Receipt Delivery", {"name": delivery_id, "invoice": invoice, "owner": frappe.session.user},
+        ["delivered", "print_number", "reprint_label", "invoice_revision"], as_dict=True, for_update=True,
+    )
+    if not delivery:
+        frappe.throw(_("Invalid receipt delivery."), frappe.PermissionError)
+    if not delivery.delivered:
+        if delivery.invoice_revision != _invoice_revision(invoice_doc):
+            frappe.throw(_("The check changed after this receipt was prepared. Review the updated check before printing."))
+        result = _record_delivered_bill(invoice, invoice_doc, {"print_number": delivery.print_number,
+            "is_reprint": delivery.print_number > 1, "reprint_label": delivery.reprint_label})
+        if result["status"] != "Success":
+            frappe.throw(_("Receipt delivery could not be recorded."))
+        frappe.db.set_value("URY Receipt Delivery", delivery_id, "delivered", 1)
+    return {"status": "Success"}
+
+
+@frappe.whitelist()
+def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None):
+    invoice_doc = _receipt_invoice(invoice)
+    meta = _authorize_receipt(invoice_doc, invoice, approval_token, reason, reason_note)
+    return _record_delivered_bill(invoice, invoice_doc, meta)
+
+
+def _record_delivered_bill(invoice, invoice_doc, reprint_meta):
     try:
         table = frappe.db.get_value("POS Invoice", invoice, "restaurant_table")
         
@@ -290,7 +440,7 @@ def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None)
                 # Update invoice_printed
                 _mark_invoice_printed(invoice, was_printed=0, update_modified=False)
 
-                _free_tables_if_no_open_invoices(table, printed=True, branch=invoice_doc.get("branch"))
+                _free_tables_if_no_open_invoices(table, printed=True, branch=invoice_doc.get("branch"), commit=False)
                 # Validate both updates
                 new_invoice_printed = frappe.db.get_value("POS Invoice", invoice, "invoice_printed")
                 
@@ -385,9 +535,23 @@ def qz_certificate():
     if frappe.session.user == "Guest":
         frappe.throw(_("Not permitted"), frappe.PermissionError)
     site_config = frappe.get_site_config()
-    qz_key_value = site_config.get("qz_cert")
-
-    return qz_key_value
+    configured = (site_config.get("qz_cert") or "").strip()
+    if not configured:
+        return None
+    try:
+        if configured.startswith("-----BEGIN"):
+            data = configured.encode()
+        else:
+            root = Path(frappe.get_site_path("private")).resolve()
+            path = (root / configured).resolve()
+            if not path.is_relative_to(root):
+                raise ValueError
+            data = path.read_bytes()
+        # Serialize only public certificates, even if the file contains other PEM objects.
+        certificates = x509.load_pem_x509_certificates(data)
+        return "--START INTERMEDIATE CERT--\n".join(cert.public_bytes(serialization.Encoding.PEM).decode() for cert in certificates)
+    except (ValueError, OSError):
+        frappe.throw(_("Configure a valid public QZ certificate in qz_cert."))
 
 
 def _get_qz_private_key():

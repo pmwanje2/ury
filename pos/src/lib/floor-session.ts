@@ -43,7 +43,11 @@ export function isFloorPadActive(): boolean {
 }
 
 export function hasFloorSessionMarker(): boolean {
-  return localStorage.getItem(FLOOR_SESSION_MARKER) === 'true';
+  try {
+    return localStorage.getItem(FLOOR_SESSION_MARKER) === 'true';
+  } catch {
+    return false;
+  }
 }
 
 export function setFloorSessionMarker(): void {
@@ -51,7 +55,12 @@ export function setFloorSessionMarker(): void {
 }
 
 export function hasFloorLogoutFailureMarker(): boolean {
-  return sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) === 'true';
+  try {
+    return sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) === 'true';
+  } catch {
+    // Keep a paired tablet at the sign-in pad when its logout marker cannot be read.
+    return isFloorPadActive();
+  }
 }
 
 export function clearFloorLogoutFailureMarker(): void {
@@ -90,13 +99,16 @@ export async function floorSignOut(): Promise<void> {
   } catch {
     logoutFailed = true;
   } finally {
-    if (logoutFailed) {
-      sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true');
-    } else {
-      clearFloorLogoutFailureMarker();
+    try {
+      if (logoutFailed) sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true');
+      else clearFloorLogoutFailureMarker();
+    } catch {
+      // A blocked marker must not interrupt sign-out.
     }
-    localStorage.removeItem(FLOOR_SESSION_MARKER);
-    SESSION_KEYS.forEach((key) => sessionStorage.removeItem(key));
+    for (const key of SESSION_KEYS) {
+      try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
+    }
+    try { localStorage.removeItem(FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
     disconnectQzPrinter();
     window.location.replace(FLOOR_HOME);
   }

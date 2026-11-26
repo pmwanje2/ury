@@ -22,6 +22,10 @@
       "types": "./src/availability.ts",
       "import": "./src/availability.ts"
     },
+    "./receipt": {
+      "types": "./src/print/receipt.ts",
+      "import": "./src/print/receipt.ts"
+    },
     "./print-format": {
       "types": "./src/print/format.ts",
       "import": "./src/print/format.ts"

@@ -4,52 +4,26 @@ const deskQzReady = new Promise(resolve => {
     if (loading && typeof loading.then === 'function') loading.then(resolve, resolve);
 });
 
-async function printDeskQzInvoice(invoice, profile, safePrintFormat, configuredLetterHead) {
+async function printDeskQzInvoice(invoice, profile, safePrintFormat, configuredLetterHead, onPrinted = showPrintedInvoice) {
     let signing;
     let printed = false;
     try {
         signing = await import('/assets/ury/js/qz-signing.js');
         await deskQzReady;
-        const { message } = await frappe.call({
-            method: "frappe.www.printview.get_html_and_style",
-            args: {
-                doc: "POS Invoice",
-                name: invoice,
-                print_format: safePrintFormat,
-                no_letterhead: configuredLetterHead ? 0 : 1,
-                letterhead: configuredLetterHead || "No Letterhead",
-                _lang: 'en',
-            },
-        });
-        if (!message?.html) throw new Error("Invoice print content is unavailable");
-
-        await signing.runSignedQz(qz, (method, args) => frappe.call({ method, args, silent: true }), async () => {
-            if (!qz.websocket.isActive()) {
-                const { message: certificate } = await frappe.call({
-                    method: "ury.ury.api.ury_print.qz_certificate",
-                });
-                if (certificate) {
-                    qz.security.setCertificatePromise((resolve, reject) => {
-                        if (certificate.includes("-----BEGIN CERTIFICATE-----")) {
-                            resolve(certificate);
-                            return;
-                        }
-                        const path = certificate.split("/").map(encodeURIComponent).join("/");
-                        fetch("/private/" + path, { cache: 'no-store' })
-                            .then(response => {
-                                if (!response.ok) throw new Error("Printer certificate is unavailable");
-                                return response.text();
-                            })
-                            .then(resolve, reject);
-                    }, { rejectOnFailure: true });
-                }
-                await qz.websocket.connect({ host: profile.qz_host });
-            }
-            const printer = await qz.printers.getDefault();
-            await qz.print(qz.configs.create(printer), [{ type: 'html', format: 'plain', data: message.html }]);
-        });
-        printed = true;
-        await updateMergedInvoicePrint(invoice);
+        const receipt = await import('/assets/ury/js/receipt-delivery.js');
+        const post = (method, args) => frappe.call({ method, args, silent: true });
+        await receipt.dispatchReceipt(post, {
+            invoice, print_format: safePrintFormat, letterhead: configuredLetterHead,
+        }, html => signing.runSignedQz(qz, post, async () => {
+            await signing.connectQz(qz, async () => {
+                const { message } = await frappe.call({ method: "ury.ury.api.ury_print.qz_certificate" });
+                return message;
+            }, profile.qz_host);
+            const printer = profile.custom_qz_receipt_queue?.trim() || await qz.printers.getDefault();
+            await qz.print(qz.configs.create(printer), [{ type: 'html', format: 'plain', data: html }]);
+            printed = true;
+        }));
+        await onPrinted(invoice);
     } catch (error) {
         let message = __("Could not print the invoice. Check the printer and try again.");
         if (printed) {
@@ -80,6 +54,10 @@ async function updateMergedInvoicePrint(invoice) {
         },
     });
 
+    showPrintedInvoice();
+}
+
+function showPrintedInvoice() {
     cur_frm.set_value(
         "invoice_printed",
         1,

@@ -141,6 +141,7 @@ process.stdout.write(JSON.stringify(out));
         self.assertEqual(rows[0], ["source", "target", "context"])
         mapping = {row[0]: row[1] for row in rows[1:] if len(row) >= 2 and row[0]}
         self.assertEqual(mapping.get("URY"), "Maximus")
+        self.assertEqual(mapping.get("URY Receipt Delivery"), "Receipt Delivery")
         self.assertEqual(mapping.get("URY KOT"), "Kitchen Order Ticket")
         self.assertEqual(mapping.get("URY Waiter Order Slip"), "Waiter Order Slip")
         # Coordinated by name with siteops #8596 (maximus_branding owns the URY Bill Copy picker/label).

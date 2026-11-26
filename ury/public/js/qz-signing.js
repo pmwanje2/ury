@@ -90,3 +90,65 @@ export function runSignedQz(bridge, post, operation, signal) {
   pending.set(bridge, result.then(() => undefined, () => closing));
   return result;
 }
+
+// Let the operator accept trust before starting the spooler's own deadline.
+export function withQzDeadline(operation) {
+  const controller = new AbortController();
+  let timer;
+  let startPrinting;
+  const deadline = new Promise((_, reject) => {
+    const arm = (ms, code) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const error = new Error(code);
+        controller.abort(error);
+        reject(error);
+      }, ms);
+    };
+    arm(60000, 'QZ_TRUST_TIMEOUT');
+    startPrinting = () => arm(30000, 'PRINTER_TIMEOUT');
+  });
+  return Promise.race([Promise.resolve().then(() => operation(controller.signal, startPrinting)), deadline])
+    .finally(() => clearTimeout(timer));
+}
+
+const connecting = new WeakMap();
+
+export function connectQz(bridge, certificate, host, signal) {
+  signal?.throwIfAborted();
+  if (bridge.websocket.isActive()) return Promise.resolve();
+  const existing = connecting.get(bridge);
+  if (existing) return existing;
+
+  const controller = new AbortController();
+  let rejectConnection;
+  const cancelled = new Promise((_, reject) => { rejectConnection = reject; });
+  function abort(reason) {
+    controller.abort(reason);
+    if (connecting.get(bridge) === connection) connecting.delete(bridge);
+    rejectConnection(reason);
+  }
+  const onAbort = () => abort(signal.reason);
+  const timer = setTimeout(() => abort(new Error('QZ_TRUST_TIMEOUT')), 60000);
+  const open = async () => {
+    let pem;
+    try {
+      pem = await certificate(controller.signal);
+      if (!pem?.startsWith('-----BEGIN CERTIFICATE-----')) throw Error('Missing public certificate');
+    } catch (cause) {
+      controller.signal.throwIfAborted();
+      throw new Error('QZ_CERT_ERROR', { cause });
+    }
+    controller.signal.throwIfAborted();
+    bridge.security.setCertificatePromise(resolve => resolve(pem), { rejectOnFailure: true });
+    return bridge.websocket.connect(host ? { host, usingSecure: true } : { usingSecure: true });
+  };
+  const connection = Promise.race([Promise.resolve().then(open), cancelled]).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+    if (connecting.get(bridge) === connection) connecting.delete(bridge);
+  });
+  connecting.set(bridge, connection);
+  signal?.addEventListener('abort', onAbort, { once: true });
+  return connection;
+}

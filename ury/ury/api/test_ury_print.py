@@ -106,7 +106,7 @@ class TestNetworkPrinting(BillPrintTestCase):
 
 
 class TestSelectNetworkPrinter(BillPrintTestCase):
-	@patch("ury.ury.api.ury_print.network_printing")
+	@patch("ury.ury.api.ury_print._network_print_internal", create=True)
 	@patch("ury.ury.api.ury_print.frappe.get_all")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -136,7 +136,7 @@ class TestSelectNetworkPrinter(BillPrintTestCase):
 			["Room Printer 1", "Room Printer 2"],
 		)
 
-	@patch("ury.ury.api.ury_print.network_printing")
+	@patch("ury.ury.api.ury_print._network_print_internal", create=True)
 	@patch("ury.ury.api.ury_print.frappe.get_all")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -156,7 +156,7 @@ class TestSelectNetworkPrinter(BillPrintTestCase):
 		self.assertIsNone(result)
 		mock_network_printing.assert_not_called()
 
-	@patch("ury.ury.api.ury_print.network_printing")
+	@patch("ury.ury.api.ury_print._network_print_internal", create=True)
 	@patch("ury.ury.api.ury_print.frappe.get_all")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -227,7 +227,7 @@ class TestQzPrintUpdate(BillPrintTestCase):
 			result = qz_print_update("INV-001")
 
 		self.assertEqual(result, {"status": "Success"})
-		mock_release.assert_called_once_with("T-01")
+		mock_release.assert_called_once_with("T-01", printed=True, branch=None, commit=False)
 
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
@@ -279,7 +279,7 @@ class TestPrintPosPage(BillPrintTestCase):
 			{"invoice_printed": 1, "custom_printing_time": ANY},
 			update_modified=True,
 		)
-		mock_release.assert_called_once_with("T-01")
+		mock_release.assert_called_once_with("T-01", printed=True, branch="Branch-1")
 
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
@@ -347,7 +347,11 @@ class TestQzCertificate(FrappeTestCase):
 	@patch("ury.ury.api.ury_print.frappe.get_site_config")
 	def test_qz_certificate_returns_cert(self, mock_get_config):
 		"""Test qz_certificate returns certificate from config."""
-		cert_value = "-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----"
+		from certifi import where
+		from cryptography import x509
+		from cryptography.hazmat.primitives.serialization import Encoding
+		from pathlib import Path
+		cert_value = x509.load_pem_x509_certificate(Path(where()).read_bytes()).public_bytes(Encoding.PEM).decode()
 		mock_get_config.return_value = {"qz_cert": cert_value}
 
 		result = qz_certificate()
@@ -362,6 +366,11 @@ class TestQzCertificate(FrappeTestCase):
 		result = qz_certificate()
 
 		self.assertIsNone(result)
+
+	@patch("ury.ury.api.ury_print.frappe.get_site_config", return_value={"qz_cert": "-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----"})
+	def test_qz_certificate_rejects_key_in_certificate_setting(self, _config):
+		with self.assertRaises(frappe.ValidationError):
+			qz_certificate()
 
 	def test_qz_certificate_guest_denied(self):
 		"""Test qz_certificate denies Guest user."""
@@ -516,3 +525,20 @@ class TestMarkInvoicePrinted(FrappeTestCase):
 			{"invoice_printed": 1, "custom_printing_time": "2026-11-03 10:15:00"},
 			update_modified=False,
 		)
+
+
+class TestReceiptDelivery(BillPrintTestCase):
+	def test_only_confirmed_delivery_triggers_effects_and_duplicate_commit_is_safe(self):
+		from ury.ury.api import ury_print as api
+		from uuid import uuid4
+		invoice = "Fixture-" + uuid4().hex
+		frappe.get_doc({"doctype": "POS Invoice", "name": invoice, "docstatus": 1}).db_insert()
+		with patch("frappe.www.printview.get_html_and_style", return_value={"html": "<p>receipt</p>"}), patch.object(api, "_record_delivered_bill", return_value={"status": "Success"}) as effects:
+			request_id = str(uuid4())
+			first = api.prepare_receipt_delivery(invoice, request_id)
+			self.assertEqual(api.prepare_receipt_delivery(invoice, request_id), first)
+			effects.assert_not_called()
+			result = api.complete_receipt_delivery(invoice, first["delivery_id"])
+			self.assertEqual(result["status"], "Success")
+			api.complete_receipt_delivery(invoice, first["delivery_id"])
+			effects.assert_called_once()

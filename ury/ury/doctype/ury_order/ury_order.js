@@ -816,22 +816,6 @@ frappe.ui.form.on('URY Order', {
 						frappe.db.get_doc('POS Profile', pos_invoice.pos_profile).then(profile => {
 
 							if (profile.qz_print == 1) {
-								// To fetch qz_key from site config
-								frappe.call({
-									method: "ury.ury.api.ury_print.qz_certificate",
-									callback: function (response) {
-										if (response.message) {
-											var qzKey = response.message;
-											qz.security.setCertificatePromise(function (resolve, reject) {
-												//Preferred method - from server
-												fetch("/private/" + qzKey, { cache: 'no-store', headers: { 'Content-Type': 'text/plain' } })
-													.then(function (data) { data.ok ? resolve(data.text()) : reject(data.text()); });
-											});
-
-										}
-									}
-								});
-
 								const unsafePosFormats = new Set([
 									'POS Invoice Classic',
 									'POS Invoice Bordered',
@@ -845,84 +829,10 @@ frappe.ui.form.on('URY Order', {
 								const rawFmt = (profile.print_format || '').trim();
 								const safeFmt = (!rawFmt || unsafePosFormats.has(rawFmt)) ? 'Merged POS Invoice Format' : rawFmt;
 								const configuredLetterHead = (profile.letter_head || '').trim();
-								frappe.call({
-									method: "frappe.www.printview.get_html_and_style",
-									args: {
-										doc: "POS Invoice",
-										name: invoice,
-										print_format: safeFmt,
-										no_letterhead: configuredLetterHead ? 0 : 1,
-										letterhead: configuredLetterHead || "No Letterhead",
-										_lang: 'en',
-									},
-									callback: function (r) {
-										if (qz.websocket.isActive()) {
-											// Use the existing connection to print
-											printWithQZTray();
-										} else {
-											// Establish a new connection and then print
-											qz.websocket.connect({ host: profile.qz_host, usingSecure: false })
-												.then(() => {
-													// test();
-													printWithQZTray();
-												})
-												.catch((error) => {
-													// Handle connection error
-													console.error("Error connecting to QZ Tray:", error);
-													frappe.dom.unfreeze();
-													frappe.throw({
-														message: __("Printing Failed: Error connecting to QZ Tray")
-													});
-												});
-										}
-										function printWithQZTray() {
-											qz.printers.getDefault()
-												.then((printer) => {
-													var htmlcontent = r.message.html;
-													var data = [{
-														type: 'html',
-														format: 'plain',
-														data: htmlcontent
-													}];
-
-													var config = qz.configs.create(printer);
-													qz.print(config, data)
-														.then(function () {
-															frappe.call({
-																method: `ury.ury.api.ury_print.qz_print_update`,
-																args: {
-																	invoice: invoice
-																},
-																callback: function (r) {
-																}
-															});
-															frappe.dom.unfreeze();
-															frappe.show_alert({ message: __('Invoice Printed'), indicator: 'green' });
-															$('.standard-actions').addClass('hidden-xs hidden-md');
-															frappe.ui.toolbar.clear_cache()
-															document.addEventListener('click', function () {
-																frappe.ui.toolbar.clear_cache()
-															});
-														})
-														.catch(function (error) {
-															// Handle printing error
-															console.error("Error printing with QZ Tray:", error);
-															frappe.dom.unfreeze();
-															frappe.throw({
-																message: __("Printing Failed: Error printing with QZ Tray")
-															});
-														});
-												})
-												.catch(function (error) {
-													// Handle printer lookup error
-													console.error("Error looking up printer:", error);
-													frappe.dom.unfreeze();
-													frappe.throw({
-														message: __("Printing Failed: Error looking up printer")
-													});
-												});
-										}
-									},
+								printDeskQzInvoice(invoice, profile, safeFmt, configuredLetterHead, async () => {
+									frappe.show_alert({ message: __('Invoice Printed'), indicator: 'green' });
+									$('.standard-actions').addClass('hidden-xs hidden-md');
+									frappe.ui.toolbar.clear_cache();
 								});
 							}
 

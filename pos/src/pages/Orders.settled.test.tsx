@@ -25,3 +25,18 @@ it('searches posted checks, previews original tenders, and retries only the copy
   expect(post.mock.calls[0]).toEqual(post.mock.calls[1]);
   expect(post.mock.calls[0][0]).toBe('ury.ury_pos.api.print_bill_copy');
 });
+
+it('keeps the settled register open when a numbered fallback is cancelled', async () => {
+  vi.spyOn(call, 'get').mockResolvedValue({ message: [{ name: 'COPY-4', currency: 'UGX', items: [], payments: [], taxes: [] }] });
+  vi.spyOn(call, 'post').mockImplementation(async method => method.endsWith('begin_bill_copy_dispatch') ? {message: {status: 'DISPATCHING', render_grant: 'one-use'}} : ({ message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'browser', html: 'COPY #4', print_url: '/printview?copy_number=4' } }));
+  const navigate = vi.fn();
+  vi.spyOn(window, 'open').mockReturnValue({ closed: true, location: { replace: navigate } } as unknown as Window);
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  render(<MemoryRouter initialEntries={['/orders/settled']}><Orders /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Search' }));
+  fireEvent.click(await screen.findByRole('button', { name: /COPY-4/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Print copy' }));
+  await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith('/printview?copy_number=4&render_grant=one-use'));
+  expect(await screen.findByText(/delivery was not confirmed/i)).toBeTruthy();
+  expect(call.post).not.toHaveBeenCalledWith(expect.stringContaining('confirm_bill_copy'), expect.anything());
+});

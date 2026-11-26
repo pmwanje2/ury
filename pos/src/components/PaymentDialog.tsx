@@ -1013,6 +1013,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         });
       } else {
         const settlement = await submitSettlementOfflineAware({
+          fiscalReceiptRequested: effectivePrintInvoice ? 1 : 0,
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
           amount: totalTendered, due: amountDue, discount: totalDiscount, tip: tipAmount,
@@ -1029,6 +1030,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             pos_profile: posProfile,
             table,
             submit_invoice: 1,
+            ...(!effectivePrintInvoice && { fiscal_receipt_requested: 0 }),
             ...tipFields,
             ...roomFields,
             ...accountApprovalFields,
@@ -1053,6 +1055,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           partnerInvoice: order?.custom_merged_pos_invoice ?? null,
           timeoutSeconds: resolveEfrisPrintWaitSeconds(storePosProfile.efris_print_wait_seconds),
         });
+        if (efrisOutcome.outcome === 'timed_out') {
+          await queuePendingFiscalReprint({
+            invoice, cashier: user?.name,
+            partnerInvoice: order?.custom_merged_pos_invoice ?? null,
+            posProfile: storePosProfile,
+          });
+        }
         try {
           await printOrder({
             orderId: invoice,
@@ -1060,17 +1069,14 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             printFormat: resolvePrintFormat(order || {}, storePosProfile.print_format),
             skipStatusUpdate: true,
           });
+          if (efrisOutcome.outcome === 'fiscalised') {
+            await call.post('ury.ury_pos.api.close_unused_fiscal_copy', { invoice })
+              .catch(error => console.warn('Could not retire fiscal copy intent', error));
+          }
         } catch (printErr: unknown) {
           console.error('Print failed:', printErr);
           const reason = (printErr instanceof Error ? printErr.message : '') || parseFrappeError(printErr) || 'Unknown error';
           showToast.error(t('payment.receipt_print_failed', { reason }));
-        }
-        if (efrisOutcome.outcome === 'timed_out') {
-          await queuePendingFiscalReprint({
-            invoice,
-            partnerInvoice: order?.custom_merged_pos_invoice ?? null,
-            posProfile: storePosProfile,
-          });
         }
       }
       showToast.success(t('payment.success', { amount: formatMoney(totalTendered) }));
