@@ -8,7 +8,34 @@ const APP_SESSION_STORAGE_KEYS = [
 ];
 const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session', 'ury_pending_bill_copy'];
 
+// A tab may keep printing when browser storage is unavailable. Clear its fallback on logout too.
+const pendingBillCopies = new Map<string, string | null>();
+
+export function readPendingBillCopy(slot: string): string | null {
+  if (pendingBillCopies.has(slot)) return pendingBillCopies.get(slot) ?? null;
+  try {
+    return sessionStorage.getItem(slot);
+  } catch {
+    return null;
+  }
+}
+
+export function storePendingBillCopy(slot: string, value: string | null): void {
+  pendingBillCopies.set(slot, value);
+  try {
+    if (value === null) {
+      sessionStorage.removeItem(slot);
+      pendingBillCopies.delete(slot);
+    } else {
+      sessionStorage.setItem(slot, value);
+    }
+  } catch {
+    // Keep the in-tab value. A null entry masks a completed request if removal failed.
+  }
+}
+
 export function clearAppStorage({ includeMosaicStrikes = true } = {}): void {
+  pendingBillCopies.clear();
   APP_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
   APP_SESSION_STORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
   // Walk backwards because removeItem changes the storage indices.

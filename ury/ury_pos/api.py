@@ -3898,13 +3898,18 @@ def _expired_browser_grant(record):
                 and get_datetime(record.dispatch_until) <= now_datetime())
 
 
+def _matches_dispatch_session(record, sid):
+    from hmac import compare_digest
+
+    return bool(sid and record.qz_session_hash and compare_digest(record.qz_session_hash, _lease_hash(sid)))
+
+
 def _qz_recovery_token(record):
     """A recovery credential grants confirmation or browser fallback, never QZ dispatch."""
     import hmac
 
     sid = _qz_dispatch_session()
-    if (not sid or record.job_owner != frappe.session.user or not record.qz_session_hash
-            or not hmac.compare_digest(record.qz_session_hash, _lease_hash(sid))):
+    if record.job_owner != frappe.session.user or not _matches_dispatch_session(record, sid):
         return None
     attempt = json.dumps(['qz-recovery', record.name, record.dispatch_token_hash, record.job_owner])
     return hmac.digest(sid.encode(), attempt.encode(), 'sha256').hex()
@@ -3933,10 +3938,12 @@ def _consume_browser_render_grant(invoice, copy_number, grant):
         record = frappe.db.get_value(
             _COPY_LOG, {'invoice': invoice, 'copy_number': copy_number, 'job_owner': frappe.session.user,
                         'status': 'BROWSER_DISPATCHING', 'render_grant_hash': _lease_hash(grant)},
-            ['name', 'dispatch_until', 'fiscal_event'], as_dict=True, for_update=True,
+            ['name', 'dispatch_until', 'fiscal_event', 'qz_session_hash'], as_dict=True, for_update=True,
         )
         if not record or not record.dispatch_until or get_datetime(record.dispatch_until) <= now_datetime():
             frappe.throw('This browser copy has expired or was already used.', frappe.PermissionError)
+        if not _matches_dispatch_session(record, _qz_dispatch_session()):
+            frappe.throw('Open this browser copy in the cashier session that started it.', frappe.PermissionError)
         if record.fiscal_event and record.fiscal_event != _require_fiscal_event(doc):
             frappe.throw('The reserved fiscal receipt has changed.', frappe.PermissionError)
         frappe.db.set_value(_COPY_LOG, record.name, {'render_grant_hash': None, 'dispatch_until': None})
@@ -3974,7 +3981,10 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
             fallback = record.status == 'QZ_DISPATCHING' and action == 'browser'
             valid_lease = (record.status == 'RESERVED' and record.dispatch_until
                            and get_datetime(record.dispatch_until) > now_datetime())
-            renew_browser = action == 'browser' and _expired_browser_grant(record) and _qz_recovery_token(record)
+            sid = _qz_dispatch_session()
+            if action == 'browser' and (not sid or (record.status != 'RESERVED' and not _matches_dispatch_session(record, sid))):
+                frappe.throw('Start browser delivery in the original cashier session.', frappe.PermissionError)
+            renew_browser = action == 'browser' and _expired_browser_grant(record)
             if not (fallback or valid_lease or renew_browser):
                 frappe.throw('Copy dispatch expired or already started. Check the original till.', frappe.PermissionError)
             if record.fiscal_event and _require_fiscal_event(doc) != record.fiscal_event:
@@ -3985,7 +3995,7 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
                 update.update(status='BROWSER_DISPATCHING', render_grant_hash=_lease_hash(grant),
                               dispatch_until=now_datetime() + timedelta(minutes=5))
                 result['render_grant'] = grant
-            if record.status == 'RESERVED' and (sid := _qz_dispatch_session()):
+            if record.status == 'RESERVED' and sid:
                 update['qz_session_hash'] = _lease_hash(sid)
             frappe.db.set_value(_COPY_LOG, record.name, update)
             record.status = 'DISPATCHING'

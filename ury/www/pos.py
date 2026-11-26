@@ -15,6 +15,17 @@ def _receipt_copy_session(csrf_token):
 	return sha256(("receipt-copy:" + csrf_token).encode()).hexdigest()
 
 
+@frappe.whitelist(methods=["GET"])
+def get_receipt_copy_session():
+	"""Identify the current cookie session before choosing a pending copy on a shared till."""
+	csrf_token = frappe.sessions.get_csrf_token()
+	return {
+		"user": frappe.session.user,
+		"receipt_copy_session": _receipt_copy_session(csrf_token),
+		"csrf_token": csrf_token,
+	}
+
+
 def get_context(context):
 	context.update(get_brand_context(surface="staff"))
 	context.update(get_theme_context())

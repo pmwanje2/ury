@@ -742,6 +742,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           reasonNote: approval?.note,
         });
       } else {
+        if (copies.verifySession) await copies.verifySession();
         key = copies.start(selectedOrder.name, approvedKey);
         const result = await printBillCopy({
           orderId: selectedOrder.name,

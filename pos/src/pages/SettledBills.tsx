@@ -110,6 +110,7 @@ export default function SettledBills() {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         throw new Error(t('offline.refused', { action: 'closed receipt copy' }));
       }
+      if (copies.verifySession) await copies.verifySession();
       key = copies.start(targetBill.name, overrideKey);
       const { message: reservation } = await call.post<{ message: PrintBillCopyResult }>(method + 'print_bill_copy', {
         invoice: targetBill.name,

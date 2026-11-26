@@ -1,44 +1,83 @@
-import { useState } from 'react';
-import { getSessionUser } from '../../../packages/core/src/storage';
+import { useEffect, useRef, useState } from 'react';
+import { call } from '@ury/core';
+import { getSessionUser, readPendingBillCopy, storePendingBillCopy } from '../../../packages/core/src/storage';
 
-function copySlot(invoice: string) {
-  const user = getSessionUser();
-  const boot = (window as Window & { frappe?: { boot?: { receipt_copy_session?: string } } }).frappe?.boot;
-  const login = boot?.receipt_copy_session;
-  const key = 'ury_pending_bill_copy:' + JSON.stringify([user, login, invoice]);
-  return { key, persistent: Boolean(login) && user !== 'Guest' };
+interface CopySession {
+  user: string;
+  receipt_copy_session: string;
+  csrf_token: string;
+}
+
+async function liveSession(): Promise<CopySession> {
+  const cashier = getSessionUser();
+  const { message } = await call.get<{ message: CopySession }>('ury.www.pos.get_receipt_copy_session');
+  if (!message?.receipt_copy_session || !message.csrf_token || !message.user || message.user === 'Guest' ||
+      (cashier && message.user !== cashier) || getSessionUser() !== cashier) {
+    throw new Error('The cashier session changed. Reload the register before printing.');
+  }
+  return message;
 }
 
 export function usePendingBillCopies() {
-  // A register without session boot data can retry for the lifetime of its mounted page.
+  const booted = Boolean((window as Window & { frappe?: { boot?: object } }).frappe?.boot);
   const [transient] = useState(() => new Map<string, string>());
+  const [display, setDisplay] = useState<CopySession>();
+  const active = useRef<CopySession>(undefined);
+
+  // A remounted page must verify its login before displaying a prior request.
+  useEffect(() => {
+    if (!booted) return;
+    let mounted = true;
+    liveSession().then(session => {
+      if (mounted) setDisplay(current => current ?? session);
+    }).catch(() => undefined);
+    return () => { mounted = false; };
+  }, [booted]);
+
+  function slot(invoice: string, session?: CopySession) {
+    return 'ury_pending_bill_copy:' + JSON.stringify([session?.user ?? getSessionUser(), session?.receipt_copy_session, invoice]);
+  }
 
   function pending(invoice: string) {
-    const slot = copySlot(invoice);
-    try {
-      return slot.persistent ? sessionStorage.getItem(slot.key) : transient.get(slot.key);
-    } catch {
-      return null;
-    }
+    if (!booted) return transient.get(slot(invoice));
+    const cashier = getSessionUser();
+    if (!display || (cashier && display.user !== cashier)) return null;
+    return readPendingBillCopy(slot(invoice, display));
+  }
+
+  async function verifySession() {
+    // Another tab may have authenticated the same cashier since this page booted.
+    const session = await liveSession();
+    window.csrf_token = session.csrf_token;
+    active.current = session;
+    setDisplay(session);
   }
 
   function start(invoice: string, approvedKey?: string) {
-    const slot = copySlot(invoice);
-    const existing = slot.persistent ? sessionStorage.getItem(slot.key) : transient.get(slot.key);
+    const session = active.current;
+    const cashier = getSessionUser();
+    if (booted && (!session || (cashier && session.user !== cashier))) {
+      throw new Error('Verify the cashier session before printing.');
+    }
+    const name = slot(invoice, session);
+    const existing = session ? readPendingBillCopy(name) : transient.get(name);
     if (approvedKey && existing !== approvedKey) throw new Error('Request approval in the current cashier session.');
     if (existing) return existing;
     const key = crypto.randomUUID();
-    if (slot.persistent) sessionStorage.setItem(slot.key, key);
-    else transient.set(slot.key, key);
+    if (session) storePendingBillCopy(name, key);
+    else transient.set(name, key);
     return key;
   }
 
   function discard(invoice: string, key: string) {
-    if (pending(invoice) !== key) return;
-    const slot = copySlot(invoice);
-    if (slot.persistent) sessionStorage.removeItem(slot.key);
-    else transient.delete(slot.key);
+    const session = active.current;
+    const name = slot(invoice, session);
+    if (session) {
+      if (readPendingBillCopy(name) === key) storePendingBillCopy(name, null);
+    } else if (transient.get(name) === key) {
+      transient.delete(name);
+    }
   }
 
-  return { pending, start, discard };
+  return { pending, verifySession: booted ? verifySession : undefined, start, discard };
 }
