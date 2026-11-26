@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 
 import frappe
 import frappe.sessions
@@ -9,6 +10,10 @@ from ury.brand import get_brand, get_brand_context, get_theme_context, json_for_
 from ury.ury_pos.floor_pin import get_floor_pad
 
 no_cache = 1
+
+def _receipt_copy_session(csrf_token):
+	return sha256(("receipt-copy:" + csrf_token).encode()).hexdigest()
+
 
 def get_context(context):
 	context.update(get_brand_context(surface="staff"))
@@ -32,6 +37,8 @@ def get_context(context):
 		enabled = True
 	boot["server_script_enabled"] = enabled
 
+	# Bind reloadable copy requests to this login without storing a session secret in the browser queue.
+	boot["receipt_copy_session"] = _receipt_copy_session(csrf_token)
 	boot["ury_brand"] = context["brand"]
 	boot_json = json.dumps(json_for_script(boot))
 
@@ -57,6 +64,7 @@ def get_boot():
 	except Exception as e:
 		raise frappe.SessionBootFailed from e
 
+	boot["receipt_copy_session"] = _receipt_copy_session(frappe.sessions.get_csrf_token())
 	boot["push_relay_server_url"] = frappe.conf.get("push_relay_server_url")
 	boot["ury_brand"] = get_brand(surface="staff")
 	boot_json = json.dumps(json_for_script(boot))

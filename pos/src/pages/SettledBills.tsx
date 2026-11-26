@@ -8,6 +8,7 @@ import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-a
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import TipAdjustDialog from '../components/TipAdjustDialog';
 import { usePOSStore } from '../store/pos-store';
+import { usePendingBillCopies } from '../lib/pending-bill-copy';
 import { deliverReservedCopy, printOrder, type PrintBillCopyResult } from '../lib/print';
 import { resolvePrintFormat } from '../lib/invoice-api';
 import { formatMoneyAmount } from '../lib/void-return-api';
@@ -67,7 +68,7 @@ export default function SettledBills() {
   const [start, setStart] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const [keys] = useState(() => new Map<string, string>());
+  const copies = usePendingBillCopies();
   const [outcome, setOutcome] = useState('');
   const [showReturnDialog, setShowReturnDialog] = useState(false);
   const [showReopenDialog, setShowReopenDialog] = useState(false);
@@ -102,14 +103,14 @@ export default function SettledBills() {
   async function print(approval?: ManagerApprovalResult, overrideKey?: string) {
     const targetBill = pendingCopyApproval?.bill ?? bill;
     if (!targetBill || busy) return;
-    const key = overrideKey || keys.get(targetBill.name) || crypto.randomUUID();
-    keys.set(targetBill.name, key);
+    let key: string | undefined;
     setBusy(true);
     setMessage('');
     try {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         throw new Error(t('offline.refused', { action: 'closed receipt copy' }));
       }
+      key = copies.start(targetBill.name, overrideKey);
       const { message: reservation } = await call.post<{ message: PrintBillCopyResult }>(method + 'print_bill_copy', {
         invoice: targetBill.name,
         idempotency_key: key,
@@ -118,15 +119,15 @@ export default function SettledBills() {
         ...(approval?.note ? { reason_note: approval.note } : {}),
       });
       const result = await deliverReservedCopy(targetBill.name, key, usePOSStore.getState().posProfile || {}, reservation);
+      if (result.status === 'COMPLETED' || result.status === 'CANCELED') copies.discard(targetBill.name, key);
       setOutcome(result.status);
       setMessage(
         [tData('Copy'), result.copy_number ? `#${result.copy_number}` : '', result.status, result.failure_reason]
           .filter(Boolean)
           .join(' · '),
       );
-      if (result.status === 'COMPLETED') keys.delete(targetBill.name);
     } catch (error) {
-      if (!approval?.token && (isAuthRequiredError(error) || isReasonRequiredError(error))) {
+      if (key && !approval?.token && (isAuthRequiredError(error) || isReasonRequiredError(error))) {
         const challenge = extractAuthChallenge(error);
         setPendingCopyApproval({
           bill: targetBill,
@@ -198,7 +199,7 @@ export default function SettledBills() {
               onClick={() => {
                 select(row);
                 setMessage('');
-                setOutcome(keys.has(row.name) ? 'SUBMITTED' : '');
+                setOutcome(copies.pending(row.name) ? 'SUBMITTED' : '');
               }}
             >
               <strong>{row.name}</strong> · {row.posting_date} · {row.pos_profile} · {row.status} ·{' '}
@@ -324,7 +325,7 @@ export default function SettledBills() {
               {tData(
                 ['FAILED', 'CANCELED', 'ERROR'].includes(outcome)
                   ? 'Retry copy'
-                  : keys.has(bill.name)
+                  : copies.pending(bill.name)
                     ? 'Check / retry copy'
                     : 'Print copy',
               )}
@@ -434,7 +435,10 @@ export default function SettledBills() {
             setPendingCopyApproval(null);
             void print(res, pending.idempotencyKey);
           }}
-          onCancel={() => setPendingCopyApproval(null)}
+          onCancel={() => {
+            copies.discard(pendingCopyApproval.bill.name, pendingCopyApproval.idempotencyKey);
+            setPendingCopyApproval(null);
+          }}
         />
       )}
 

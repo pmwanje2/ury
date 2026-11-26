@@ -6,7 +6,7 @@ const APP_SESSION_STORAGE_KEYS = [
   'posProfile', 'menuCategories', 'customerGroups', 'territories', 'payment_modes',
   'ury.setup.configureState',
 ];
-const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session'];
+const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session', 'ury_pending_bill_copy'];
 
 export function clearAppStorage({ includeMosaicStrikes = true } = {}): void {
   APP_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));

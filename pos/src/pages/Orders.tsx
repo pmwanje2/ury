@@ -19,6 +19,7 @@ import BillMergeDialog from '../components/BillMergeDialog';
 import OrderActionsMenu from '../components/OrderActionsMenu';
 import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
+import { usePendingBillCopies } from '../lib/pending-bill-copy';
 import { printBillCopy, printOrder } from '../lib/print';
 import { call, getSessionUser } from '@ury/core';
 import { splitBill, splitCheckMulti, cancelOrder, reprintKot } from '../lib/order-api';
@@ -223,7 +224,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const navigate = useNavigate();
   const location = useLocation();
   const mounted = useRef(false);
-  const copyKeys = useRef(new Map<string, string>());
+  const copies = usePendingBillCopies();
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [voidChoice, setVoidChoice] = React.useState('');
@@ -284,6 +285,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     claim: Record<string, unknown>;
     requireReason?: boolean;
     retry: (res: ManagerApprovalResult) => Promise<void>;
+    discard?: () => void;
   } | null>(null);
 
   React.useEffect(() => {
@@ -724,9 +726,10 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     });
   }
 
-  async function handlePrintOrder(approval?: ManagerApprovalResult) {
+  async function handlePrintOrder(approval?: ManagerApprovalResult, approvedKey?: string) {
     if (!selectedOrder || !posStore.posProfile) return;
     setIsPrinting(true);
+    let key: string | undefined;
     try {
       const isOpenBill = selectedOrder.status === 'Draft' || selectedOrder.status === 'Unbilled';
       if (isOpenBill) {
@@ -739,9 +742,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           reasonNote: approval?.note,
         });
       } else {
-        const key = copyKeys.current.get(selectedOrder.name) || crypto.randomUUID();
-        copyKeys.current.set(selectedOrder.name, key);
-        await printBillCopy({
+        key = copies.start(selectedOrder.name, approvedKey);
+        const result = await printBillCopy({
           orderId: selectedOrder.name,
           posProfile: posStore.posProfile,
           idempotencyKey: key,
@@ -749,7 +751,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           reason: approval?.reason,
           reasonNote: approval?.note,
         });
-        copyKeys.current.delete(selectedOrder.name);
+        if (result.status === 'COMPLETED') copies.discard(selectedOrder.name, key);
       }
       showToast.success(t('success.printed'));
       if (isOpenBill && selectedOrder && typeof selectedOrder === 'object') {
@@ -773,6 +775,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     } catch (err: any) {
       if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
         const orderName = selectedOrder.name;
+        const requestKey = key;
         const challenge = extractAuthChallenge(err);
         setPendingOrderApproval({
           privilege: 'reprint_bill',
@@ -781,10 +784,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           referenceName: orderName,
           claim: challenge?.claim ?? { action: 'reprint_open_bill', invoice: orderName },
           requireReason: true,
-          retry: (res) => handlePrintOrder(res),
+          retry: (res) => handlePrintOrder(res, requestKey),
+          discard: requestKey ? () => copies.discard(orderName, requestKey) : undefined,
         });
         return;
       }
+      if (key && err?.copyStatus === 'CANCELED') copies.discard(selectedOrder.name, key);
       showToast.error(overrideActionErrorMessage(err) || t('errors.print_failed', { reason: err?.message || String(err) }));
     } finally {
       setIsPrinting(false);
@@ -2031,7 +2036,10 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             setPendingOrderApproval(null);
             void pending.retry(res);
           }}
-          onCancel={() => setPendingOrderApproval(null)}
+          onCancel={() => {
+            pendingOrderApproval.discard?.();
+            setPendingOrderApproval(null);
+          }}
         />
       )}
     </div>

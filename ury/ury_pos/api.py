@@ -3891,6 +3891,13 @@ def _browser_copy_rendered(record):
     return record.status == 'BROWSER_DISPATCHING' and not record.render_grant_hash and not record.dispatch_until
 
 
+def _expired_browser_grant(record):
+    from frappe.utils import get_datetime, now_datetime
+
+    return bool(record.status == 'BROWSER_DISPATCHING' and record.render_grant_hash and record.dispatch_until
+                and get_datetime(record.dispatch_until) <= now_datetime())
+
+
 def _qz_recovery_token(record):
     """A recovery credential grants confirmation or browser fallback, never QZ dispatch."""
     import hmac
@@ -3967,7 +3974,8 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
             fallback = record.status == 'QZ_DISPATCHING' and action == 'browser'
             valid_lease = (record.status == 'RESERVED' and record.dispatch_until
                            and get_datetime(record.dispatch_until) > now_datetime())
-            if not (fallback or valid_lease):
+            renew_browser = action == 'browser' and _expired_browser_grant(record) and _qz_recovery_token(record)
+            if not (fallback or valid_lease or renew_browser):
                 frappe.throw('Copy dispatch expired or already started. Check the original till.', frappe.PermissionError)
             if record.fiscal_event and _require_fiscal_event(doc) != record.fiscal_event:
                 frappe.throw('The reserved fiscal receipt has changed.', frappe.PermissionError)
@@ -4070,10 +4078,15 @@ def print_bill_copy(
                 if previous and previous.status not in ('RESERVED', 'FAILED', 'CANCELED'):
                     # A replay reports the original outcome without granting another dispatch.
                     result = _copy_result(previous)
-                    if _browser_copy_rendered(previous) or (previous.status == 'QZ_DISPATCHING' and requested_delivery != 'network'):
+                    renew_browser = _expired_browser_grant(previous)
+                    qz_started = previous.status == 'QZ_DISPATCHING' and requested_delivery != 'network'
+                    if renew_browser or _browser_copy_rendered(previous) or qz_started:
                         recovery = _qz_recovery_token(previous)
                         if recovery:
                             result['recovery_token'] = recovery
+                            if renew_browser:
+                                # The popup claims its replacement under lock in begin_bill_copy_dispatch.
+                                result['recovery_action'] = 'renew_browser'
                     return result
 
                 fiscal_event = _require_fiscal_event(doc) if is_auto_fiscal else None

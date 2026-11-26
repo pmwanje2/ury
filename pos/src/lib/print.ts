@@ -27,6 +27,7 @@ export interface PrintBillCopyResult {
   print_job_id?: string;
   dispatch_token?: string;
   recovery_token?: string;
+  recovery_action?: 'renew_browser';
   copy_number?: number;
   copy_timestamp?: string;
   delivery?: 'network' | 'qz' | 'browser';
@@ -86,7 +87,7 @@ export async function printBillCopy({
   if (!response?.message) throw new Error('Copy reservation was unavailable.');
   const result = await deliverReservedCopy(orderId, idempotencyKey, posProfile, response.message);
   if (result.status !== 'COMPLETED' && result.status !== 'SUBMITTED') {
-    throw new Error(result.failure_reason || 'Copy delivery was not acknowledged.');
+    throw Object.assign(new Error(result.failure_reason || 'Copy delivery was not acknowledged.'), { copyStatus: result.status });
   }
   return result;
 }
@@ -96,8 +97,8 @@ export async function deliverReservedCopy(
   profile: { qz_host?: string | null; printer?: string | null; letter_head?: string | null },
   result: PrintBillCopyResult,
 ): Promise<PrintBillCopyResult> {
-  const rendered = result.status === 'BROWSER_DISPATCHING';
-  const recovering = (rendered || result.status === 'QZ_DISPATCHING') && Boolean(result.recovery_token);
+  const browserStarted = result.status === 'BROWSER_DISPATCHING';
+  const recovering = (browserStarted || result.status === 'QZ_DISPATCHING') && Boolean(result.recovery_token);
   if (!recovering && result.status !== 'RESERVED') return result;
   const token = recovering ? result.recovery_token : result.dispatch_token;
   if (!token) throw new Error('Client copy dispatch lease is unavailable.');
@@ -121,17 +122,17 @@ export async function deliverReservedCopy(
       throw new Error('Client copy reservation is unavailable.');
     }
     let delivered = false;
-    if (recovering && rendered) {
+    if (recovering && browserStarted && result.recovery_action !== 'renew_browser') {
       if (!window.confirm(`Did the browser print COPY #${result.copy_number}? Check the receipt before confirming.`)) {
         throw new Error('Copy delivery is still pending.');
       }
       delivered = true;
-    } else if (recovering) {
+    } else if (recovering && !browserStarted) {
       delivered = confirmPrinted();
       if (!delivered && !window.confirm('Print this copy in the browser? Cancel retains it for later confirmation.')) {
         throw new Error('Copy delivery is still pending.');
       }
-    } else if (result.delivery === 'qz') {
+    } else if (!recovering && result.delivery === 'qz') {
       if (!result.html) throw new Error('Authorized QZ copy is unavailable.');
       try {
         await printWithQz(profile.qz_host || 'localhost', result.html, profile.printer, async () => { await begin('qz'); });
