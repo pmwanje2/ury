@@ -12,6 +12,7 @@ import {
   retryFloorSignOut,
   needsFloorReconciliation,
   hasFloorLogoutFailureMarker,
+  readFloorLogoutFailureMarker,
   hasFloorSessionMarker,
   hasRecoveryConfirmation,
   isFloorPadActive,
@@ -96,16 +97,16 @@ function UnconfirmedWorkspace({ user, children }: Props & { user: OfflineUser })
   return <>{children}</>;
 }
 
-function ColdBootSignOut({ profile, user, passwordOnly }: { profile: OfflineProfile | null; user: OfflineUser; passwordOnly: boolean }) {
+function ColdBootSignOut({ profile, user, passwordOnly, failedLogout }: { failedLogout: boolean; profile: OfflineProfile | null; user: OfflineUser; passwordOnly: boolean }) {
   const [state, setState] = useState<'checking' | 'blocked' | 'signed_out' | 'logout_failed'>('checking');
 
   useEffect(() => retryFloorSignOut((result) => {
     if (result !== 'cancelled') setState(result);
-  }), []);
+  }, failedLogout), [failedLogout]);
 
   if (state === 'signed_out' || state === 'logout_failed') return <FloorPinPad usernameOnly={passwordOnly || state === 'logout_failed'} />;
   if (state === 'checking') return <Spinner message={t('common.loading')} />;
-  if (!hasRecoveryConfirmation(user.name) || hasFloorLogoutFailureMarker()) {
+  if (failedLogout || !hasRecoveryConfirmation(user.name) || hasFloorLogoutFailureMarker()) {
     return <OwnerSignIn user={user} passwordOnly={passwordOnly} />;
   }
   return <RecoveryOutbox profile={profile} user={user} />;
@@ -130,7 +131,12 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   const [isRechecking, setIsRechecking] = useState(false);
   const floorPadActive = isFloorPadActive();
   // Keep the gate mounted through async logout, including stale store renders before navigation.
-  const [failedOnBoot] = useState(hasFloorLogoutFailureMarker);
+  const [failedOnBoot, setFailedOnBoot] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    void readFloorLogoutFailureMarker().then(failed => { if (active) setFailedOnBoot(failed); });
+    return () => { active = false; };
+  }, []);
   const logoutFailed = failedOnBoot || hasFloorLogoutFailureMarker();
   const recovery = needsFloorReconciliation();
 
@@ -171,7 +177,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   }, [user, posProfile, fetchPosProfile]);
 
   // Show loading state while either auth or config is loading
-  if (authLoading || (user && configLoading) || isRechecking) {
+  if (failedOnBoot === null || authLoading || (user && configLoading) || isRechecking) {
     return (
       <div className="min-h-screen">
         <Spinner  message={t('common.loading')} />
@@ -180,7 +186,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   }
 
   if ((coldBoot || logoutFailed || recovery) && user && !user.provisional) {
-    return <ColdBootSignOut key={JSON.stringify([posProfile?.name, user.name])} profile={posProfile} user={user} passwordOnly={logoutFailed || !floorPadActive} />;
+    return <ColdBootSignOut key={JSON.stringify([posProfile?.name, user.name])} profile={posProfile} user={user} failedLogout={!!logoutFailed} passwordOnly={!!logoutFailed || !floorPadActive} />;
   }
 
   if (logoutFailed || recovery) return <FloorPinPad usernameOnly offline={user?.provisional} />;

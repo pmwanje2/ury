@@ -1,11 +1,12 @@
+import { readLogoutMarker, writeLogoutMarker } from './logout-store';
 import { withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
-import { v4 as uuid } from 'uuid';
+import { clearTabConfirmation } from './floor-tab';
+export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
 import { useEffect } from 'react';
 import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
 
-// Tab marker: this tab signed in through the floor pad (PIN or username).
-const FLOOR_SESSION_MARKER = 'userAuth';
+const LEGACY_FLOOR_SESSION_MARKER = 'userAuth';
 // Origin-wide because all tabs share the server session cookie.
 const FLOOR_LOGOUT_FAILED_MARKER = 'ury_floor_logout_failed';
 const FLOOR_HOME = '/pos/order';
@@ -45,48 +46,13 @@ export function isFloorPadActive(): boolean {
   return pad.paired === true && pad.till_open === true;
 }
 
-const RECOVERY_MARKER = 'ury_floor_reconcile';
-
-function currentTabId(): string {
-  if (!/^ury-floor-tab:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(window.name)) {
-    window.name = 'ury-floor-tab:' + uuid();
-  }
-  return window.name;
-}
-
-function confirmedInTab(key: string, user: string): boolean {
-  try {
-    const record = JSON.parse(sessionStorage.getItem(key) || 'null');
-    return !!user && record?.user === user && record.tabId === currentTabId();
-  } catch {
-    return false;
-  }
-}
-
-export function hasFloorSessionMarker(user: string): boolean {
-  return confirmedInTab(FLOOR_SESSION_MARKER, user);
-}
-
-export function hasRecoveryConfirmation(user: string): boolean {
-  return confirmedInTab(RECOVERY_MARKER, user);
-}
-
-export function setFloorSessionMarker(user: string, recovery: boolean): void {
-  sessionStorage.removeItem(recovery ? FLOOR_SESSION_MARKER : RECOVERY_MARKER);
-  sessionStorage.setItem(recovery ? RECOVERY_MARKER : FLOOR_SESSION_MARKER, JSON.stringify({ user, tabId: currentTabId() }));
-}
-
-export function needsFloorReconciliation(): boolean {
-  try {
-    return !!sessionStorage.getItem(RECOVERY_MARKER);
-  } catch {
-    return true;
-  }
+function hasLogoutCookie(): boolean {
+  return document.cookie.split('; ').includes(FLOOR_LOGOUT_FAILED_MARKER + '=1');
 }
 
 export function hasFloorLogoutFailureMarker(): boolean {
   try {
-    if (localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)) return true;
+    if (hasLogoutCookie() || localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)) return true;
     if (!sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)) return false;
     // Migrate failures written by earlier POS bundles.
     localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, getSessionUser() || 'true');
@@ -96,9 +62,21 @@ export function hasFloorLogoutFailureMarker(): boolean {
   }
 }
 
-export function clearFloorLogoutFailureMarker(): void {
-  sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER);
-  localStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER);
+export async function readFloorLogoutFailureMarker(): Promise<boolean> {
+  try { return await readLogoutMarker() || hasFloorLogoutFailureMarker(); } catch { return true; }
+}
+
+export async function clearFloorLogoutFailureMarker(): Promise<void> {
+  try {
+    await writeLogoutMarker(null);
+  } finally {
+    try {
+      if (hasLogoutCookie()) document.cookie = FLOOR_LOGOUT_FAILED_MARKER + '=; Max-Age=0; Path=/pos; SameSite=Strict';
+    } finally {
+      try { localStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
+      finally { sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
+    }
+  }
 }
 
 export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
@@ -127,11 +105,11 @@ export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | 
 type SignOutResult = 'signed_out' | 'logout_failed' | 'blocked' | 'cancelled';
 
 // Recheck under the outbox lock, including when replay ran in a different tab.
-export function retryFloorSignOut(onResult?: (result: SignOutResult) => void): () => void {
+export function retryFloorSignOut(onResult?: (result: SignOutResult) => void, retryingFailedLogout = false): () => void {
   let cancelled = false;
   let timer: ReturnType<typeof setTimeout>;
   const attempt = async () => {
-    const result = await floorSignOut(() => !cancelled);
+    const result = await floorSignOut(() => !cancelled, retryingFailedLogout);
     if (cancelled) return;
     onResult?.(result);
     if (result === 'blocked') timer = setTimeout(attempt, 5000);
@@ -147,12 +125,12 @@ export function retryFloorSignOut(onResult?: (result: SignOutResult) => void): (
  * End a shared-tablet session even when the server cannot answer, so the next
  * waiter never inherits the previous user's tab state.
  */
-export async function floorSignOut(stillRequested?: () => boolean): Promise<SignOutResult> {
+export async function floorSignOut(stillRequested?: () => boolean, retryingFailedLogout = false): Promise<SignOutResult> {
   let outcome: SignOutResult = 'cancelled';
   try {
     await withEmptyOutbox(async () => {
       if (stillRequested && !stillRequested()) return;
-      outcome = await endFloorSession();
+      outcome = await endFloorSession(retryingFailedLogout);
     });
     return outcome;
   } catch (error) {
@@ -163,27 +141,41 @@ export async function floorSignOut(stillRequested?: () => boolean): Promise<Sign
 
 export async function logoutWithFloorMarker(): Promise<boolean> {
   // Persist before the network request: the tab may close while logout is in flight.
+  try { clearTabConfirmation(); } catch { /* Still attempt server logout. */ }
+  let owner = 'true';
+  try { owner = getSessionUser() || owner; } catch { /* Cookies may be inaccessible. */ }
+  let localSaved = false;
   try {
-    localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, getSessionUser() || localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) || 'true');
+    localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, owner);
+    localSaved = true;
   } catch {
     try { sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true'); } catch { /* Still attempt server logout. */ }
+  }
+  try {
+    await writeLogoutMarker(owner);
+  } catch {
+    // Both quota pools can be exhausted. Leave a POS-scoped flag and still attempt server logout.
+    if (!localSaved) {
+      try { document.cookie = FLOOR_LOGOUT_FAILED_MARKER + '=1; Max-Age=34560000; Path=/pos; SameSite=Strict'; }
+      catch { /* Still attempt server logout if the browser also refuses cookies. */ }
+    }
   }
   try {
     if (await logout() === false) return false;
   } catch {
     return false;
   }
-  try { clearFloorLogoutFailureMarker(); } catch { /* The server session has ended. */ }
+  try { await clearFloorLogoutFailureMarker(); } catch { /* The server session has ended. */ }
   return true;
 }
 
-async function endFloorSession(): Promise<SignOutResult> {
-  const retrying = hasFloorLogoutFailureMarker();
+async function endFloorSession(retryingFailedLogout: boolean): Promise<SignOutResult> {
+  const retrying = retryingFailedLogout || hasFloorLogoutFailureMarker();
   const signedOut = await logoutWithFloorMarker();
-  for (const key of [...SESSION_KEYS, FLOOR_SESSION_MARKER, RECOVERY_MARKER]) {
+  for (const key of SESSION_KEYS) {
     try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
   }
-  try { localStorage.removeItem(FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
+  try { localStorage.removeItem(LEGACY_FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
   disconnectQzPrinter();
   if (!retrying || signedOut) window.location.replace(FLOOR_HOME);
   return signedOut ? 'signed_out' : 'logout_failed';

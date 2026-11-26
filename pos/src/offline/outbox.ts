@@ -122,19 +122,33 @@ const changed = () => { if (typeof window !== 'undefined') window.dispatchEvent(
 
 // Only inserts and removals can change whether an unconfirmed tab may show the POS.
 const OUTBOX_MEMBERSHIP = 'ury-outbox-membership';
-function membershipChanged() {
+export function recheckOutboxMembership() {
   window.dispatchEvent(new Event(OUTBOX_MEMBERSHIP));
+}
+
+function membershipChannel(): BroadcastChannel | undefined {
+  try { return new BroadcastChannel(OUTBOX_MEMBERSHIP); } catch { return undefined; }
+}
+
+function membershipChanged() {
+  recheckOutboxMembership();
+  const channel = membershipChannel();
+  try { channel?.postMessage(null); } catch { /* The storage event and polling still apply. */ }
+  finally { channel?.close(); }
   // Wake other tabs without storing any order or user data. IndexedDB remains authoritative.
   try { localStorage.setItem(OUTBOX_MEMBERSHIP, uuid()); } catch { /* Recheck on focus. */ }
 }
 
 export function onOutboxMembershipChange(check: () => void): () => void {
+  const channel = membershipChannel();
+  if (channel) channel.onmessage = check;
   const storageChanged = (event: StorageEvent) => {
     if (event.key === OUTBOX_MEMBERSHIP) check();
   };
   window.addEventListener('storage', storageChanged);
   window.addEventListener(OUTBOX_MEMBERSHIP, check);
   return () => {
+    channel?.close();
     window.removeEventListener('storage', storageChanged);
     window.removeEventListener(OUTBOX_MEMBERSHIP, check);
   };
@@ -547,12 +561,13 @@ export class OfflineOutbox {
     this.reachable = true;
     this.verified = true;
   }
-  async replay(): Promise<void> {
+  async replay(stillAuthorized?: () => boolean): Promise<void> {
     if (!canRecoverOfflineOrder(this.options.profile, this.options.user)) return;
     if (this.replayPromise) return this.replayPromise;
     this.replaying = true; changed();
     this.replayPromise = exclusive(async () => {
       try {
+        if (stillAuthorized && !stillAuthorized()) return;
         if (!offlineCaptureEnabled(this.options.profile) && !(await this.list()).length) return;
         await this.verifyCashier();
         for (const entry of await this.list()) {

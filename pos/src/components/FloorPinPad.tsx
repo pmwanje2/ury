@@ -26,8 +26,8 @@ async function signedIn(owner?: string) {
   if (!user || user === 'Guest' || (owner && user !== owner)) {
     throw new Error(t('floor_pin.login_failed'));
   }
+  await clearFloorLogoutFailureMarker();
   setFloorSessionMarker(user, !!owner);
-  clearFloorLogoutFailureMarker();
   window.location.reload();
 }
 

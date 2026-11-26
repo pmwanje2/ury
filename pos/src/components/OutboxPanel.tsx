@@ -1,3 +1,4 @@
+import { isFloorSessionConfirmedForTab } from '../lib/floor-tab';
 import { useOutbox } from '../offline/use-outbox';
 import { t } from '../i18n';
 import { useState } from 'react';
@@ -33,6 +34,7 @@ function PendingOrder({
   currencyCode,
   canSettle,
   canReprintBill,
+  confirmed,
   disabled,
 }: {
   row: OfflineEntry;
@@ -42,6 +44,7 @@ function PendingOrder({
   currencyCode?: string;
   canSettle: boolean;
   canReprintBill: boolean;
+  confirmed: () => boolean;
   disabled: boolean;
 }) {
   const [busy, setBusy] = useState(false);
@@ -60,6 +63,7 @@ function PendingOrder({
     currencyCode ? formatCurrency(amount, currencyCode) : String(amount);
 
   const action = async (run: () => Promise<unknown>) => {
+    if (!confirmed()) return;
     setBusy(true);
     try {
       await run();
@@ -193,6 +197,8 @@ export default function OutboxPanel({ posProfile, user, currency }: {
   const formatAmount = (amount: number) =>
     currencyCode ? formatCurrency(amount, currencyCode) : String(amount);
 
+  const confirmed = () => isFloorSessionConfirmedForTab(user?.name);
+  if ((rows.length || approvalRow) && !confirmed()) return null;
   const pending = rows.filter((row) => row.state === 'pending').length;
   const review = rows.filter((row) => row.state === 'review');
   const canCaptureOrder = canCaptureOfflineOrder(posProfile, user);
@@ -208,7 +214,7 @@ export default function OutboxPanel({ posProfile, user, currency }: {
   const handleApprovalGranted = async (result: ManagerApprovalResult) => {
     const target = approvalRow;
     setApprovalRow(null);
-    if (!target || !queue) return;
+    if (!target || !queue || !confirmed()) return;
     try {
       await queue.approveAndReplay(target.client_order_id, result.token, result.reason || '');
       showToast.success(t('offline.approved_and_replayed'));
@@ -253,6 +259,7 @@ export default function OutboxPanel({ posProfile, user, currency }: {
                   profile={posProfile}
                   currencyCode={currencyCode}
                   canSettle={canSettle}
+                  confirmed={confirmed}
                   canReprintBill={canRecoverOfflineTender(posProfile, user)}
                   disabled={replaying || queue.sessionBlocked || !canRecoverOfflineOrder(posProfile, user, row.order.order_type)}
                 />
@@ -285,12 +292,13 @@ export default function OutboxPanel({ posProfile, user, currency }: {
                     amount: formatAmount(row.rounds[row.rounds.length - 1].expected_total),
                     tender: row.settlement?.mode_of_payment || '',
                   }));
-                  if (receipt?.trim()) void queue.resolveReviewed(row.client_order_id, receipt)
+                  if (confirmed() && receipt?.trim()) void queue.resolveReviewed(row.client_order_id, receipt)
                     .catch((error) => showToast.error(parseFrappeError(error, t('offline.invoice_mismatch'))));
                 }}>{t('offline.reconcile_invoice')}</Button>
               )}
               {!row.needs_approval && queue && !offline && (
                 <Button size="sm" variant="outline" disabled={replaying} onClick={() => {
+                  if (!confirmed()) return;
                   void queue.retryReviewed(row.client_order_id).catch((error) => showToast.error(parseFrappeError(error, t('offline.retry_unavailable'))));
                 }}>{t('offline.retry_review')}</Button>
               )}
@@ -298,7 +306,7 @@ export default function OutboxPanel({ posProfile, user, currency }: {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => setApprovalRow(row)}
+                  onClick={() => { if (confirmed()) setApprovalRow(row); }}
                 >
                   {t('offline.approve_and_replay')}
                 </Button>
