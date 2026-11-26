@@ -44,10 +44,10 @@ afterEach(async () => {
 describe.each([
   [{ name: 'cashier', roles: ['URY Cashier'] }, '/orders'],
   [{ name: 'multi', roles: ['System Manager', 'URY Cashier'] }, '/orders'],
-  [{ name: 'manager', roles: ['URY Manager'] }, '/dashboard'],
-  [{ name: 'Administrator', roles: ['System Manager'] }, '/dashboard'],
+  [{ name: 'manager', roles: ['URY Manager'] }, '/orders'],
+  [{ name: 'Administrator', roles: ['System Manager'] }, '/orders'],
   [{ name: 'Administrator', roles: ['System Manager', 'URY Cashier'] }, '/orders'],
-  [null, '/dashboard'],
+  [null, '/orders'],
 ])('Home for %j', (user, path) => {
   beforeEach(() => { state.user = user as typeof state.user; });
   it('resolves the role-aware home helper', async () => {
@@ -58,13 +58,13 @@ describe.each([
     const { homePath } = await import(/* @vite-ignore */ modulePath);
     expect(homePath(user)).toBe(path);
   });
-  it('routes Dashboard to Home and preserves an explicit analytics/history destination', async () => {
+  it('routes Orders to Home and preserves an explicit analytics destination', async () => {
     await act(async () => root.render(createElement(MemoryRouter, {}, createElement(Footer))));
     const links = Array.from(container.querySelectorAll('a'));
-    expect(links[0].textContent).toBe('Dashboard');
+    expect(links[0].textContent).toBe('Orders');
     expect(links[0].getAttribute('href')).toBe(path);
-    expect(links[3].textContent).toBe(path === '/orders' ? 'Analytics' : 'Orders');
-    expect(links[3].getAttribute('href')).toBe(path === '/orders' ? '/dashboard' : '/orders');
+    expect(links[3].textContent).toBe('Dashboard');
+    expect(links[3].getAttribute('href')).toBe('/dashboard');
   });
   it('redirects /pos/ to the same Home', async () => {
     window.history.replaceState({}, '', '/pos/');

@@ -32,9 +32,10 @@ describe("Settings", () => {
     expect(screen.getByText("POSCloseFlow")).toBeInTheDocument();
   });
 
-  it("renders coming soon message", () => {
+  it("replaces the placeholder with security settings", () => {
     render(<Settings />);
-    expect(screen.getByText("settings.coming_soon")).toBeInTheDocument();
+    expect(screen.getByText("settings.security")).toBeInTheDocument();
+    expect(screen.queryByText("settings.coming_soon")).toBeNull();
   });
 
   it("has proper layout structure", () => {
