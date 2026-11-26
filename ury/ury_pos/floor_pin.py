@@ -289,4 +289,4 @@ def _sign_in(pin, expected_user=None):
 	short.add_success_attempt()
 	frappe.local.login_manager.login_as(user, session_end=(datetime.now(timezone.utc) + timedelta(minutes=policy["session_minutes"])).isoformat())
 	frappe.sessions.clear_sessions(user, keep_current=True)
-	return {"full_name": get_fullname(user), "csrf_token": frappe.sessions.get_csrf_token()}
+	return {"user": user, "full_name": get_fullname(user), "csrf_token": frappe.sessions.get_csrf_token()}

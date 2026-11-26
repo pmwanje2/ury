@@ -3,7 +3,7 @@ import { auth, call, parseFrappeError } from '@ury/core';
 import { Button, Input } from '@ury/ui';
 import { t } from '../i18n';
 import { withOutboxLogin } from '../offline/outbox';
-import { confirmVerifiedLogin, getFloorPad } from '../lib/floor-session';
+import { beginFloorLogin, confirmVerifiedLogin, getFloorPad } from '../lib/floor-session';
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
@@ -21,12 +21,12 @@ interface Challenge {
   verification: { method?: string; prompt?: string | false; setup?: boolean; token_delivery?: boolean };
 }
 
-async function signedIn(owner?: string) {
+async function signedIn(expectedUser: string | undefined, recovery: boolean, generation: string) {
   const user = await auth.getLoggedInUser();
-  if (!user || user === 'Guest' || (owner && user !== owner)) {
+  if (!user || user === 'Guest' || user !== expectedUser) {
     throw new Error(t('floor_pin.login_failed'));
   }
-  await confirmVerifiedLogin(user, !!owner);
+  await confirmVerifiedLogin(user, recovery, generation);
   window.location.reload();
 }
 
@@ -62,11 +62,14 @@ export default function FloorPinPad({ offline = false, usernameOnly = false, rec
     try {
       await withOutboxLogin(recoveryOwner ?? null, async () => {
         try {
-          const result = await call.post<{ message?: { csrf_token?: string } }>(
+          const generation = await beginFloorLogin();
+          const result = await call.post<{ message?: { user?: string; csrf_token?: string } }>(
             'ury.ury_pos.floor_pin.sign_in', recoveryOwner ? { pin: value, expected_user: recoveryOwner } : { pin: value },
           );
           if (result?.message?.csrf_token) window.csrf_token = result.message.csrf_token;
-          await signedIn(recoveryOwner);
+          const user = result?.message?.user;
+          if (recoveryOwner && user !== recoveryOwner) throw new Error(t('floor_pin.login_failed'));
+          await signedIn(user, !!recoveryOwner, generation);
         } catch (reason) {
           const message = parseFrappeError(reason, '');
           const refusal = REFUSAL_COPY.find(([code]) => message.includes(code));
@@ -113,6 +116,7 @@ export default function FloorPinPad({ offline = false, usernameOnly = false, rec
       await withOutboxLogin(identity, async (pending) => {
         // Keep the recovery gate across reloads, even if session verification loses connectivity.
         if (pending) sessionStorage.setItem('ury_floor_reconcile', 'pending');
+        const generation = await beginFloorLogin();
         const result = await auth.loginWithUsernamePassword(
           challenge ? { tmp_id: challenge.tmp_id, otp } : { username: identity, password },
         );
@@ -120,7 +124,7 @@ export default function FloorPinPad({ offline = false, usernameOnly = false, rec
           if (!result.tmp_id || !result.verification) throw new Error(t('floor_pin.login_failed'));
           setChallenge({ tmp_id: result.tmp_id, username: identity, verification: result.verification });
         } else if (result?.message === 'Logged In' || result?.message === 'No App') {
-          await signedIn(pending ? identity : undefined);
+          await signedIn(identity, pending, generation);
         } else {
           throw new Error(t('floor_pin.login_failed'));
         }

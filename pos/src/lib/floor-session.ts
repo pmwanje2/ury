@@ -2,7 +2,7 @@ import { v4 as uuid } from 'uuid';
 import { readGeneration, writeGeneration, readLogoutMarker, writeLogoutMarker } from './logout-store';
 import { hasWebLocks, withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
-import { boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
+import { FLOOR_TAB_LOCKED, boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
 export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
 import { useEffect } from 'react';
 import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
@@ -140,10 +140,18 @@ export async function clearFloorLogoutFailureMarker(): Promise<void> {
   clearLogoutMirrors();
 }
 
-export async function confirmVerifiedLogin(user: string, recovery: boolean): Promise<void> {
-  // Publish the new generation durably before removing evidence of a failed logout.
-  const generation = await rotateGeneration(await currentFloorGeneration());
+// A login POST may replace the shared cookie even when its response never arrives.
+export async function beginFloorLogin(): Promise<string> {
+  return rotateGeneration(await currentFloorGeneration());
+}
+
+export async function confirmVerifiedLogin(user: string, recovery: boolean, generation: string): Promise<void> {
+  const requireCurrentAttempt = async () => {
+    if (generation !== await currentFloorGeneration()) throw new Error('Sign-in was superseded');
+  };
+  await requireCurrentAttempt();
   await clearFloorLogoutFailureMarker();
+  await requireCurrentAttempt();
   setFloorSessionMarker(user, recovery, generation);
   announceSessionChange('login', generation);
 }
@@ -215,8 +223,12 @@ export async function floorSignOut(stillRequested?: () => boolean, retryingFaile
 }
 
 function lockLogoutTab(): false {
-  revokeTabConfirmation();
-  window.location.replace(FLOOR_HOME);
+  try {
+    revokeTabConfirmation();
+  } finally {
+    window.dispatchEvent(new Event(FLOOR_TAB_LOCKED));
+    window.location.replace(FLOOR_HOME);
+  }
   return false;
 }
 

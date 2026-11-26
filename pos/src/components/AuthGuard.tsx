@@ -7,7 +7,7 @@ import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
 import OutboxPanel from './OutboxPanel';
 import { assertOutboxEmpty, onOutboxMembershipChange, queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
-import { boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation } from '../lib/floor-tab';
+import { FLOOR_TAB_LOCKED, boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation } from '../lib/floor-tab';
 import { getPosProfileFull } from '../lib/pos-profile-api';
 import {
   retryFloorSignOut,
@@ -143,10 +143,13 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     let active = true;
     let locked = false;
     let admitted = false;
-    const lockTab = () => {
+    const closeWorkspace = () => {
       locked = true;
-      try { revokeTabConfirmation(); } catch { /* Still close the mounted workspace. */ }
       setGate('revoked');
+    };
+    const lockTab = () => {
+      closeWorkspace();
+      revokeTabConfirmation();
     };
     const check = async () => {
       if (locked) return;
@@ -188,12 +191,14 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
       void check();
     };
     const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
+    window.addEventListener(FLOOR_TAB_LOCKED, closeWorkspace);
     window.addEventListener('focus', check);
     document.addEventListener('visibilitychange', check);
     void check();
     return () => {
       active = false;
       channel?.close();
+      window.removeEventListener(FLOOR_TAB_LOCKED, closeWorkspace);
       window.clearInterval(timer);
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
