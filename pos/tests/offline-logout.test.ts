@@ -110,3 +110,33 @@ test('an opted-in till binds the cookie user to its worker', async () => {
   expect(steps[0]).toBe('register:/pos');
   expect(messages).toContainEqual({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
 });
+
+test.each(['sessionStorage', 'localStorage'] as const)('logout completes the worker purge with a blocked %s getter', async name => {
+  const serverLogout = vi.fn().mockResolvedValue(true);
+  vi.doMock('../../packages/core/src/frappe/client', () => ({
+    auth: { logout: serverLogout }, call: {}, db: {}, NETWORK_FAILURE_MARK: 'ury_network_failure',
+  }));
+  const { logout } = await import('../../packages/core/src/frappe/auth');
+  const { clearAppStorage, storePendingBillCopy, readPendingBillCopy } = await import('../../packages/core/src/storage');
+  const otherStore = name === 'sessionStorage' ? localStorage : sessionStorage;
+  const otherKey = name === 'sessionStorage' ? 'userAuth' : 'posProfile';
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, name)!;
+  const slot = 'ury_pending_bill_copy:logout-test';
+  Object.defineProperty(globalThis, name, { configurable: true, get() { throw new DOMException('Blocked', 'SecurityError'); } });
+  try {
+    otherStore.setItem(otherKey, 'old session');
+    storePendingBillCopy(slot, 'old-key');
+    expect.soft(() => clearAppStorage()).not.toThrow();
+    expect.soft(otherStore.getItem(otherKey)).toBeNull();
+    expect.soft(readPendingBillCopy(slot)).toBeNull();
+    storePendingBillCopy(slot, 'next-key');
+    ack.resolve();
+    expect(await logout()).toBe(true);
+    expect(serverLogout).toHaveBeenCalledOnce();
+    expect(readPendingBillCopy(slot)).toBeNull();
+    expect(steps).toEqual(['message:URY_END_SESSION', 'delete:ury-pos-reads', 'delete:ury-pos-session', 'unregister:/pos']);
+  } finally {
+    Object.defineProperty(globalThis, name, descriptor);
+    clearAppStorage();
+  }
+});

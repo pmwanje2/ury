@@ -128,13 +128,13 @@ function buttonIn(scope: Element, label: string) {
 describe('Orders visible cashier actions', () => {
   it.each([
     ['Draft', 'Print bill'], ['Unbilled', 'Print bill'],
-    ['Recently Paid', 'Print receipt'], ['Paid', 'Print receipt'],
-    ['Consolidated', 'Print receipt'], ['Return', 'Print receipt'],
+    ['Recently Paid', 'Print copy'], ['Paid', 'Print copy'],
+    ['Consolidated', 'Print copy'], ['Return', 'Print copy'],
   ])('labels printing for %s as %s', async (status, label) => {
     state.order.status = status;
     const row = await renderOrders();
     expect(buttonIn(row, label)).toBeDefined();
-    expect(buttonIn(row, label === 'Print bill' ? 'Print receipt' : 'Print bill')).toBeUndefined();
+    expect(buttonIn(row, label === 'Print bill' ? 'Print copy' : 'Print bill')).toBeUndefined();
   });
 
   it.each([

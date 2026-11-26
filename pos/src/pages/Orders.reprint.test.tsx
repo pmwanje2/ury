@@ -4,11 +4,12 @@
  * open/draft checks still print a pro-forma guest check via printOrder.
  */
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Orders from "./Orders";
 import SettledBills from "./SettledBills";
 import { clearAppStorage } from "../../../packages/core/src/storage";
+import { showToast } from "@ury/ui";
 import * as printLib from "../lib/print";
 import { call, printWithQz } from "@ury/core";
 import type { PosProfileCombined } from "../lib/pos-profile-api";
@@ -138,11 +139,6 @@ vi.mock("../lib/table-utils", () => ({
   formatMergedTableLabel: vi.fn((table: string) => table),
 }));
 
-vi.mock("../i18n", () => ({
-  t: (key: string) => key,
-  tData: (key: string) => key,
-}));
-
 vi.mock("../components/OrderStatusSidebar", () => ({ default: () => <div /> }));
 vi.mock("../components/PaymentDialog", () => ({ default: () => <div /> }));
 vi.mock("../components/BillSplitDialog", () => ({ default: () => <div /> }));
@@ -169,7 +165,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
     const printOrderSpy = vi.spyOn(printLib, "printOrder");
 
     render(<Orders />);
-    const btn = screen.getByRole("button", { name: /order\.print_receipt/ });
+    const btn = screen.getByRole("button", { name: /Print copy/i });
     fireEvent.click(btn);
 
     await waitFor(() =>
@@ -239,7 +235,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
       }
       return view;
     };
-    const click = () => fireEvent.click(screen.getByRole("button", {name: /order\.print_receipt|print copy|retry copy/i}));
+    const click = () => fireEvent.click(screen.getByRole("button", {name: /print receipt|print copy|retry copy/i}));
     await vi.mocked(call.post).withImplementation(async (method, args) => {
       const key = args.idempotency_key;
       if (method.endsWith("confirm_bill_copy")) {
@@ -337,7 +333,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
             fireEvent.click(screen.getByRole("button", {name: "Search"}));
             fireEvent.click(await screen.findByRole("button", {name: new RegExp(invoice)}));
           }
-          fireEvent.click(screen.getByRole("button", {name: /order\.print_receipt|print copy|retry copy/i}));
+          fireEvent.click(screen.getByRole("button", {name: /print receipt|print copy|retry copy/i}));
           await waitFor(() => expect(printed).toHaveBeenCalledTimes(attempt));
           view.unmount();
         }
@@ -353,6 +349,57 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
     }
   });
 
+  it.each(["Orders", "Settled Bills"])("%s refuses a mounted retry from a previous login until Print copy is clicked", async page => {
+    const bill = {...mockRootState.selectedOrder, items: [], payments: [], taxes: [], pos_profile: "Till"};
+    let login = "original-login";
+    vi.stubGlobal("frappe", {boot: {receipt_copy_session: login}});
+    vi.mocked(call.get).mockImplementation(async method => method.endsWith("get_receipt_copy_session")
+      ? {message: {user: mockRootState.ordersOwner, receipt_copy_session: login, csrf_token: "csrf-" + login}}
+      : {message: [bill]});
+    const printed = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const open = vi.spyOn(window, "open").mockReturnValue({closed: true, location: {replace: vi.fn()}} as unknown as Window);
+    const keys: string[] = [];
+    try {
+      await vi.mocked(call.post).withImplementation(async (method, args) => {
+        if (method.endsWith("print_bill_copy")) {
+          keys.push(args.idempotency_key);
+          return {message: {status: "RESERVED", delivery: "browser", copy_number: keys.length, dispatch_token: "lease"}};
+        }
+        return {message: {status: "DISPATCHING", render_grant: "single-use"}};
+      }, async () => {
+        render(page === "Orders" ? <Orders /> : <SettledBills />);
+        if (page === "Settled Bills") {
+          fireEvent.click(screen.getByRole("button", {name: "Search"}));
+          fireEvent.click(await screen.findByRole("button", {name: new RegExp(bill.name)}));
+        }
+        const clickCopy = () => act(async () => {
+          fireEvent.click(screen.getByRole("button", {name: /print receipt|print copy|retry copy/i}));
+        });
+        await clickCopy();
+        expect(printed).toHaveBeenCalledOnce();
+        expect(keys).toHaveLength(1);
+        const postsBeforeRetry = vi.mocked(call.post).mock.calls.length;
+        const retryLabel = screen.getByRole("button", {name: /print receipt|print copy|retry copy/i}).textContent;
+        login = "new-login";
+        await clickCopy();
+        expect(call.post).toHaveBeenCalledTimes(postsBeforeRetry);
+        expect(retryLabel).toMatch(/retry copy/i);
+        expect(open).toHaveBeenCalledOnce();
+        const notice = /session.*changed|previous.*(session|login)/i;
+        if (page === "Orders") expect(showToast.error).toHaveBeenCalledWith(expect.stringMatching(notice));
+        else expect(screen.getByText(notice)).toBeTruthy();
+        expect(screen.queryByRole("button", {name: /retry copy/i})).toBeNull();
+        fireEvent.click(screen.getByRole("button", {name: /^Print copy$/i}));
+        await waitFor(() => expect(keys).toHaveLength(2));
+        expect(keys[1]).not.toBe(keys[0]);
+      });
+    } finally {
+      open.mockRestore();
+      printed.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("still uses printOrder for a draft guest check (not print_bill_copy)", async () => {
     mockRootState.selectedStatus = "Draft";
     mockRootState.selectedOrder.status = "Draft";
@@ -360,7 +407,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
     const printOrderSpy = vi.spyOn(printLib, "printOrder").mockResolvedValue("socket");
 
     render(<Orders />);
-    const btn = screen.getByRole("button", { name: /order\.print_bill/ });
+    const btn = screen.getByRole("button", { name: /print bill/i });
     fireEvent.click(btn);
 
     await waitFor(() => expect(printOrderSpy).toHaveBeenCalledWith(expect.objectContaining({ orderId: "POS-INV-00024" })));

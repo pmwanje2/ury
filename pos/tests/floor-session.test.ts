@@ -109,3 +109,18 @@ it('is active only when the tablet is paired and its till is open', async () => 
     expect(isFloorPadActive()).toBe(active);
   }
 });
+
+it('disconnects the printer and leaves the floor even when stored markers cannot be removed', async () => {
+  boundary.logout.mockResolvedValue(true);
+  const { floorSignOut } = await floorSession();
+  const blocked = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+    throw new DOMException('Blocked', 'SecurityError');
+  });
+  try {
+    await expect(floorSignOut()).resolves.toBeUndefined();
+    expect(boundary.disconnectQzPrinter).toHaveBeenCalledOnce();
+    expect(replacement).toHaveBeenCalledWith('/pos/order');
+  } finally {
+    blocked.mockRestore();
+  }
+});
