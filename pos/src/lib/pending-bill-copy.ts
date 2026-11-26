@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { call } from '@ury/core';
+import { t } from '../i18n';
 import { getSessionUser, readPendingBillCopy, storePendingBillCopy } from '../../../packages/core/src/storage';
 
 interface CopySession {
@@ -39,10 +40,11 @@ export function usePendingBillCopies() {
   }
 
   function pending(invoice: string) {
-    if (!booted) return transient.get(slot(invoice));
     const cashier = getSessionUser();
-    if (!display || (cashier && display.user !== cashier)) return null;
-    return readPendingBillCopy(slot(invoice, display));
+    if (booted && (!display || (cashier && display.user !== cashier))) return null;
+    const name = slot(invoice, display);
+    const key = booted ? readPendingBillCopy(name) : transient.get(name);
+    return key ? { slot: name, key } : null;
   }
 
   async function verifySession() {
@@ -53,7 +55,7 @@ export function usePendingBillCopies() {
     setDisplay(session);
   }
 
-  function start(invoice: string, approvedKey?: string) {
+  function start(invoice: string, retry: ReturnType<typeof pending>, approvedKey?: string) {
     const session = active.current;
     const cashier = getSessionUser();
     if (booted && (!session || (cashier && session.user !== cashier))) {
@@ -61,6 +63,10 @@ export function usePendingBillCopies() {
     }
     const name = slot(invoice, session);
     const existing = session ? readPendingBillCopy(name) : transient.get(name);
+    // Bind a retry to the request shown when the cashier clicked, before live verification.
+    if (retry && (retry.slot !== name || retry.key !== existing)) {
+      throw new Error(t('order.copy_retry_changed'));
+    }
     if (approvedKey && existing !== approvedKey) throw new Error('Request approval in the current cashier session.');
     if (existing) return existing;
     const key = crypto.randomUUID();

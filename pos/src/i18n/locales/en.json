@@ -171,6 +171,9 @@
     "toggle_breakdown": "Tax breakdown"
   },
   "order": {
+    "retry_copy": "Retry copy",
+    "check_copy": "Check / retry copy",
+    "copy_retry_changed": "The pending copy or cashier session changed. Check the receipt before choosing Print copy.",
     "select_to_view": "Select an order to view details",
     "items_title": "Order Items",
     "covers": "Covers: {{count}}",
@@ -192,7 +195,7 @@
     "change_type_title": "Change order type?",
     "not_printed": "Not printed",
     "print_bill": "Print bill",
-    "print_receipt": "Print receipt",
+    "print_receipt": "Print copy",
     "printed": "Printed",
     "settle_bill": "Settle bill"
   },

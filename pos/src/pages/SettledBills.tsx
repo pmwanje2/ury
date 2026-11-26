@@ -69,6 +69,7 @@ export default function SettledBills() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const copies = usePendingBillCopies();
+  const displayedRetry = bill ? copies.pending(bill.name) : null;
   const [outcome, setOutcome] = useState('');
   const [showReturnDialog, setShowReturnDialog] = useState(false);
   const [showReopenDialog, setShowReopenDialog] = useState(false);
@@ -111,7 +112,7 @@ export default function SettledBills() {
         throw new Error(t('offline.refused', { action: 'closed receipt copy' }));
       }
       if (copies.verifySession) await copies.verifySession();
-      key = copies.start(targetBill.name, overrideKey);
+      key = copies.start(targetBill.name, displayedRetry, overrideKey);
       const { message: reservation } = await call.post<{ message: PrintBillCopyResult }>(method + 'print_bill_copy', {
         invoice: targetBill.name,
         idempotency_key: key,
@@ -141,7 +142,7 @@ export default function SettledBills() {
         });
         return;
       }
-      setOutcome('ERROR');
+      setOutcome(key ? 'ERROR' : '');
       setMessage(overrideActionErrorMessage(error));
     } finally {
       setBusy(false);
@@ -323,13 +324,8 @@ export default function SettledBills() {
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-2">
             <Button disabled={busy} className="min-h-11" onClick={() => void print()}>
-              {tData(
-                ['FAILED', 'CANCELED', 'ERROR'].includes(outcome)
-                  ? 'Retry copy'
-                  : copies.pending(bill.name)
-                    ? 'Check / retry copy'
-                    : 'Print copy',
-              )}
+              {t(!displayedRetry ? 'order.print_receipt'
+                : ['FAILED', 'ERROR'].includes(outcome) ? 'order.retry_copy' : 'order.check_copy')}
             </Button>
             <Button
               type="button"

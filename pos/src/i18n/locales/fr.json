@@ -115,6 +115,9 @@
     "toggle_breakdown": "Détail des taxes"
   },
   "order": {
+    "retry_copy": "Réessayer la copie",
+    "check_copy": "Vérifier la copie ou réessayer",
+    "copy_retry_changed": "La copie en attente ou la session de caisse a changé. Vérifiez le reçu avant de choisir Imprimer le reçu.",
     "select_to_view": "Sélectionnez une commande pour voir les détails",
     "items_title": "Articles de la commande",
     "covers": "Couverts : {{count}}",

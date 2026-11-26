@@ -225,6 +225,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const location = useLocation();
   const mounted = useRef(false);
   const copies = usePendingBillCopies();
+  const displayedRetry = selectedOrder ? copies.pending(selectedOrder.name) : null;
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [voidChoice, setVoidChoice] = React.useState('');
@@ -743,7 +744,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         });
       } else {
         if (copies.verifySession) await copies.verifySession();
-        key = copies.start(selectedOrder.name, approvedKey);
+        key = copies.start(selectedOrder.name, displayedRetry, approvedKey);
         const result = await printBillCopy({
           orderId: selectedOrder.name,
           posProfile: posStore.posProfile,
@@ -1672,7 +1673,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 >
                   {isPrinting ? <Spinner className="w-5 h-5" hideMessage  message={t('common.loading')} /> : <Printer className="w-5 h-5" />}
                   {t(selectedOrder.status === 'Draft' || selectedOrder.status === 'Unbilled'
-                    ? 'order.print_bill' : 'order.print_receipt')}
+                    ? 'order.print_bill' : displayedRetry ? 'order.retry_copy' : 'order.print_receipt')}
                 </Button>
                 {/* Open-Check Discount Key (Simphony/SAP: sits on the open check, not in PaymentDialog) */}
                 {isOrderEditable(selectedOrder.status) && (

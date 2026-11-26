@@ -110,6 +110,10 @@
     "toggle_breakdown": "Desglose de impuestos"
   },
   "order": {
+    "print_receipt": "Imprimir copia",
+    "retry_copy": "Reintentar copia",
+    "check_copy": "Comprobar o reintentar copia",
+    "copy_retry_changed": "La copia pendiente o la sesión de caja ha cambiado. Compruebe el recibo antes de seleccionar Imprimir copia.",
     "select_to_view": "Selecciona un pedido para ver el detalle",
     "items_title": "Artículos del pedido",
     "covers": "Comensales: {{count}}",
