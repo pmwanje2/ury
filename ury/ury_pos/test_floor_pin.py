@@ -275,6 +275,20 @@ class TestFloorPin(unittest.TestCase):
 		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.revoke_pin(self.user, self.profile.name))
 		self.frappe.db.set_value.assert_not_called()
 
+	def test_revoke_still_clears_in_scope_pin_after_disabling_or_promotion(self):
+		self.profile.applicable_for_users = [Doc(user=self.user)]
+		for enabled, writer in [(0, False), (1, True)]:
+			with self.subTest(enabled=enabled, writer=writer):
+				self.frappe.db.get_value.side_effect = lambda *args: enabled
+				self.frappe.has_permission.side_effect = lambda *args, user=None: user is None or writer
+				self.api().revoke_pin(self.user, self.profile.name)
+				self.frappe.db.set_value.assert_called_with("User", self.user, "custom_floor_pin_hash", None, update_modified=False)
+
+	def test_revoke_denies_branch_member_outside_applicable_users(self):
+		self.profile.applicable_for_users = [Doc(user="someone-else")]
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().revoke_pin(self.user, self.profile.name))
+		self.frappe.db.set_value.assert_not_called()
+
 	def test_revoke_is_idempotent_and_audited(self):
 		api = self.api()
 		for _ in range(2):

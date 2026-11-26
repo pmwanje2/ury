@@ -9,6 +9,7 @@ vi.mock("../store/root-store", () => ({
 }));
 
 vi.mock("@ury/ui", () => ({
+  Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
   Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
   Spinner: ({ message }: any) => <div data-testid="spinner">{message}</div>,
 }));
@@ -153,6 +154,7 @@ describe("AuthGuard", () => {
     render(<AuthGuard><div>Content</div></AuthGuard>);
     
     expect(checkAuth).toHaveBeenCalled();
+    expect(screen.getByLabelText("floor_pin.password_label")).toHaveAttribute("type", "password");
   });
 
   it("calls fetchPosProfile when user becomes available", () => {

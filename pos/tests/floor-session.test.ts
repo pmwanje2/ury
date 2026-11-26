@@ -20,7 +20,7 @@ vi.mock('@ury/core', () => ({
 }));
 
 type FloorSession = {
-  floorSignOut: () => Promise<void>;
+  floorSignOut: () => Promise<string>;
   isStaySignedIn: (user: { roles: string[] }, profile: unknown) => boolean;
   isFloorPadActive: () => boolean;
 };
@@ -122,7 +122,7 @@ it('disconnects the printer and leaves the floor even when stored markers cannot
     throw new DOMException('Blocked', 'SecurityError');
   });
   try {
-    await expect(floorSignOut()).resolves.toBeUndefined();
+    await expect(floorSignOut()).resolves.toBe('signed_out');
     expect(boundary.disconnectQzPrinter).toHaveBeenCalledOnce();
     expect(replacement).toHaveBeenCalledWith('/pos/order');
   } finally {
@@ -133,7 +133,7 @@ it('disconnects the printer and leaves the floor even when stored markers cannot
 it('preserves the session while offline orders await sync', async () => {
   guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
   const { floorSignOut } = await floorSession();
-  await floorSignOut();
+  await expect(floorSignOut()).resolves.toBe('blocked');
   expect(boundary.logout).not.toHaveBeenCalled();
   expect(localStorage.getItem('userAuth')).toBe('true');
   expect(replacement).not.toHaveBeenCalled();

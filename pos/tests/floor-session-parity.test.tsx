@@ -180,3 +180,31 @@ it('preserves the session while offline orders await sync', async () => {
   expect(localStorage.getItem('userAuth')).toBe('true');
   expect(replacement).not.toHaveBeenCalled();
 });
+
+it.each([false, true])('retries deferred idle sign-out unless activity resumes (activity=%s)', async (active) => {
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>POS</div></AuthGuard>);
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(boundary.logout).not.toHaveBeenCalled();
+  if (active) window.dispatchEvent(new Event('pointerdown'));
+  // Replay has drained the queue. The next guarded attempt can proceed.
+  await act(async () => vi.advanceTimersByTimeAsync(10000));
+  expect(boundary.logout).toHaveBeenCalledTimes(active ? 0 : 1);
+  if (active) {
+    await act(async () => vi.advanceTimersByTimeAsync(50000));
+    expect(boundary.logout).toHaveBeenCalledOnce();
+  }
+});
+
+it('locks identity switching on cold boot until the existing outbox drains', async () => {
+  localStorage.removeItem('userAuth');
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>Protected POS</div></AuthGuard>);
+  await act(async () => {});
+  expect(container.querySelector('form, [aria-label="4-digit PIN"]')).toBeNull();
+  expect(container.textContent).not.toContain('Protected POS');
+  expect(container.querySelector('[role=status]')).not.toBeNull();
+  expect(boundary.logout).not.toHaveBeenCalled();
+  await act(async () => vi.advanceTimersByTimeAsync(10000));
+  expect(boundary.logout).toHaveBeenCalledOnce();
+});

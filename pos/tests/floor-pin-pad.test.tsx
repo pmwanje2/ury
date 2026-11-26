@@ -189,8 +189,45 @@ describe('paired floor tablet sign-in', () => {
     expect(container.textContent).not.toContain(code);
   });
 
+  it.each(['URY_FLOOR_TILL_CLOSED', 'URY_FLOOR_DEVICE_NOT_PAIRED'])(
+    'changes the live keypad to password-only after %s', async (code) => {
+      boundary.callPost.mockRejectedValueOnce({ message: code });
+      await render();
+      await enterPin('0527');
+      expect(container.querySelector('input[type=password]')).not.toBeNull();
+      expect(container.querySelector('[aria-label="4-digit PIN"]')).toBeNull();
+      expect(container.textContent).not.toContain('Back to PIN');
+      expect(container.querySelector('[role=alert]')?.textContent).toContain('username');
+    },
+  );
+
+  it('finishes password sign-in only after Frappe accepts the OTP', async () => {
+    setFloorPad({ paired: false, till_open: false });
+    boundary.login.mockResolvedValueOnce({ verification: { method: 'Email' }, tmp_id: 'challenge' })
+      .mockRejectedValueOnce(new Error('Invalid verification code'))
+      .mockResolvedValueOnce({ message: 'Logged In' });
+    await render();
+    const submit = () => container.querySelector('form')!.requestSubmit();
+    await act(async () => {
+      setInput(container.querySelector('input[name=user_id]')!, 'waiter@example.test');
+      setInput(container.querySelector('input[type=password]')!, 'secret');
+      submit();
+    });
+    expect(reload).not.toHaveBeenCalled();
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    expect(container.querySelector('input[type=password]')).toBeNull();
+    const otp = container.querySelector<HTMLInputElement>('input[autocomplete=one-time-code]')!;
+    await act(async () => { setInput(otp, '000001'); submit(); });
+    expect(container.querySelector('[role=alert]')).not.toBeNull();
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    await act(async () => { setInput(otp, '000002'); submit(); });
+    expect(boundary.login).toHaveBeenLastCalledWith({ tmp_id: 'challenge', otp: '000002' });
+    expect(localStorage.getItem('userAuth')).toBe('true');
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it('supports in-app username fallback and sets the session marker', async () => {
-    boundary.login.mockResolvedValue(undefined);
+    boundary.login.mockResolvedValue({ message: 'Logged In' });
     sessionStorage.setItem('ury_floor_logout_failed', 'true');
     await render();
     await openUsernameForm();
