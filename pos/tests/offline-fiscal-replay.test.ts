@@ -118,7 +118,7 @@ test("replayed offline settlement enters the pending->reprint path and prints CO
     if (method === "ury.ury_pos.api.print_bill_copy") {
       return {
         message: {
-          status: "RESERVED",
+          status: "RESERVED", dispatch_token: "attempt-1",
           copy_number: 1,
           delivery: "browser",
           html: "<article><h1>COPY #1</h1></article>",

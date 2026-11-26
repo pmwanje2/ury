@@ -103,7 +103,7 @@ vi.mock("@ury/core", () => ({
     post: vi.fn().mockImplementation(async (method: string) => method.endsWith("confirm_bill_copy")
       ? { message: { status: "COMPLETED" } } : ({
       message: {
-        status: "RESERVED",
+        status: "RESERVED", dispatch_token: "attempt-1",
         copy_number: 2,
         delivery: "browser",
         html: "<article><h1>COPY #2</h1></article>",
@@ -186,7 +186,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
   it("sends COPY #n HTML to QZ Tray on a QZ till without requiring CUPS", async () => {
     vi.mocked(call.post).mockResolvedValueOnce({
       message: {
-        status: "RESERVED",
+        status: "RESERVED", dispatch_token: "attempt-1",
         copy_number: 3,
         delivery: "qz",
         html: "<article><h1>COPY #3</h1></article>",
@@ -206,7 +206,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
     );
     expect(printWithQz).toHaveBeenCalledWith("localhost", "<article><h1>COPY #3</h1></article>", "Cashier");
     expect(call.post).toHaveBeenLastCalledWith("ury.ury_pos.api.confirm_bill_copy",
-      { invoice: "POS-INV-00024", idempotency_key: "k-qz-1" });
+      { invoice: "POS-INV-00024", idempotency_key: "k-qz-1", dispatch_token: "attempt-1" });
     expect(vi.mocked(call.post).mock.invocationCallOrder.at(-1)).toBeGreaterThan(vi.mocked(printWithQz).mock.invocationCallOrder[0]);
     expect(res.copy_number).toBe(3);
   });

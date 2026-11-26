@@ -1,4 +1,10 @@
 """Transaction and permission contracts on the disposable Frappe site."""
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from types import SimpleNamespace
+from pathlib import Path
+import sys
+
 from unittest import TestCase
 from unittest.mock import patch
 from uuid import uuid4
@@ -160,8 +166,11 @@ class SiteContracts(TestCase):
         invoice = row("POS Invoice", name=self.prefix, status="Paid", docstatus=1)
         key = f"efris-auto-{invoice.name}"
         queue = row(api._COPY_LOG, name=f"PENDING-EFRIS-{invoice.name}", invoice=invoice.name,
-                    status="AWAITING_FDN", print_job_id=f"PENDING-EFRIS-{invoice.name}")
-        with patch.object(api, "_closed_branch", return_value="Main"), patch.object(
+                    status="AWAITING_FDN", job_owner="Administrator", print_job_id=f"PENDING-EFRIS-{invoice.name}")
+        fiscal = SimpleNamespace(get_efris_status=lambda *args: {"fdn": "FDN-1", "efris_status": "Submitted"})
+        with patch.dict(sys.modules, {"uganda_compliance.efris.efris_queue": fiscal}), patch.object(
+            api, "_closed_branch", return_value="Main"
+        ), patch.object(
             api, "_closed_invoice", return_value=invoice
         ), patch.object(api, "_open_isolated_copy_db", return_value=None), patch(
             "ury.ury.api.ury_print._bill_printers", return_value=[]
@@ -170,17 +179,155 @@ class SiteContracts(TestCase):
             self.assertEqual(reserved["status"], "RESERVED")
             self.assertEqual(frappe.db.get_value(api._COPY_LOG, reserved["print_job_id"], "status"), "RESERVED")
             self.assertEqual(queue.reload().status, "AWAITING_FDN")
-            self.assertEqual(api.print_bill_copy(invoice.name, key, delivery="qz")["copy_number"], reserved["copy_number"])
+            lease = {k: reserved[k] for k in ("dispatch_token",) if k in reserved}
+            fiscal.get_efris_status = lambda *args: {}
+            with self.assertRaises(frappe.PermissionError):
+                api.confirm_bill_copy(invoice.name, key, **lease)
+            fiscal.get_efris_status = lambda *args: {"fdn": "FDN-1", "efris_status": "Submitted"}
             frappe.set_user("another@example.test")
             try:
                 with self.assertRaises(frappe.PermissionError):
-                    api.confirm_bill_copy(invoice.name, key)
+                    api.confirm_bill_copy(invoice.name, key, **lease)
             finally:
                 frappe.set_user("Administrator")
             self.assertEqual(queue.reload().status, "AWAITING_FDN")
             for _ in range(2):
-                self.assertEqual(api.confirm_bill_copy(invoice.name, key)["status"], "COMPLETED")
+                self.assertEqual(api.confirm_bill_copy(invoice.name, key, **lease)["status"], "COMPLETED")
             self.assertEqual(queue.reload().status, "DISPATCHED")
             replay = api.print_bill_copy(invoice.name, key, delivery="browser")
             self.assertNotIn("html", replay)
             self.assertEqual(replay["copy_number"], reserved["copy_number"])
+
+    def test_validating_station_share_does_not_publish_provisional_user_permissions(self):
+        from redis import Redis
+
+        self.station_fixture()
+        self.addCleanup(frappe.cache.hdel, "user_permissions", self.user)
+        share = frappe.get_doc(dict(doctype="DocShare", share_doctype=self.station.doctype,
+                                    share_name=self.station.name, user=self.user, read=1))
+        share.validate()
+        cache_key = frappe.cache.make_key("user_permissions")
+        cached = Redis.hget(frappe.cache, cache_key, self.user)
+        frappe.db.rollback()
+        self.assertIsNone(cached, "DocShare.validate published uncommitted permission rows")
+        self.assertIsNone(Redis.hget(frappe.cache, cache_key, self.user))
+
+    def test_selected_network_uses_saved_invoice_profile_limit(self):
+        invoice = row("POS Invoice", name=self.prefix, pos_profile="Saved till", invoice_printed=1, docstatus=1)
+        original_get_value = frappe.db.get_value
+        def profile_value(*args, **kwargs):
+            if len(args) >= 3 and args[0] == "POS Profile" and args[2] == "custom_max_free_bill_prints":
+                return {"Saved till": 1, "Previous till": 3}[args[1]]
+            return original_get_value(*args, **kwargs)
+
+        with patch.object(frappe.db, "get_value", side_effect=profile_value), patch(
+            "ury.ury_pos.floor_actions.authorize_or_perform", side_effect=frappe.PermissionError("approval required")
+        ) as authorize, patch.object(receipts, "_bill_printers", return_value=[]):
+            with self.assertRaisesRegex(frappe.PermissionError, "approval required"):
+                receipts.select_network_printer("Previous till", invoice.name)
+            self.assertEqual(authorize.call_args.kwargs["pos_profile"], "Saved till")
+
+    def test_automatic_copy_requires_verified_event_and_pending_job(self):
+        from ury.ury_pos import api
+
+        invoice = row("POS Invoice", name=self.prefix, docstatus=1, status="Paid")
+        queue_name = "PENDING-EFRIS-" + invoice.name
+        fiscal = SimpleNamespace(get_efris_status=lambda *args: {"fdn": "F-1", "efris_status": "Submitted"})
+        with patch.dict(sys.modules, {"uganda_compliance.efris.efris_queue": fiscal}), patch.object(
+            api, "_closed_branch", return_value="Main"
+        ), patch.object(api, "_closed_invoice", return_value=invoice), patch.object(
+            api, "_open_isolated_copy_db", return_value=None
+        ), patch.object(receipts, "_bill_printers", return_value=[]), patch("frappe.get_print", return_value="COPY"):
+            def assert_ineligible():
+                with self.assertRaises(frappe.PermissionError):
+                    api.print_bill_copy(invoice.name, "efris-auto-" + invoice.name, delivery="browser")
+                self.assertFalse(frappe.db.exists(api._COPY_LOG, {"invoice": invoice.name, "attempt": 1}))
+
+            assert_ineligible()
+            row(api._COPY_LOG, name=queue_name, print_job_id=queue_name, invoice=invoice.name, status="DISPATCHED", job_owner="Administrator")
+            assert_ineligible()
+            frappe.db.set_value(api._COPY_LOG, queue_name, "status", "AWAITING_FDN")
+            fiscal.get_efris_status = lambda *args: {"efris_status": "Pending"}
+            assert_ineligible()
+
+    def test_online_cashier_cannot_create_a_late_automatic_fiscal_job(self):
+        from ury.ury_pos import api
+
+        doc = row("POS Invoice", name=self.prefix, docstatus=1, status="Paid")
+        fiscal = SimpleNamespace(get_efris_status=lambda *args: {"fdn": "F-1", "efris_status": "Submitted"})
+        with patch.dict(sys.modules, {"uganda_compliance.efris.efris_queue": fiscal}), patch.object(
+            api, "_closed_branch", return_value="Main"
+        ), patch.object(api, "_closed_invoice", return_value=doc):
+            with self.assertRaises(frappe.PermissionError):
+                api.queue_fiscal_reprint(doc.name)
+            self.assertFalse(frappe.db.exists(api._COPY_LOG, "PENDING-EFRIS-" + doc.name))
+
+    def committed_copy(self):
+        from ury.ury_pos import api
+
+        name = self.prefix
+        row("POS Invoice", name=name, branch="Main", docstatus=1, status="Paid")
+        frappe.db.commit()
+        def cleanup():
+            frappe.db.rollback()
+            frappe.db.delete(api._COPY_LOG, {"invoice": name})
+            frappe.db.delete("POS Invoice", {"name": name})
+            frappe.db.commit()
+        self.addCleanup(cleanup)
+        self.enterContext(patch.object(api, "_closed_branch", return_value="Main"))
+        self.enterContext(patch.object(receipts, "_bill_printers", return_value=[]))
+        self.enterContext(patch("frappe.get_print", return_value="COPY"))
+        return name
+
+    def overlap(self, operation):
+        site, sites = frappe.local.site, str(Path(frappe.local.sites_path).resolve())
+        ready = Barrier(2, timeout=10)
+        def request():
+            frappe.init(site=site, sites_path=sites)
+            try:
+                frappe.connect()
+                frappe.set_user("Administrator")
+                # Pin independent MariaDB snapshots as real requests do before calling an RPC.
+                frappe.db.get_value("POS Invoice", self.prefix, "status")
+                ready.wait()
+                result = operation()
+                frappe.db.commit()
+                return result
+            finally:
+                frappe.destroy()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            calls = [pool.submit(request) for _ in range(2)]
+            return [future.result(timeout=20) for future in calls]
+
+    def test_overlapping_preparations_grant_only_one_dispatch_lease(self):
+        from ury.ury_pos import api
+
+        name = self.committed_copy()
+        prepare = lambda: api.print_bill_copy(name, "one", delivery="qz")
+        responses = self.overlap(prepare)
+        owners = [res for res in responses if res.get("html")]
+        self.assertEqual(len(owners), 1)
+        self.assertEqual(sorted(res["status"] for res in responses), ["IN_FLIGHT", "RESERVED"])
+        token = owners[0]["dispatch_token"]
+        api.release_bill_copy(name, "one", token)
+        retry = prepare()
+        self.assertEqual(retry["copy_number"], owners[0]["copy_number"])
+        self.assertNotEqual(retry["dispatch_token"], token)
+        with self.assertRaises(frappe.PermissionError):
+            api.confirm_bill_copy(name, "one", dispatch_token=token)
+        frappe.db.rollback()  # Age the lease from a new request snapshot.
+        frappe.db.set_value(api._COPY_LOG, retry["print_job_id"], "dispatch_until", "2000-01-01 00:00:00")
+        frappe.db.commit()
+        renewed = prepare()
+        self.assertEqual(renewed["copy_number"], retry["copy_number"])
+        self.assertNotEqual(renewed["dispatch_token"], retry["dispatch_token"])
+
+    def test_concurrent_confirmations_both_return_completed(self):
+        from ury.ury_pos import api
+
+        name = self.committed_copy()
+        reservation = api.print_bill_copy(name, "one", delivery="browser")
+        args = {k: reservation[k] for k in ("dispatch_token",) if k in reservation}
+        responses = self.overlap(lambda: api.confirm_bill_copy(name, "one", **args))
+        self.assertEqual([r["status"] for r in responses], ["COMPLETED", "COMPLETED"])
+        self.assertEqual({r["print_job_id"] for r in responses}, {reservation["print_job_id"]})

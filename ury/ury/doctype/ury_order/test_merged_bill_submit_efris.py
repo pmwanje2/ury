@@ -377,7 +377,9 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 		fake_frappe.get_doc.side_effect = get_doc
 		fake_frappe.db.exists.side_effect = lambda dt, name: any(r["name"] == name for r in inserted)
 
-		with patch.object(api, "frappe", fake_frappe), \
+		with patch.dict(sys.modules, {"uganda_compliance.efris.efris_queue": SimpleNamespace(
+			get_efris_status=lambda *args: {"efris_status": "Pending"}
+		)}), patch.object(api, "frappe", fake_frappe), \
 			 patch.object(api, "getBranch", return_value="Main Branch"), \
 			 patch("ury.ury.doctype.ury_order.ury_order._enforce_order_access"):
 			first = fn("INV-001")
@@ -651,7 +653,7 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 		}), patch.object(api, "frappe", fake_frappe), \
 			patch.object(api, "getBranch", return_value="Main"), \
 			patch("ury.ury.doctype.ury_order.ury_order._enforce_order_access"):
-			res = api.print_bill_copy("INV-SP", idempotency_key="efris-auto-INV-SP", delivery="browser")
+			res = api.print_bill_copy("INV-SP", idempotency_key="savepoint-copy", delivery="browser")
 
 		self.assertEqual(res["status"], "RESERVED")
 		self.assertEqual(res["copy_number"], 1)
@@ -754,7 +756,7 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 		self.assertEqual(res["print_job_id"], f"COPY-{legacy_key}-1")
 		service_mod.submit_and_monitor_print_job.assert_not_called()
 		self.assertEqual(len(records), 1)
-		self.assertEqual(pending_status["PENDING-EFRIS-INV-LEG"], "DISPATCHED")
+		self.assertEqual(pending_status["PENDING-EFRIS-INV-LEG"], "AWAITING_FDN")
 
 	def test_copy_race_errno_unwraps_nested_causes_and_args(self):
 		"""R5 P1 (site-less): _copy_race_errno unwraps nested pymysql/Frappe exception wrappers."""

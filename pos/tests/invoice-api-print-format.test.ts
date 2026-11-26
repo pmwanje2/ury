@@ -175,12 +175,13 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
   });
 
   it('keeps POS open and requires confirmation when a numbered QZ copy falls back', async () => {
-    vi.mocked(call.post).mockResolvedValue({ message: { status: 'RESERVED', delivery: 'qz', copy_number: 4,
+    vi.mocked(call.post).mockResolvedValue({ message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'qz', copy_number: 4,
       html: 'COPY #4', print_url: '/printview?copy_number=4' } });
     vi.mocked(printWithQz).mockRejectedValue(new Error('QZ_NOT_RUNNING'));
     vi.mocked(window.confirm).mockReturnValueOnce(true).mockReturnValueOnce(false);
     await expect(printBillCopy({ orderId: 'C', posProfile: makeProfile({print_type: 'qz'}), idempotencyKey: 'key' })).rejects.toThrow();
     expect(openSpy).toHaveBeenCalledWith('/printview?copy_number=4', '_blank');
+    expect(call.post).toHaveBeenCalledWith('ury.ury_pos.api.release_bill_copy', { invoice: 'C', idempotency_key: 'key', dispatch_token: 'attempt-1' });
   });
 
   it('uses configured letterhead and defaults to Merged POS Invoice Format when print_format is empty or unsafe', async () => {
@@ -243,7 +244,7 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
 
   it('forwards configured POS Profile letter_head in printBillCopy browser fallback URL (P1-5)', async () => {
     vi.mocked(call.post).mockResolvedValueOnce({
-      message: { status: 'RESERVED', delivery: 'browser', copy_number: 2 },
+      message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'browser', copy_number: 2 },
     }).mockResolvedValueOnce({ message: { status: 'COMPLETED' } });
 
     await printBillCopy({

@@ -364,8 +364,8 @@ class BillCopy(unittest.TestCase):
         self.assertEqual(seen_template[0][2], 'copy_number')
         self.assertEqual(seen_template[0][3].get('order_by'), 'copy_number desc')
 
-    def test_reserved_replay_returns_copy_number_delivery_html_and_print_url(self):
-        """P1: Replaying a reserved copy must return copy_number, delivery, html, and print_url."""
+    def test_active_copy_replay_returns_number_without_dispatch_payload(self):
+        """P1: An overlapping request can see the copy number but cannot dispatch it."""
         records = []
         doc = frappe._dict(
             name='INV-R1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
@@ -410,11 +410,10 @@ class BillCopy(unittest.TestCase):
 
         self.assertEqual(len(records), 1)
         self.assertEqual(first['copy_number'], 1)
-        self.assertEqual(replay['status'], 'RESERVED')
+        self.assertEqual(replay['status'], 'IN_FLIGHT')
         self.assertEqual(replay.get('copy_number'), 1)
-        self.assertEqual(replay.get('delivery'), 'browser')
-        self.assertIn('COPY #1', replay.get('html') or '')
-        self.assertIn('copy_number=1', replay.get('print_url') or '')
+        for field in ('dispatch_token', 'html', 'print_url'):
+            self.assertNotIn(field, replay)
 
     def test_print_bill_copy_unique_copy_slot_and_retry_on_snapshot_race(self):
         """P1: URY Bill Reprint Log carries unique copy_slot and print_bill_copy retries on snapshot/duplicate race."""
@@ -538,7 +537,8 @@ class BillCopy(unittest.TestCase):
 
             # 1) Cashier dispatches efris-auto-INV-NET1 over network
             f.session.user = 'cashier@example.com'
-            cashier_res = api.print_bill_copy('INV-NET1', idempotency_key='efris-auto-INV-NET1', delivery='network')
+            with patch.object(api, '_require_fiscal_event', return_value='verified-event', create=True):
+                cashier_res = api.print_bill_copy('INV-NET1', idempotency_key='efris-auto-INV-NET1', delivery='network')
 
             # 2) Scheduler (Administrator) attempts the same auto-reprint key
             f.session.user = 'Administrator'
@@ -687,7 +687,7 @@ class BillCopy(unittest.TestCase):
         self.assertEqual(res['print_job_id'], f'COPY-{legacy_key}-1')
         submit.assert_not_called()
         self.assertEqual(len(records), 1)
-        self.assertEqual(pending_status['PENDING-EFRIS-INV-UPG1'], 'DISPATCHED')
+        self.assertEqual(pending_status['PENDING-EFRIS-INV-UPG1'], 'AWAITING_FDN')
 
     def test_copy_race_errno_unwraps_frappe_wrapped_mariadb_errors(self):
         """R5 P1: _copy_race_errno must unwrap Frappe's QueryDeadlockError(OperationalError(1020, ...)) wrappers."""

@@ -28,7 +28,7 @@ it('searches posted checks, previews original tenders, and retries only the copy
 
 it('keeps the settled register open when a numbered fallback is cancelled', async () => {
   vi.spyOn(call, 'get').mockResolvedValue({ message: [{ name: 'COPY-4', currency: 'UGX', items: [], payments: [], taxes: [] }] });
-  vi.spyOn(call, 'post').mockResolvedValue({ message: { status: 'RESERVED', delivery: 'browser', html: 'COPY #4', print_url: '/printview?copy_number=4' } });
+  vi.spyOn(call, 'post').mockResolvedValue({ message: { status: 'RESERVED', dispatch_token: 'attempt-1', delivery: 'browser', html: 'COPY #4', print_url: '/printview?copy_number=4' } });
   const open = vi.spyOn(window, 'open').mockReturnValue({ closed: true } as Window);
   vi.spyOn(window, 'confirm').mockReturnValue(false);
   render(<MemoryRouter initialEntries={['/orders/settled']}><Orders /></MemoryRouter>);

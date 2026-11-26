@@ -281,6 +281,22 @@ describe("PaymentDialog fiscal receipt order", () => {
     expect(localStorage.getItem("ury_pending_fiscal_reprints")).toBeNull();
   });
 
+  it.each(["pending", "immediate"])("passes the named receipt queue through %s fiscal replay", async path => {
+    const { queuePendingFiscalReprint, flushPendingFiscalReprints, triggerPostReplayFiscalPrint } = await import("../lib/efris-print");
+    const profile = { print_type: "qz" as const, qz_host: "localhost", printer: "Receipt" };
+    vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN-1", efris_status: "Submitted" } });
+    if (path === "pending") {
+      await queuePendingFiscalReprint({ invoice: "INV-Q", posProfile: profile });
+      await flushPendingFiscalReprints(profile);
+    } else {
+      await triggerPostReplayFiscalPrint({ invoice: "INV-Q", posProfile: profile });
+    }
+    expect(call.post).toHaveBeenCalledWith(QUEUE_REPRINT, { invoice: "INV-Q", delivery: "qz" });
+    expect(printBillCopy).toHaveBeenCalledWith(expect.objectContaining({
+      posProfile: expect.objectContaining({ printer: "Receipt" }),
+    }));
+  });
+
   it("blocks double-click race synchronously across step 1 with a ref mutex", async () => {
     let releaseMake: (() => void) | undefined;
     vi.mocked(call.post).mockImplementation((method: string) => {
