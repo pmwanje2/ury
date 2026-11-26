@@ -199,17 +199,13 @@ export async function floorSignOut(stillRequested?: () => boolean, retryingFaile
   try {
     await withEmptyOutbox(async () => {
       if (stillRequested) {
-        // An overdue idle timer can fire on the same wake event as the generation check.
-        // Recheck under the login lock before ending the shared server session.
-        const bound = boundTabGeneration();
-        if (bound === null || (bound !== undefined && bound !== await currentFloorGeneration())) return;
         if (retryingFailedLogout && !await readFloorLogoutFailureMarker()) {
           outcome = 'signed_out';
           return;
         }
         if (!stillRequested()) return;
       }
-      outcome = await endFloorSession(retryingFailedLogout);
+      outcome = await endFloorSession(retryingFailedLogout, stillRequested);
     });
     return outcome;
   } catch (error) {
@@ -218,15 +214,33 @@ export async function floorSignOut(stillRequested?: () => boolean, retryingFaile
   }
 }
 
-export async function logoutWithFloorMarker(): Promise<boolean> {
-  // Recheck inside the outbox/login lock, including retries queued before a replacement login.
-  if (boundTabGeneration() === null) return false;
+function lockLogoutTab(): false {
+  revokeTabConfirmation();
+  window.location.replace(FLOOR_HOME);
+  return false;
+}
+
+export async function logoutWithFloorMarker(stillRequested?: () => boolean): Promise<boolean | undefined> {
+  // Check the caller after acquiring the same lock used by verified login.
+  const bound = boundTabGeneration();
+  if (bound === null) return false;
   const privateRetry = sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER);
+  if (privateRetry !== null && !navigator.locks) return lockLogoutTab();
+
   let current: string | undefined;
-  if (privateRetry !== null) {
+  if (bound !== undefined || privateRetry !== null) {
     current = await currentFloorGeneration().catch(() => undefined);
-    if (current === undefined || revokeStaleLogoutRetry(current, privateRetry)) return false;
+    // A pre-generation tab can still explicitly log out on browsers without IndexedDB.
+    const observed = current ?? (bound === '' ? newestGeneration(undefined) : undefined);
+    if (bound !== undefined && bound !== observed) return lockLogoutTab();
+    if (privateRetry !== null) {
+      if (current === undefined) return lockLogoutTab();
+      if (revokeStaleLogoutRetry(current, privateRetry)) return false;
+    }
   }
+
+  // Activity may cancel an idle logout while its generation is being read.
+  if (stillRequested && !stillRequested()) return undefined;
 
   // Persist before the network request: the tab may close while logout is in flight.
   try { clearTabConfirmation(); } catch { /* Still attempt server logout. */ }
@@ -267,9 +281,11 @@ export async function logoutWithFloorMarker(): Promise<boolean> {
   return true;
 }
 
-async function endFloorSession(retryingFailedLogout: boolean): Promise<SignOutResult> {
+async function endFloorSession(retryingFailedLogout: boolean, stillRequested?: () => boolean): Promise<SignOutResult> {
   const retrying = retryingFailedLogout || hasFloorLogoutFailureMarker();
-  const signedOut = await logoutWithFloorMarker();
+  const signedOut = await logoutWithFloorMarker(stillRequested);
+  if (signedOut === undefined) return 'cancelled';
+  if (!signedOut && boundTabGeneration() === null) return 'logout_failed';
   for (const key of SESSION_KEYS) {
     try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
   }
