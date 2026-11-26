@@ -1,4 +1,5 @@
 import { call, parseFrappeError } from '@ury/core';
+import type { FloorPinProvider } from './confirm-floor-pin';
 import { t } from '../i18n';
 
 export type AuthRefusalCode =
@@ -6,6 +7,7 @@ export type AuthRefusalCode =
   | 'POS-AUTH-SELF'
   | 'POS-AUTH-NOT-ELIGIBLE'
   | 'POS-AUTH-PIN'
+  | 'POS-AUTH-REAUTH'
   | 'POS-AUTH-PASSWORD'
   | 'POS-AUTH-LOCKED'
   | 'POS-AUTH-NO-PIN'
@@ -50,6 +52,7 @@ interface PinStatus {
 export interface MyPinStatus extends PinStatus {
   external_verifier: boolean;
   can_manage_here?: boolean;
+  reauth?: FloorPinProvider | { mode: 'password' | 'unavailable' };
 }
 
 export interface PinUserStatus extends PinStatus {
@@ -70,6 +73,7 @@ const REFUSAL_CODES: readonly AuthRefusalCode[] = [
   'POS-AUTH-SELF',
   'POS-AUTH-NOT-ELIGIBLE',
   'POS-AUTH-PIN',
+  'POS-AUTH-REAUTH',
   'POS-AUTH-PASSWORD',
   'POS-AUTH-LOCKED',
   'POS-AUTH-NO-PIN',
@@ -101,6 +105,8 @@ export function overrideErrorMessage(error: unknown, fallbackKey = 'manager_appr
   switch (code) {
     case 'POS-AUTH-PIN':
       return t('manager_approval.error_wrong_pin');
+    case 'POS-AUTH-REAUTH':
+      return t('approval_pin.confirm_failed');
     case 'POS-AUTH-PASSWORD':
       return t('approval_pin.error_wrong_password');
     case 'POS-AUTH-LOCKED':
@@ -205,9 +211,9 @@ export async function getMyPinStatus(): Promise<MyPinStatus> {
   return res?.message ?? { has_pin: false, external_verifier: false };
 }
 
-export async function setMyPin(password: string, pin: string): Promise<{ ok: boolean; has_pin: boolean }> {
+export async function setMyPin(password: string | undefined, pin: string): Promise<{ ok: boolean; has_pin: boolean }> {
   const res = await call.post<{ message: { ok: boolean; has_pin: boolean } }>('ury.ury_pos.override.set_my_pin', {
-    password,
+    ...(password ? { password } : {}),
     pin_secret: pin,
   });
   return res.message;

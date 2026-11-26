@@ -754,7 +754,7 @@
   "settings": {
     "title": "Settings",
     "security": "Security & Access",
-    "personal_pin_note": "Set your own approval PIN using your password. It is personal. Never share it.",
+    "personal_pin_note": "Your approval PIN is personal. Never share it.",
     "manage_my_pin": "Manage my approval PIN",
     "floor_devices": "Floor devices & waiter PINs",
     "waiter_pin_note": "Waiters use floor PINs (4 digits by default) to switch users on paired tablets. Till overrides require a separate approval PIN.",
@@ -1270,6 +1270,10 @@
     "error_reason": "Choose an active reason (and add a short note if required)."
   },
   "approval_pin": {
+    "unavailable": "Approval PIN enrollment is unavailable on this site.",
+    "confirm_identity": "Confirm it's you ({{label}})",
+    "confirm_failed": "Confirm your identity and try again.",
+    "save_uncertain": "Connection lost while saving. Check whether your PIN was saved before trying again.",
     "status_external": "Managed externally",
     "title": "My approval PIN",
     "description": "Use your personal approval PIN to authorise till overrides without switching sessions.",
@@ -1290,7 +1294,7 @@
     "pin_format": "Enter an approval PIN of 4 to 8 digits.",
     "pin_mismatch": "The approval PIN entries do not match.",
     "saved": "Your approval PIN has been saved.",
-    "save_failed": "Could not save your approval PIN. Check your password and try again.",
+    "save_failed": "Could not save your approval PIN.",
     "load_failed": "Could not load approval PIN status.",
     "clear_policy_note": "Managers can clear a staff member's approval PIN so they can enrol a new one. PINs are never readable or settable by others.",
     "clear_pin": "Clear PIN",

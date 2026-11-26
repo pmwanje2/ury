@@ -557,6 +557,9 @@ _PIN_PROVIDER_CODES = {
     "POS-AUTH-NO-PIN": "POS-AUTH-NO-PIN",
     "POS-AUTH-PIN": "POS-AUTH-PIN",
     "POS-AUTH-PASSWORD": "POS-AUTH-PASSWORD",
+    "[SITEOPS-DOA-STEPUP-REQUIRED]": "POS-AUTH-REAUTH",
+    "[SITEOPS-DOA-STEPUP-EXPIRED]": "POS-AUTH-REAUTH",
+    "[SITEOPS-DOA-REAUTH]": "POS-AUTH-REAUTH",
     "SITEOPS-DOA-SELF": "POS-AUTH-SELF",
     "SITEOPS-DOA-ELIGIBLE": "POS-AUTH-NOT-ELIGIBLE",
     "SITEOPS-DOA-ROLE": "POS-AUTH-NOT-ELIGIBLE",
@@ -2394,17 +2397,97 @@ def require(
 # --- PIN enrolment & manager clear ---
 
 
+def _floor_script(method):
+    name = frappe.db.get_value("Server Script", {"script_type": "API", "api_method": method, "disabled": 0}, "name")
+    return frappe.get_doc("Server Script", name) if name else None
+
+
+def _floor_rpc(script, credentials=None):
+    outer = frappe.local.form_dict
+    child = frappe._dict()
+    if credentials is not None:
+        child["pin"] = credentials.pin
+        if credentials.password:
+            child["password"] = credentials.password
+        key = "siteops_floor_pin_transport"
+        marker = outer.pop(key, None)
+        if marker == ("POST",):
+            child[key] = marker
+    absent = object()
+    previous_message = frappe.response.pop("message", absent)
+    try:
+        frappe.local.form_dict = child
+        script.execute_method()
+        result = frappe.response.get("message")
+    except Exception as error:
+        code = _pin_provider_exception_code(error)
+    else:
+        if isinstance(result, dict):
+            return result
+        code = "POS-AUTH-UNAVAILABLE"
+    finally:
+        child.clear()
+        frappe.local.form_dict = outer
+        frappe.response.pop("message", None)
+        if previous_message is not absent:
+            frappe.response["message"] = previous_message
+    if code == "POS-AUTH-REAUTH":
+        _refuse(code, "Confirm your identity and try again.", frappe.ValidationError)
+    _refuse_pin_provider_unavailable()
+
+
+def _floor_enrollment():
+    script = _floor_script("siteops_doa.my_floor_pin_status")
+    if script is None:
+        return None, None
+    state = _floor_rpc(script)
+    if state.get("store") != "siteops_floor_pin":
+        return None, None
+    return state, _floor_script("siteops_doa.set_my_floor_pin")
+
+
+def _floor_reauth():
+    hooks = frappe.get_hooks("approval_pin_reauth") or []
+    if isinstance(hooks, str):
+        hooks = [hooks]
+    if not isinstance(hooks, (list, tuple)):
+        return {"mode": "password"}
+    for path in hooks:
+        if not isinstance(path, str) or "." not in path or not all(part.isidentifier() for part in path.split(".")):
+            continue
+        try:
+            descriptor = frappe.get_attr(path)()
+        except Exception:
+            frappe.clear_messages()
+            continue
+        if (isinstance(descriptor, dict) and descriptor.get("mode") == "identity_provider"
+                and descriptor.get("purpose") == "floor_pin" and isinstance(descriptor.get("label"), str)
+                and descriptor["label"].strip() and isinstance(descriptor.get("start"), str)
+                and re.fullmatch(r"[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)+", descriptor["start"])):
+            return {key: descriptor[key] for key in ("mode", "start", "purpose", "label")}
+    return {"mode": "password"}
+
+
 @frappe.whitelist(methods=["GET"])
-def my_pin_status() -> dict[str, bool]:
+def my_pin_status() -> dict[str, Any]:
     user = frappe.session.user
     if not user or user in ("Administrator", "Guest") or _is_non_interactive_or_agent_session(user):
         _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts in interactive sessions.", frappe.PermissionError)
+    state, setter = _floor_enrollment()
+    if state is not None:
+        return {
+            **{key: bool(state.get(key)) for key in ("has_pin", "must_reset", "locked")},
+            "external_verifier": True,
+            "can_manage_here": setter is not None,
+            "reauth": _floor_reauth() if setter else {"mode": "unavailable"},
+        }
     manager = _external_pin_manager()
     if manager is not None:
         return {
             **_external_pin_status(manager, user),
             "external_verifier": True,
             "can_manage_here": True,
+            "reauth": {"mode": "password"},
         }
     if _external_pin_verifier() is not None:
         return {"has_pin": True, "external_verifier": True, "can_manage_here": False}
@@ -2414,33 +2497,11 @@ def my_pin_status() -> dict[str, bool]:
         "locked": False,
         "external_verifier": False,
         "can_manage_here": True,
+        "reauth": {"mode": "password"},
     }
 
 
-@frappe.whitelist(methods=["POST"])
-@_protect_pin_endpoint((0, "password"), (1, "pin"))
-def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
-    """Enrol or update the signed-in user's own approval PIN after password re-entry.
-
-    HTTP callers send the PIN in the Frappe-redacted `pin_secret` field.
-
-    P0 #2: Never allows `AuthenticationError` (401) to escape and terminate the live till session;
-    counts failed password checks durably in DB + Redis and raises `ValidationError` (417).
-    """
-    user = frappe.session.user
-    if not user or user in ("Administrator", "Guest"):
-        _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts only.", frappe.PermissionError)
-    if _is_non_interactive_or_agent_session(user):
-        _refuse(
-            "POS-AUTH-NOT-ELIGIBLE",
-            "Approval PINs can only be set in an interactive till session.",
-            frappe.PermissionError,
-        )
-    if cint(frappe.db.get_value("User", user, "enabled")) != 1:
-        _refuse("POS-AUTH-NOT-ELIGIBLE", "This account is disabled.", frappe.PermissionError)
-    manager = _external_pin_manager()
-    if manager is None and _external_pin_verifier() is not None:
-        _refuse_external_pin_management()
+def _verify_enrollment_password(user, credentials):
     if not isinstance(credentials.password, str) or not credentials.password:
         frappe.throw(frappe._("Enter your account password to confirm."), frappe.ValidationError)
 
@@ -2485,6 +2546,38 @@ def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
             "Your current password did not match.",
             frappe.ValidationError,
         )
+    return pw_tracker, pw_lock_min
+
+
+@frappe.whitelist(methods=["POST"])
+@_protect_pin_endpoint((0, "password"), (1, "pin"))
+def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
+    """Enroll the signed-in user's PIN after password or horizontal provider verification.
+
+    HTTP callers send the PIN in the Frappe-redacted `pin_secret` field.
+
+    P0 #2: Never allows `AuthenticationError` (401) to escape and terminate the live till session;
+    counts failed password checks durably in DB + Redis and raises `ValidationError` (417).
+    """
+    user = frappe.session.user
+    if not user or user in ("Administrator", "Guest"):
+        _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts only.", frappe.PermissionError)
+    if _is_non_interactive_or_agent_session(user):
+        _refuse(
+            "POS-AUTH-NOT-ELIGIBLE",
+            "Approval PINs can only be set in an interactive till session.",
+            frappe.PermissionError,
+        )
+    if cint(frappe.db.get_value("User", user, "enabled")) != 1:
+        _refuse("POS-AUTH-NOT-ELIGIBLE", "This account is disabled.", frappe.PermissionError)
+    state, setter = _floor_enrollment()
+    manager = _external_pin_manager() if state is None else None
+    if ((state is not None and setter is None)
+            or (state is None and manager is None and _external_pin_verifier() is not None)):
+        _refuse_external_pin_management()
+    pw_tracker = None
+    if setter is None or _floor_reauth()["mode"] == "password" or credentials.password:
+        pw_tracker, pw_lock_min = _verify_enrollment_password(user, credentials)
 
     if not isinstance(credentials.pin, str) or not PIN_PATTERN.fullmatch(credentials.pin):
         frappe.throw(
@@ -2492,7 +2585,11 @@ def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
             frappe.ValidationError,
         )
 
-    if manager is not None:
+    if setter is not None:
+        if not cint(_floor_rpc(setter, credentials).get("ok")):
+            _refuse_pin_provider_unavailable()
+        log_pin_reset = True
+    elif manager is not None:
         _call_pin_manager(manager, "set", user=user, credentials=credentials)
         log_pin_reset = True
     else:
@@ -2509,7 +2606,8 @@ def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
             logout_all_sessions=False,
         )
     del credentials
-    pw_tracker.add_success_attempt()
+    if pw_tracker is not None:
+        pw_tracker.add_success_attempt()
     if log_pin_reset:
         _write_log(
             requester=user,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -11,6 +11,8 @@ import {
   Input,
   Spinner,
 } from '@ury/ui';
+import { isLinkDown } from '@ury/core';
+import { confirmFloorPin } from '../lib/confirm-floor-pin';
 import { isPinManagedExternally, type useMyPinStatus } from '../lib/use-my-pin-status';
 import { t } from '../i18n';
 import {
@@ -64,7 +66,10 @@ export default function ApprovalPinDialog({
   const [staffLoading, setStaffLoading] = useState(false);
   const [clearingUser, setClearingUser] = useState<string | null>(null);
 
-  const canManageHere = status && !isPinManagedExternally(status);
+  const provider = status?.reauth?.mode === 'identity_provider' ? status.reauth : undefined;
+  const submission = useRef<AbortController | null>(null);
+  useEffect(() => () => submission.current?.abort(), [open]);
+  const canManageHere = status && status.reauth?.mode !== 'unavailable' && !isPinManagedExternally(status);
   const showStaffTab = Boolean(canManagePins && posProfile && canManageHere && !loading);
 
   useEffect(() => {
@@ -100,10 +105,11 @@ export default function ApprovalPinDialog({
 
   const handleSavePin = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageHere || submission.current) return;
     setError(null);
     setSuccess(null);
 
-    if (!password) {
+    if (!provider && !password) {
       setError(t('approval_pin.password_required'));
       return;
     }
@@ -116,9 +122,15 @@ export default function ApprovalPinDialog({
       return;
     }
 
+    const controller = new AbortController();
+    submission.current = controller;
     setBusy(true);
+    let saving = false;
     try {
-      await setMyPin(password, pin);
+      if (provider) await confirmFloorPin(provider, controller.signal);
+      if (controller.signal.aborted) return;
+      saving = true;
+      await setMyPin(provider ? undefined : password, pin);
       setStatus(prev => prev && ({ ...prev, has_pin: true }));
       setPassword('');
       setPin('');
@@ -126,8 +138,12 @@ export default function ApprovalPinDialog({
       setSuccess(t('approval_pin.saved'));
       if (status?.external_verifier) await refresh();
     } catch (err) {
-      setError(overrideErrorMessage(err, 'approval_pin.save_failed'));
+      if (!controller.signal.aborted) {
+        setError(saving && isLinkDown(err) ? t('approval_pin.save_uncertain')
+          : overrideErrorMessage(err, saving ? 'approval_pin.save_failed' : 'approval_pin.confirm_failed'));
+      }
     } finally {
+      submission.current = null;
       setBusy(false);
     }
   };
@@ -205,7 +221,7 @@ export default function ApprovalPinDialog({
                 <Spinner message={t('common.loading')} />
               ) : status && !canManageHere ? (
                 <p className="rounded-lg border border-border bg-muted p-3 text-sm text-foreground">
-                  {t('approval_pin.external_managed')}
+                  {t(status.reauth?.mode === 'unavailable' ? 'approval_pin.unavailable' : 'approval_pin.external_managed')}
                 </p>
               ) : status && canManageHere && (
                 <>
@@ -214,7 +230,7 @@ export default function ApprovalPinDialog({
                     <PinStatusBadges {...status} />
                   </div>
 
-                  <div className="space-y-1">
+                  {!provider && <div className="space-y-1">
                     <label htmlFor="approval-pin-password" className="block text-sm font-medium text-foreground">
                       {t('approval_pin.current_password')}
                     </label>
@@ -228,7 +244,7 @@ export default function ApprovalPinDialog({
                       onChange={(e) => setPassword(e.target.value)}
                       required
                     />
-                  </div>
+                  </div>}
 
                   <div className="space-y-1">
                     <label htmlFor="approval-pin-new" className="block text-sm font-medium text-foreground">
@@ -288,7 +304,7 @@ export default function ApprovalPinDialog({
               </Button>
               {canManageHere && (
                 <Button type="submit" className="min-h-11" disabled={busy || loading}>
-                  {busy ? t('common.loading') : t('approval_pin.save_button')}
+                  {busy ? t('common.loading') : provider ? t('approval_pin.confirm_identity', { label: provider.label }) : t('approval_pin.save_button')}
                 </Button>
               )}
             </DialogFooter>
