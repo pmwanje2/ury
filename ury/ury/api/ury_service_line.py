@@ -48,13 +48,20 @@ def get_service_line(branch=None):
 		minutes = None
 		invoice = frappe.db.sql(
 			"""
-			SELECT name, creation FROM `tabPOS Invoice`
+			SELECT name, creation, invoice_printed FROM `tabPOS Invoice`
 			WHERE restaurant_table = %(table)s AND docstatus = 0
 			ORDER BY creation DESC LIMIT 1
 			""",
 			{"table": t.name},
 			as_dict=True,
 		)
+
+		# A printed draft may outlive its seating, even after the new party pays.
+		if invoice and invoice[0].get("invoice_printed"):
+			members = table_checks(frappe, t)
+			if invoice[0].name not in members:
+				invoice = frappe.get_all("POS Invoice", filters={"name": ("in", sorted(members)), "docstatus": 0},
+				                         fields=["name", "creation"], order_by="creation desc", limit=1) if members else []
 
 		stage = "seated"
 		if invoice:

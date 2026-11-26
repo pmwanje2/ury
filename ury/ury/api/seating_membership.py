@@ -136,18 +136,48 @@ def _last_join(frappe, table, anchors, since):
     return set()
 
 
+def _print_released_drafts(frappe, table, drafts, boundary, opener, clock):
+    """A legacy print can release a table while the bill is still a draft."""
+    printed = [row.name for row in drafts if row.invoice_printed and row.name != opener]
+    if not printed:
+        return set()
+    arrivals = _transfer_arrivals(frappe, [row.name for row in drafts], table.name)
+    if boundary is None:
+        from ury.ury.api.table_lifecycle import ON_SETTLEMENT, table_policy
+
+        policy = table_policy(frappe.db.get_value("URY Table", table.name, "branch"))
+        if policy.get("custom_table_release_trigger") == ON_SETTLEMENT or policy.get("custom_enable_bussing_state"):
+            return set()
+        # An overlapping unprinted sibling would have kept the old seating open.
+        open_arrivals = [arrivals.get(row.name, row.creation) for row in drafts if not row.invoice_printed]
+        boundary = min(open_arrivals, default=clock)
+    if boundary is None:
+        return set()
+    receipts = frappe.get_all("POS Invoice", filters={"name": ("in", printed)},
+                              fields=["name", "custom_printing_time", "modified"])
+    return {row.name for row in receipts if (row.custom_printing_time or row.modified) < boundary
+                and (row.name not in arrivals or arrivals[row.name] < boundary)}
+
+
 def _legacy_checks(frappe, table):
     """Recover drafts, seated reservation bindings and effective owners of kitchen work at this table."""
     from ury.ury.api.table_reservation import open_checks_on
 
     drafts = open_checks_on([table.name])
+    clock = table.get("latest_invoice_time")
+    if clock is None:
+        clock = frappe.db.get_value("URY Table", table.name, "latest_invoice_time")
+    start = _legacy_seating_start(clock, drafts)
+    boundary, opener = _occupancy_boundary(frappe, table.name)
+    released = _print_released_drafts(frappe, table, drafts, boundary, opener, start)
+    drafts = [row for row in drafts if row.name not in released]
     checks = {row.name for row in drafts}
     reservations = frappe.get_all(
         "URY Table Reservation",
         filters={"reserved_table": table.name, "pos_invoice": ("is", "set")},
         fields=["status", "pos_invoice", "modified"],
     )
-    seated = {row.pos_invoice for row in reservations if row.status == "Seated"}
+    seated = {row.pos_invoice for row in reservations if row.status == "Seated"} - released
     departed = {row.pos_invoice for row in reservations if row.status in ("Completed", "Cancelled")}
     paid = frappe.get_all(
         "POS Invoice", filters={"docstatus": 1, "status": "Paid"},
@@ -157,7 +187,6 @@ def _legacy_checks(frappe, table):
     )
     on_table = [row for row in paid if table.name in invoice_tables(row)]
     paid = [row for row in on_table if row.name not in departed]
-    boundary, opener = _occupancy_boundary(frappe, table.name)
     if boundary is not None:
         # A known occupancy episode takes precedence over scheduled reservations,
         # split relationships and the opening time of the latest check.
@@ -171,10 +200,6 @@ def _legacy_checks(frappe, table):
     if not paid:
         return checks | seated
 
-    clock = table.get("latest_invoice_time")
-    if clock is None:
-        clock = frappe.db.get_value("URY Table", table.name, "latest_invoice_time")
-    start = _legacy_seating_start(clock, drafts)
     if start is None:
         tickets = frappe.get_all(
             "URY KOT",

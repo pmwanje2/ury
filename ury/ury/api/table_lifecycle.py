@@ -60,7 +60,8 @@ def set_table_state(table, state, *, since=None, clear_cluster=False, check=None
         values["seating_checks"] = "[]"
         values["latest_invoice_time"] = None
     elif since:
-        values["latest_invoice_time"] = since
+        # Invoice creation may be a datetime or an ISO timestamp; the floor clock is TIME(6).
+        values["latest_invoice_time"] = str(since).replace("T", " ").rsplit(" ", 1)[-1]
     if state == "Dirty":
         previous = frappe.db.get_value("URY Table", table, "custom_dirty_since")
         values["custom_dirty_since"] = previous or now_datetime()

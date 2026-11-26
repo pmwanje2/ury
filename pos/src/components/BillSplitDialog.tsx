@@ -10,7 +10,7 @@ import {
 } from '@ury/ui';
 import { Button } from '@ury/ui';
 import { cn } from '@ury/ui';
-import { formatCurrency, parseFrappeError } from '@ury/core';
+import { currencyFractionDigits, formatCurrency, parseFrappeError, siteCurrencyCode } from '@ury/core';
 import { t } from '../i18n';
 import { CustomerPicker } from './CustomerPicker';
 import type { Customer } from '../store/pos-store';
@@ -377,6 +377,53 @@ function BillSplitDialog(props: BillSplitDialogProps) {
     : <LegacyBillSplitDialog {...props} />;
 }
 
+// Match the server's four-decimal split quantities, including the final share's remainder.
+function manualPaneTotals(items: BillSplitItem[], panes: Array<Record<string, number>>, currency?: string) {
+  const children = new Map<string, BillSplitItem[]>();
+  for (const item of items) {
+    const key = item.custom_parent_line_key;
+    if (!key) continue;
+    const siblings = children.get(key) ?? [];
+    siblings.push(item);
+    children.set(key, siblings);
+  }
+
+  const scale = 10 ** currencyFractionDigits(currency || siteCurrencyCode() || '');
+  const allocated = new Map<string, number>();
+  const remainingAmounts = new Map<string, number>();
+  return panes.map((pane) => {
+    let total = 0;
+    const visited = new Set<string>();
+    function addLine(item: BillSplitItem, units: number) {
+      const available = Math.round(item.qty * 10000);
+      if (units <= 0 || available <= 0 || visited.has(item.name)) return;
+      visited.add(item.name);
+      const previous = allocated.get(item.name) ?? 0;
+      if (previous >= available) return;
+      const moved = previous + units;
+      allocated.set(item.name, moved);
+      // Partition the remaining line amount in currency minor units, as each check is created.
+      const amount = remainingAmounts.get(item.name) ?? Math.round(Math.abs(item.amount) * scale) * Math.sign(item.amount);
+      const shareAmount = Math.sign(amount) * Math.round(Math.abs(amount) * units / (available - previous));
+      remainingAmounts.set(item.name, amount - shareAmount);
+      total += shareAmount;
+      for (const child of children.get(item.reservation_line_key || item.name) ?? []) {
+        const childUnits = Math.round(child.qty * 10000);
+        const share = moved === available
+          ? childUnits - (allocated.get(child.name) ?? 0)
+          : Math.floor(childUnits * units / available);
+        addLine(child, share);
+      }
+    }
+    for (const item of items) {
+      if (!item.custom_parent_line_key && pane[item.name] > 0) {
+        addLine(item, Math.round(pane[item.name] * 10000));
+      }
+    }
+    return total / scale;
+  });
+}
+
 function MultiCheckDialog({
   items, currency, onConfirmMulti, onOpenChange, ...props
 }: BillSplitDialogProps & { onConfirmMulti: NonNullable<BillSplitDialogProps['onConfirmMulti']> }) {
@@ -388,6 +435,7 @@ function MultiCheckDialog({
   const [legacy, setLegacy] = useState(false);
   const [error, setError] = useState('');
   const parents = items.filter((item) => !item.custom_parent_line_key && !item.custom_is_modifier && !item.is_disposable);
+  const paneTotals = useMemo(() => manualPaneTotals(items, panes, currency), [items, panes, currency]);
   const seats = [...new Set(parents.map((item) => item.custom_seat_no || 0))].sort((a, b) => a - b);
   const remainder = (name: string, qty: number) => Math.round(
     (qty - panes.reduce((sum, pane) => sum + (pane[name] || 0), 0)) * 10000,
@@ -514,9 +562,7 @@ function MultiCheckDialog({
                 {panes.map((pane, index) => (
                   <section key={index} className="min-w-0 rounded-lg border p-3">
                     <h3 className="font-semibold">{t('floor.check_number', { check: index + 2 })}</h3>
-                    <p className="mb-1 text-sm tabular-nums">{formatCurrency(
-                      parents.reduce((sum, item) => sum + item.rate * (pane[item.name] || 0), 0), currency,
-                    )}</p>
+                    <p className="mb-1 text-sm tabular-nums">{formatCurrency(paneTotals[index], currency)}</p>
                     {parents.map((item) => (
                       <label key={item.name} className="flex items-center justify-between gap-2 text-sm">
                         <span>{item.item_name}</span>

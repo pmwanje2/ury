@@ -544,16 +544,6 @@ def _reconcile_open_invoices_for_tables(table_names):
             _reconcile_invoice_merged_tables(invoice, persist=True)
 
 
-TABLE_RELEASE_FIELDS = {
-    "seating_checks": "[]",
-    "occupied": 0,
-    "latest_invoice_time": None,
-    "merged_with": None,
-    "custom_table_state": "Available",
-    "custom_dirty_since": None,
-}
-
-
 def release_merge_cluster_tables(table_or_tables, commit=True):
     # Pass commit=False from document hooks: Frappe v16 forbids commits inside doc events.
 
@@ -562,13 +552,10 @@ def release_merge_cluster_tables(table_or_tables, commit=True):
     else:
         cluster = _get_table_group(table_or_tables)
 
-    for member in cluster:
-        frappe.db.set_value(
-            "URY Table",
-            member,
-            TABLE_RELEASE_FIELDS,
-            update_modified=False,
-        )
+    from ury.ury.api.table_lifecycle import set_table_state
+
+    for member in sorted(cluster):
+        set_table_state(member, "Available", clear_cluster=True)
 
     if commit:
         frappe.db.commit()
@@ -587,13 +574,13 @@ def release_tables_after_print(invoice):
     # Same rule as the POS print paths: a table stays occupied while another
     # draft check (e.g. the other half of a split) is still unprinted.
     tables = _get_table_group(invoice_doc.restaurant_table, invoice_doc.custom_merged_tables)
-    from ury.ury.api.table_lifecycle import update_table_after_check
+    from ury.ury.api.table_lifecycle import set_table_state, update_table_after_check
 
     if update_table_after_check(tables, invoice_doc.get("branch"), printed=True):
         return True
     if not _has_open_pos_invoices_for_cluster(tables):
-        for table in tables:
-            frappe.db.set_value("URY Table", table, {"occupied": 0, "seating_checks": "[]", "latest_invoice_time": None, "custom_table_state": "Available"})
+        for table in sorted(tables):
+            set_table_state(table, "Available")
 
     return True
 
