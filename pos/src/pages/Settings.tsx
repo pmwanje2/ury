@@ -1,41 +1,20 @@
-import { useEffect, useState } from 'react';
-import { call } from '@ury/core';
-import { Button, Card, CardContent } from '@ury/ui';
+import { useState } from 'react';
+import { Badge, Button, Card, CardContent } from '@ury/ui';
 import { t } from '../i18n';
 import POSCloseFlow from '../components/POSCloseFlow';
-import ApprovalPinDialog, { PinStatusBadges } from '../components/ApprovalPinDialog';
+import { isPinManagedExternally } from '../lib/use-my-pin-status';
+import { PinStatusBadges } from '../components/ApprovalPinDialog';
 import StaffPinsDialog from '../components/StaffPinsDialog';
 import PairTabletDialog from '../components/PairTabletDialog';
-import { getMyPinStatus, type MyPinStatus } from '../lib/override-api';
+import { useApprovalPin } from '../components/ApprovalPinProvider';
 import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
 
 function SecurityControls({ userName, posProfileName }: { userName: string; posProfileName?: string }) {
-  const [dialog, setDialog] = useState<'approval' | 'staff' | 'pair' | null>(null);
-  const [status, setStatus] = useState<MyPinStatus | 'error' | null>(null);
-  const [canManagePins, setCanManagePins] = useState(false);
+  const [dialog, setDialog] = useState<'staff' | 'pair' | null>(null);
+  const { status, loadFailed, canManagePins, openDialog } = useApprovalPin();
+  const external = status && isPinManagedExternally(status);
   const namedStaff = userName !== 'Administrator';
-  const approvalOpen = dialog === 'approval';
-
-  useEffect(() => {
-    if (!posProfileName) return;
-    let active = true;
-    call.get<{ message?: { has_permission?: unknown } }>('frappe.client.has_permission', {
-      doctype: 'POS Profile', docname: posProfileName, perm_type: 'write',
-    }).then((response) => {
-      if (active) setCanManagePins(response?.message?.has_permission === true);
-    }).catch(() => { if (active) setCanManagePins(false); });
-    return () => { active = false; };
-  }, [posProfileName]);
-
-  useEffect(() => {
-    if (!namedStaff || approvalOpen) return;
-    let active = true;
-    getMyPinStatus().then((result) => { if (active) setStatus(result); })
-      .catch(() => { if (active) setStatus('error'); });
-    return () => { active = false; };
-  }, [namedStaff, approvalOpen]);
-
   const close = (open: boolean) => { if (!open) setDialog(null); };
   return (
     <>
@@ -43,13 +22,14 @@ function SecurityControls({ userName, posProfileName }: { userName: string; posP
         <Card>
           <CardContent className="space-y-3 p-4">
             <h3 className="font-semibold">{t('approval_pin.title')}</h3>
-            {status === 'error' ? <p role="status">{t('approval_pin.load_failed')}</p>
+            {loadFailed ? <p role="status">{t('approval_pin.load_failed')}</p>
+              : external ? <Badge variant="outline">{t('approval_pin.status_external')}</Badge>
               : status && <PinStatusBadges {...status} />}
-            <p className="text-sm text-muted-foreground">{t('settings.personal_pin_note')}</p>
-            <Button onClick={() => setDialog('approval')}>{t('settings.manage_my_pin')}</Button>
+            {status && <p className="text-sm text-muted-foreground">
+              {t(external ? 'approval_pin.external_managed' : 'settings.personal_pin_note')}
+            </p>}
+            <Button onClick={openDialog}>{t('settings.manage_my_pin')}</Button>
           </CardContent>
-          <ApprovalPinDialog open={approvalOpen} onOpenChange={close}
-            posProfile={posProfileName} canManagePins={canManagePins} />
         </Card>
       )}
       {canManagePins && posProfileName && (

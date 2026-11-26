@@ -11,10 +11,10 @@ import {
   Input,
   Spinner,
 } from '@ury/ui';
+import { isPinManagedExternally, type useMyPinStatus } from '../lib/use-my-pin-status';
 import { t } from '../i18n';
 import {
   clearUserPin,
-  getMyPinStatus,
   listPinUsers,
   overrideErrorMessage,
   setMyPin,
@@ -37,6 +37,7 @@ export function PinStatusBadges({ has_pin, must_reset, locked }: Pick<MyPinStatu
 }
 
 export interface ApprovalPinDialogProps {
+  pinStatus: ReturnType<typeof useMyPinStatus>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   posProfile?: string | null;
@@ -48,10 +49,10 @@ export default function ApprovalPinDialog({
   onOpenChange,
   posProfile,
   canManagePins = false,
+  pinStatus: { status, setStatus, refresh, loadFailed },
 }: ApprovalPinDialogProps) {
   const [tab, setTab] = useState<'self' | 'staff'>('self');
-  const [status, setStatus] = useState<MyPinStatus>({ has_pin: false, external_verifier: false });
-  const [loading, setLoading] = useState(false);
+  const loading = !status && !loadFailed;
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -63,7 +64,7 @@ export default function ApprovalPinDialog({
   const [staffLoading, setStaffLoading] = useState(false);
   const [clearingUser, setClearingUser] = useState<string | null>(null);
 
-  const canManageHere = status.can_manage_here ?? !status.external_verifier;
+  const canManageHere = status && !isPinManagedExternally(status);
   const showStaffTab = Boolean(canManagePins && posProfile && canManageHere && !loading);
 
   useEffect(() => {
@@ -74,27 +75,7 @@ export default function ApprovalPinDialog({
       setError(null);
       setSuccess(null);
       setTab('self');
-      return;
     }
-
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setSuccess(null);
-    getMyPinStatus()
-      .then((res) => {
-        if (!cancelled) setStatus(res);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(overrideErrorMessage(err, 'approval_pin.load_failed'));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
   }, [open]);
 
   useEffect(() => {
@@ -138,18 +119,12 @@ export default function ApprovalPinDialog({
     setBusy(true);
     try {
       await setMyPin(password, pin);
-      setStatus((prev) => ({ ...prev, has_pin: true }));
+      setStatus(prev => prev && ({ ...prev, has_pin: true }));
       setPassword('');
       setPin('');
       setConfirmPin('');
       setSuccess(t('approval_pin.saved'));
-      if (status.external_verifier) {
-        try {
-          setStatus(await getMyPinStatus());
-        } catch (err) {
-          setError(overrideErrorMessage(err, 'approval_pin.load_failed'));
-        }
-      }
+      if (status?.external_verifier) await refresh();
     } catch (err) {
       setError(overrideErrorMessage(err, 'approval_pin.save_failed'));
     } finally {
@@ -168,6 +143,7 @@ export default function ApprovalPinDialog({
         ? { ...row, has_pin: result.has_pin, must_reset: result.must_reset, locked: false }
         : row));
       setSuccess(t('approval_pin.cleared', { name: member.full_name }));
+      await refresh();
     } catch (err) {
       setError(overrideErrorMessage(err, 'approval_pin.clear_failed'));
     } finally {
@@ -227,11 +203,11 @@ export default function ApprovalPinDialog({
             <div className="space-y-4 px-6 pb-5">
               {loading ? (
                 <Spinner message={t('common.loading')} />
-              ) : status.external_verifier && !canManageHere ? (
+              ) : status && !canManageHere ? (
                 <p className="rounded-lg border border-border bg-muted p-3 text-sm text-foreground">
                   {t('approval_pin.external_managed')}
                 </p>
-              ) : canManageHere && (
+              ) : status && canManageHere && (
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm text-muted-foreground">{t('approval_pin.status_label')}</span>
@@ -294,6 +270,7 @@ export default function ApprovalPinDialog({
                 </>
               )}
 
+              {loadFailed && <p role="alert">{t('approval_pin.load_failed')}</p>}
               {error && (
                 <p role="alert" className="text-sm text-destructive-700 dark:text-destructive-900">
                   {error}

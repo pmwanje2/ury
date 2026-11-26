@@ -710,6 +710,7 @@
     "back_to_dashboard": "Volver al panel"
   },
   "pos_opening": {
+    "occupied_till": "{{profile}} está abierto a nombre de {{holder}} desde {{since}}. {{holder}} debe cerrar el turno, o un gerente puede cerrarlo desde el área administrativa.",
     "title": "Abrir sesión de POS",
     "subtitle": "Inicia una nueva sesión de POS para comenzar a tomar pedidos",
     "session_details": "Detalle de la sesión",
@@ -1002,7 +1003,7 @@
   },
   "screen_size": {
     "desk_hint": "¿Necesita reportes o gestión administrativa en el móvil?",
-    "open_desk": "Abrir escritorio"
+    "open_desk": "Abrir el área administrativa"
   },
   "manager_approval": {
     "title": "Se requiere autorización de encargado",
@@ -1038,16 +1039,17 @@
     "error_reason": "Elige un motivo activo (y añade una nota breve si es obligatoria)."
   },
   "approval_pin": {
+    "status_external": "Gestión externa",
     "title": "Mi PIN de aprobación",
     "description": "Usa tu PIN personal para autorizar operaciones de caja sin cambiar de sesión.",
     "tab_my_pin": "Mi PIN de aprobación",
-    "tab_clear_staff": "PIN del personal",
+    "tab_clear_staff": "Borrar los PIN de aprobación del personal",
     "status_label": "Estado",
     "status_set": "PIN de aprobación configurado",
     "status_not_set": "Sin PIN de aprobación",
     "status_reset_required": "Restablecimiento requerido",
     "status_locked": "Bloqueado",
-    "external_managed": "Los PIN de aprobación de este sitio se administran desde el almacén PIN de caja del establecimiento.",
+    "external_managed": "El establecimiento gestiona los PIN de aprobación en un sistema externo.",
     "current_password": "Contraseña actual",
     "new_pin": "Nuevo PIN de aprobación",
     "confirm_pin": "Confirmar PIN de aprobación",

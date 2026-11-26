@@ -792,7 +792,7 @@
     "main_cashier_not_open": "The main cashier hasn't opened the register yet. Please wait or contact your main cashier.",
     "main_cashier_not_configured": "No main cashier is set up for this terminal. Contact your manager.",
     "session_already_open": "A session is already open for this terminal.",
-    "occupied_till": "{{profile}} is open under {{holder}} since {{since}}; {{holder}} must close the shift, or a manager closes it in Desk.",
+    "occupied_till": "{{profile}} is open under {{holder}} since {{since}}; {{holder}} must close the shift, or a manager closes it in Back Office.",
     "occupied_title": "Till already open",
     "joinable_till": "Till opened by {{holder}} since {{since}}",
     "continue": "Continue",
@@ -931,7 +931,7 @@
     "required": "Required: 1024px or larger",
     "mobile_note": "Mobile support will be available in a future update. Please use a device with a screen width of 1024px or larger.",
     "desk_hint": "Need reports or back-office tasks on mobile?",
-    "open_desk": "Open Desk"
+    "open_desk": "Open Back Office"
   },
   "dash_cards": {
     "no_baseline": "no baseline yet",
@@ -1267,16 +1267,17 @@
     "error_reason": "Choose an active reason (and add a short note if required)."
   },
   "approval_pin": {
+    "status_external": "Managed externally",
     "title": "My approval PIN",
     "description": "Use your personal approval PIN to authorise till overrides without switching sessions.",
     "tab_my_pin": "My approval PIN",
-    "tab_clear_staff": "Staff PINs",
+    "tab_clear_staff": "Clear staff approval PINs",
     "status_label": "Status",
     "status_set": "Approval PIN set",
     "status_not_set": "No approval PIN set",
     "status_reset_required": "Reset required",
     "status_locked": "Locked",
-    "external_managed": "Approval PINs on this site are managed by the property's cashier PIN store.",
+    "external_managed": "Your property manages approval PINs externally.",
     "current_password": "Current password",
     "new_pin": "New approval PIN",
     "confirm_pin": "Confirm approval PIN",
