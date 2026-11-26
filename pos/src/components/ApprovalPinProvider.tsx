@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useMatch } from 'react-router-dom';
 import { call } from '@ury/core';
 import ApprovalPinDialog from './ApprovalPinDialog';
 import { useMyPinStatus } from '../lib/use-my-pin-status';
@@ -24,8 +24,8 @@ function PinSession({ children, profile, namedStaff }: {
 }) {
   const [open, setOpen] = useState(false);
   const [canManagePins, setCanManagePins] = useState(false);
-  const { pathname } = useLocation();
-  const pin = useMyPinStatus(namedStaff && (open || pathname.replace(/\/$/, '') === '/settings'));
+  const onSettings = Boolean(useMatch('/settings'));
+  const pin = useMyPinStatus(namedStaff && (open || onSettings));
 
   useEffect(() => {
     if (!profile) return;
@@ -39,7 +39,12 @@ function PinSession({ children, profile, namedStaff }: {
   }, [profile]);
 
   const openDialog = () => {
-    if (pin.loadFailed) void pin.refresh();
+    if (!namedStaff || open) return;
+    // Settings already observes status. Elsewhere opening activates the first read.
+    if (onSettings) {
+      pin.setStatus(null);
+      void pin.refresh();
+    }
     setOpen(true);
   };
 
