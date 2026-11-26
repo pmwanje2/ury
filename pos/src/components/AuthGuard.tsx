@@ -14,6 +14,7 @@ import {
   needsFloorReconciliation,
   hasFloorLogoutFailureMarker,
   readFloorLogoutFailureMarker,
+  revokeStaleLogoutRetry,
   currentFloorGeneration,
   openFloorLogoutChannel,
   hasFloorSessionMarker,
@@ -152,7 +153,10 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
         const [failed, generation] = await Promise.all([readFloorLogoutFailureMarker(), currentFloorGeneration()]);
         if (!active || locked) return;
         const bound = boundTabGeneration();
-        if (bound !== undefined && bound !== generation) {
+        if (revokeStaleLogoutRetry(generation)) {
+          locked = true;
+          setGate('revoked');
+        } else if (bound !== undefined && bound !== generation) {
           // Another tab can already own the server cookie. Only lock this workspace.
           lockTab();
         } else if (failed) {

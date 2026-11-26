@@ -2,7 +2,7 @@ import { v4 as uuid } from 'uuid';
 import { readGeneration, writeGeneration, readLogoutMarker, writeLogoutMarker } from './logout-store';
 import { withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
-import { boundTabGeneration, clearTabConfirmation, setFloorSessionMarker } from './floor-tab';
+import { boundTabGeneration, clearTabConfirmation, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
 export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
 import { useEffect } from 'react';
 import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
@@ -106,14 +106,19 @@ function hasLogoutCookie(): boolean {
 
 export function hasFloorLogoutFailureMarker(): boolean {
   try {
-    if (hasLogoutCookie() || localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)) return true;
-    if (!sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)) return false;
-    // Migrate failures written by earlier POS bundles.
-    localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, getSessionUser() || 'true');
-    return true;
+    return !!(hasLogoutCookie() || localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)
+      || sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER));
   } catch {
     return true;
   }
+}
+
+// A private retry survives another tab clearing the shared failure markers.
+export function revokeStaleLogoutRetry(generation: string, retry = sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)): boolean {
+  if (retry === null || (generation !== '' && retry === generation)) return false;
+  revokeTabConfirmation();
+  sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER);
+  return true;
 }
 
 export async function readFloorLogoutFailureMarker(): Promise<boolean> {
@@ -214,6 +219,15 @@ export async function floorSignOut(stillRequested?: () => boolean, retryingFaile
 }
 
 export async function logoutWithFloorMarker(): Promise<boolean> {
+  // Recheck inside the outbox/login lock, including retries queued before a replacement login.
+  if (boundTabGeneration() === null) return false;
+  const privateRetry = sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER);
+  let current: string | undefined;
+  if (privateRetry !== null) {
+    current = await currentFloorGeneration().catch(() => undefined);
+    if (current === undefined || revokeStaleLogoutRetry(current, privateRetry)) return false;
+  }
+
   // Persist before the network request: the tab may close while logout is in flight.
   try { clearTabConfirmation(); } catch { /* Still attempt server logout. */ }
   let owner = 'true';
@@ -222,9 +236,7 @@ export async function logoutWithFloorMarker(): Promise<boolean> {
   try {
     localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, owner);
     localSaved = true;
-  } catch {
-    try { sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true'); } catch { /* Still attempt server logout. */ }
-  }
+  } catch { /* Use the generation-bound private marker when local storage is full. */ }
   try {
     await writeLogoutMarker(owner);
   } catch {
@@ -234,10 +246,15 @@ export async function logoutWithFloorMarker(): Promise<boolean> {
       catch { /* Still attempt server logout if the browser also refuses cookies. */ }
     }
   }
-  // Even an unreadable database must not prevent revocation through the other replicas.
-  const current = await currentFloorGeneration().catch(() => newestGeneration(undefined));
+  current ??= await currentFloorGeneration().catch(() => newestGeneration(undefined));
   let generation: string | undefined;
-  try { generation = await rotateGeneration(current); } catch { /* Still attempt to end the server session. */ }
+  try { generation = await rotateGeneration(current); } catch { /* Still attempt server logout. */ }
+  try {
+    if (!localSaved || privateRetry !== null) {
+      // An unpersisted generation cannot authorize a future server retry.
+      sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, generation ?? 'unbound');
+    }
+  } catch { /* The origin-wide failure markers still protect accessible storage. */ }
   announceSessionChange('logout', generation);
   try {
     if (await logout() === false) return false;
