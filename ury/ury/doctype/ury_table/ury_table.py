@@ -7,12 +7,14 @@ from frappe.model.naming import make_autoname
 import re
 class URYTable(Document):
     def before_save(self):
-        # Membership can change under the table lock without a Desk timestamp change.
-        # A form opened before that change must not overwrite the server-owned roster.
+        # Lifecycle transitions write directly under the table lock and may leave
+        # modified unchanged. A Desk form can therefore carry stale floor state.
         previous = self.get_doc_before_save()
-        if previous and self.seating_checks != previous.seating_checks:
-            self.occupied = previous.occupied
-        self.seating_checks = previous.seating_checks if previous and self.occupied else "[]"
+        if previous:
+            for field in ("occupied", "custom_table_state", "custom_dirty_since", "latest_invoice_time", "seating_checks"):
+                self.set(field, previous.get(field))
+        else:
+            self.seating_checks = "[]"
 
     def autoname(self):
         prefix = re.sub("-+", "-", self.restaurant.replace(" ", "-"))
