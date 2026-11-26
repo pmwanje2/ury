@@ -51,10 +51,11 @@ class TestOccupancyBoundary(unittest.TestCase):
                                 pos_invoice=younger.name)).db_insert()
         table_lifecycle.set_table_state(table.name, "Seated", since=younger.creation)
         versions = frappe.get_all("Version", filters={"ref_doctype": "URY Table", "docname": table.name},
-                                  pluck="data")
-        self.assertEqual(len(versions), 2)
-        for data in versions:
-            self.assertEqual([edit[0] for edit in json.loads(data)["changed"]], ["occupied"])
+                                  order_by="creation asc", pluck="data")
+        self.assertEqual(
+            [json.loads(data)["changed"] for data in versions],
+            [[["occupied", 0, 1]], [["occupied", 1, 0]], [["occupied", 0, 1]]],
+        )
         self.assertEqual(frappe.db.count("Version", {"ref_doctype": "POS Invoice",
                          "docname": ("in", [previous.name, owner.name]),
                          "data": ("like", '%"restaurant_table"%')}), 2)
