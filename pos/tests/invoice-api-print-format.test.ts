@@ -214,6 +214,7 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
   it('recovers a queued fiscal copy in the browser after QZ signing refusal on the original till', async () => {
     const { queuePendingFiscalReprint, flushPendingFiscalReprints } = await import('../src/lib/efris-print');
     localStorage.clear();
+    document.cookie = 'user_id=cashier-a; path=/';
     const invoice = 'FISCAL-7';
     const profile = makeProfile({ print_type: 'qz' });
     let started = false;
@@ -236,15 +237,36 @@ describe('printOrder and printBillCopy letterhead forwarding', () => {
     });
     await queuePendingFiscalReprint({ invoice, posProfile: profile });
     await flushPendingFiscalReprints(profile);
-    expect(localStorage.getItem('ury_pending_fiscal_reprints')).toContain(invoice);
+    expect(localStorage.getItem('ury_pending_fiscal_reprints:cashier-a')).toContain(invoice);
     vi.mocked(window.confirm).mockReturnValueOnce(false).mockReturnValue(true);
     await flushPendingFiscalReprints(profile);
     expect(navigate).toHaveBeenCalledWith('/printview?copy_number=1&render_grant=once');
     expect(call.post).toHaveBeenCalledWith('ury.ury_pos.api.confirm_bill_copy', {
       invoice, idempotency_key: 'efris-auto-FISCAL-7', dispatch_token: 'session-recovery',
     });
-    expect(localStorage.getItem('ury_pending_fiscal_reprints')).toBeNull();
+    expect(localStorage.getItem('ury_pending_fiscal_reprints:cashier-a')).toBeNull();
     expect(printWithQz).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])('can acknowledge a consumed browser copy after reload, printed=%s', async printed => {
+    vi.mocked(call.post).mockImplementation(async method => ({ message: method.endsWith('print_bill_copy')
+      ? { status: 'BROWSER_DISPATCHING', recovery_token: 'original-session', copy_number: 2 }
+      : { status: 'COMPLETED' } }));
+    vi.mocked(window.confirm).mockReturnValue(printed);
+    const job = printBillCopy({ orderId: 'F', posProfile: makeProfile({print_type: 'qz'}), idempotencyKey: 'efris-auto-F' });
+    if (printed) {
+      await expect(job).resolves.toMatchObject({status: 'COMPLETED'});
+      expect(call.post).toHaveBeenCalledWith('ury.ury_pos.api.confirm_bill_copy', {
+        invoice: 'F', idempotency_key: 'efris-auto-F', dispatch_token: 'original-session',
+      });
+    } else {
+      await expect(job).rejects.toThrow();
+      expect(call.post).toHaveBeenCalledTimes(1);
+    }
+    expect(window.confirm).toHaveBeenCalledOnce();
+    expect(printWithQz).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(call.post).not.toHaveBeenCalledWith(expect.stringContaining('begin_bill_copy_dispatch'), expect.anything());
   });
 
   it('keeps POS open and requires confirmation when a numbered QZ copy falls back', async () => {

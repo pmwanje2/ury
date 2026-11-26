@@ -25,6 +25,7 @@ const makeProfile = (): OfflineProfile => ({
 });
 
 beforeEach(() => {
+  document.cookie = 'user_id=cashier%40example.com; path=/';
   sessionStorage.clear();
   localStorage.clear();
   vi.stubGlobal("indexedDB", new IDBFactory());

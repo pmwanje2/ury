@@ -442,6 +442,47 @@ class SiteContracts(TestCase):
         for _ in range(2):
             self.assertEqual(api.confirm_bill_copy(invoice, key, proof)["status"], "COMPLETED")
 
+    def test_consumed_browser_copy_recovers_confirmation_only_on_original_till(self):
+        from ury.ury_pos import api
+
+        invoice, key, copy = self.fiscal_reservation("qz")
+        replay = lambda: api.print_bill_copy(invoice, key, delivery="qz")
+        api.begin_bill_copy_dispatch(invoice, key, copy["dispatch_token"], "qz")
+        claim = api.begin_bill_copy_dispatch(invoice, key, replay()["recovery_token"], "browser")
+        self.assertNotIn("recovery_token", replay())
+        self.render_copy(invoice, copy["copy_number"], claim["render_grant"])
+        with patch.dict(frappe.session, sid="different-till"):
+            self.assertNotIn("recovery_token", replay())
+
+        recovered = replay()
+        self.assertEqual(recovered["status"], "BROWSER_DISPATCHING")
+        self.assertNotIn("html", recovered)
+        self.assertNotIn("render_grant", recovered)
+        self.assertIn("recovery_token", recovered)
+        proof = recovered["recovery_token"]
+        for transport in ("qz", "browser"):
+            with self.subTest(transport=transport), self.assertRaises(frappe.PermissionError):
+                api.begin_bill_copy_dispatch(invoice, key, proof, transport)
+        with patch.dict(frappe.session, sid="different-till"), self.assertRaises(frappe.PermissionError):
+            api.confirm_bill_copy(invoice, key, proof)
+        for _ in range(2):
+            self.assertEqual(api.confirm_bill_copy(invoice, key, proof)["status"], "COMPLETED")
+
+    def test_registration_distinguishes_missing_intent_from_another_cashiers_job(self):
+        from ury.ury_pos import api
+
+        invoice = self.committed_copy()
+        with self.assertRaises(frappe.PermissionError) as absent:
+            api.queue_fiscal_reprint(invoice)
+        self.assertEqual(absent.exception.http_status_code, 410)
+        job = "PENDING-EFRIS-" + invoice
+        row(api._COPY_LOG, name=job, print_job_id=job, invoice=invoice,
+            job_owner="another-cashier", status="PENDING_RECEIPT")
+        with self.assertRaises(frappe.PermissionError) as forbidden:
+            api.queue_fiscal_reprint(invoice)
+        self.assertEqual(forbidden.exception.http_status_code, 403)
+        self.assertEqual(frappe.db.get_value(api._COPY_LOG, job, "status"), "PENDING_RECEIPT")
+
     def test_concurrent_guest_reprint_views_allow_one_render(self):
         from frappe.app import sync_database
 
