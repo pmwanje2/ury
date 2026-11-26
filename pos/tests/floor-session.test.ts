@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+
 // Theme T4 (fork #62 e56a8211/f6a8d7b9): ending a shared-tablet session always
 // clears the tab and returns to the floor pad, even when the server logout fails.
 
@@ -14,6 +16,7 @@ const boundary = vi.hoisted(() => ({
 }));
 
 vi.mock('@ury/core', () => ({
+  getSessionUser: () => 'waiter@example.test',
   logout: boundary.logout,
   disconnectQzPrinter: boundary.disconnectQzPrinter,
   watchIdle: () => () => {},
@@ -38,7 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   sessionStorage.clear();
-  sessionStorage.setItem('userAuth', 'waiter@example.test');
+  setFloorSessionMarker('waiter@example.test', false);
   localStorage.setItem('ury_language', 'fr');
   sessionStorage.setItem('posProfile', '{"name":"POS-1"}');
   replacement = vi.fn();
@@ -66,7 +69,7 @@ it('clears the tab, disconnects QZ and returns to the pad after a logout failure
   expect(localStorage.getItem('ury_language')).toBe('fr');
   expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
   expect(replacement).toHaveBeenCalledExactlyOnceWith('/pos/order');
-  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
+  expect(localStorage.getItem('ury_floor_logout_failed')).toBe('waiter@example.test');
 });
 
 it('treats a logout that resolves false as failed and sets the failed-logout marker', async () => {
@@ -75,7 +78,7 @@ it('treats a logout that resolves false as failed and sets the failed-logout mar
   const { floorSignOut } = await floorSession();
   await floorSignOut();
   expect(boundary.logout).toHaveBeenCalledOnce();
-  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
+  expect(localStorage.getItem('ury_floor_logout_failed')).toBe('waiter@example.test');
   expect(sessionStorage.getItem('userAuth')).toBeNull();
   expect(sessionStorage.getItem('posProfile')).toBeNull();
   expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
@@ -84,12 +87,12 @@ it('treats a logout that resolves false as failed and sets the failed-logout mar
 
 it('clears a stale failed-logout marker when logout succeeds', async () => {
   boundary.logout.mockResolvedValue(undefined);
-  sessionStorage.setItem('ury_floor_logout_failed', 'true');
+  localStorage.setItem('ury_floor_logout_failed', 'waiter@example.test');
   const { floorSignOut } = await floorSession();
   await floorSignOut();
   expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
   expect(replacement).toHaveBeenCalledExactlyOnceWith('/pos/order');
-  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
+  expect(localStorage.getItem('ury_floor_logout_failed')).toBeNull();
   expect(sessionStorage.getItem('userAuth')).toBeNull();
 });
 
@@ -135,6 +138,21 @@ it('preserves the session while offline orders await sync', async () => {
   const { floorSignOut } = await floorSession();
   await expect(floorSignOut()).resolves.toBe('blocked');
   expect(boundary.logout).not.toHaveBeenCalled();
-  expect(sessionStorage.getItem('userAuth')).toBe('waiter@example.test');
+  expect(hasFloorSessionMarker('waiter@example.test')).toBe(true);
   expect(replacement).not.toHaveBeenCalled();
+});
+
+it('retains confirmation on reload and rejects a copy inherited from the opener', () => {
+  const user = 'waiter@example.test';
+  window.name = 'unrelated-window';
+  setFloorSessionMarker(user, false);
+  const original = window.name;
+  expect(original).toMatch(/^ury-floor-tab:/);
+  expect(JSON.parse(sessionStorage.getItem('userAuth')!)).toMatchObject({ user, tabId: original });
+  expect(hasFloorSessionMarker(user)).toBe(true);
+  expect(hasFloorSessionMarker('other@example.test')).toBe(false);
+  window.name = '';
+  expect(hasFloorSessionMarker(user)).toBe(false);
+  window.name = 'another-window';
+  expect(hasFloorSessionMarker(user)).toBe(false);
 });

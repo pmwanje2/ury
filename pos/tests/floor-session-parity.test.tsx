@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as core from '@ury/core';
+import { hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
 import AuthGuard from '../src/components/AuthGuard';
 
 // Theme T4 (fork #70): idle sign-out on a paired floor tablet, configured on POS Profile.
@@ -68,7 +69,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'floor_pad', { configurable: true, value: { paired: true, till_open: true } });
   localStorage.clear();
   sessionStorage.clear();
-  sessionStorage.setItem('userAuth', 'waiter@example.com');
+  setFloorSessionMarker('waiter@example.com', false);
   boundary.auth.user = { name: 'waiter@example.com', roles: ['URY Captain'] };
   boundary.auth.posProfile = { floor_idle_signout_seconds: 60, custom_floor_stay_signed_in_roles: [] };
   boundary.logout.mockResolvedValue(undefined);
@@ -76,7 +77,7 @@ beforeEach(() => {
   const browserWindow = window;
   vi.stubGlobal('window', new Proxy(browserWindow, {
     get(target, key) {
-      if (key === 'location') return { replace: replacement };
+      if (key === 'location') return { replace: replacement, reload: vi.fn() };
       return Reflect.get(target, key, target);
     },
   }));
@@ -187,7 +188,7 @@ it('preserves the session while offline orders await sync', async () => {
   render(<AuthGuard><div>POS</div></AuthGuard>);
   await act(async () => vi.advanceTimersByTimeAsync(60000));
   expect(boundary.logout).not.toHaveBeenCalled();
-  expect(sessionStorage.getItem('userAuth')).toBe('waiter@example.com');
+  expect(hasFloorSessionMarker('waiter@example.com')).toBe(true);
   expect(replacement).not.toHaveBeenCalled();
 });
 
@@ -212,7 +213,23 @@ it('locks identity switching on cold boot until the existing outbox drains', asy
   guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
   render(<AuthGuard><div>Protected POS</div></AuthGuard>);
   await act(async () => {});
-  expect(container.querySelector('form, [aria-label="4-digit PIN"]')).toBeNull();
+  expect(container.querySelector('[data-client-order]')).toBeNull();
+  expect(reprint).not.toHaveBeenCalled();
+  expect(container.querySelector('[aria-label="4-digit PIN"]')).not.toBeNull();
+  const login = vi.spyOn(core.call, 'post').mockResolvedValue({ message: {} });
+  vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(boundary.auth.user.name);
+  for (const digit of '1234') {
+    const button = [...container.querySelectorAll('button')].find((el) => el.textContent === digit)!;
+    await act(async () => button.click());
+  }
+  expect(login).toHaveBeenCalledWith('ury.ury_pos.floor_pin.sign_in', {
+    pin: '1234', expected_user: boundary.auth.user.name,
+  });
+  // Remount the gate as the browser does after successful authentication.
+  act(() => root!.unmount());
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>Protected POS</div></AuthGuard>);
+  await act(async () => {});
   expect(container.textContent).not.toContain('Protected POS');
   expect(container.querySelector('[role=status]')).not.toBeNull();
   const print = container.querySelector<HTMLButtonElement>('[data-client-order="queued"] button');

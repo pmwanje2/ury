@@ -608,6 +608,14 @@ class TestFloorPin(unittest.TestCase):
 		self.assertLess(abs((end - before).total_seconds() - 1200), 2)
 		self.frappe.sessions.clear_sessions.assert_called_once_with(self.user, keep_current=True)
 
+	def test_recovery_pin_checks_expected_owner_before_starting_a_session(self):
+		api = self.pair()
+		self.refused("URY_FLOOR_PIN_REFUSED", Unauthenticated,
+			lambda: api.sign_in("0527", expected_user="another@example.test"))
+		self.frappe.local.login_manager.login_as.assert_not_called()
+		api.sign_in("0527", expected_user=self.user)
+		self.assertEqual(self.frappe.local.login_manager.login_as.call_args.args, (self.user,))
+
 	def test_sign_in_returns_csrf_token_and_pops_pin_from_form_dict(self):
 		self.pair()
 		result = self.sign_in()

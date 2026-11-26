@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initI18n } from '../src/i18n';
+import { hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
 import AuthGuard from '../src/components/AuthGuard';
 
 // Theme T4 (fork #62): paired floor tablets show an in-app PIN pad while the till is open.
@@ -35,6 +36,7 @@ const boundary = vi.hoisted(() => ({
 vi.mock('@ury/core', () => ({
   call: { post: boundary.callPost },
   auth: { loginWithUsernamePassword: boundary.login, getLoggedInUser: async () => 'waiter@example.test' },
+  getSessionUser: () => 'waiter@example.test',
   logout: boundary.logout,
   disconnectQzPrinter: boundary.disconnectQzPrinter,
   watchIdle: () => () => {},
@@ -135,17 +137,17 @@ describe('paired floor tablet sign-in', () => {
       'ury.ury_pos.floor_pin.sign_in', { pin: '0527' },
     );
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('0527');
-    expect(sessionStorage.getItem('userAuth')).toBe('waiter@example.test');
+    expect(hasFloorSessionMarker('waiter@example.test')).toBe(true);
     expect(reload).toHaveBeenCalledExactlyOnceWith();
   });
 
   it('keeps a failed-logout guest on password sign-in until authenticated', async () => {
     boundary.callPost.mockResolvedValue({ message: { csrf_token: 'fresh-csrf' } });
-    sessionStorage.setItem('ury_floor_logout_failed', 'true');
+    localStorage.setItem('ury_floor_logout_failed', 'waiter@example.test');
     await render();
     expect(container.querySelector('input[type=password]')).not.toBeNull();
     expect(container.querySelector('[aria-label="4-digit PIN"]')).toBeNull();
-    expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
+    expect(localStorage.getItem('ury_floor_logout_failed')).not.toBeNull();
   });
 
   it('clears the visible PIN after the attempt and ignores a fifth press while busy', async () => {
@@ -251,13 +253,13 @@ describe('paired floor tablet sign-in', () => {
     expect(sessionStorage.getItem('userAuth')).toBeNull();
     await act(async () => { setInput(otp, '000002'); submit(); });
     expect(boundary.login).toHaveBeenLastCalledWith({ tmp_id: 'challenge', otp: '000002' });
-    expect(sessionStorage.getItem('userAuth')).toBe('waiter@example.test');
+    expect(hasFloorSessionMarker('waiter@example.test')).toBe(true);
     expect(reload).toHaveBeenCalledOnce();
   });
 
   it('replaces a failed logout with confirmed password authentication', async () => {
     boundary.login.mockResolvedValue({ message: 'Logged In' });
-    sessionStorage.setItem('ury_floor_logout_failed', 'true');
+    localStorage.setItem('ury_floor_logout_failed', 'waiter@example.test');
     await render();
     const username = container.querySelector<HTMLInputElement>('input[name="user_id"]');
     const password = container.querySelector<HTMLInputElement>('input[name="currentPassword"]');
@@ -271,8 +273,8 @@ describe('paired floor tablet sign-in', () => {
     expect(boundary.login).toHaveBeenCalledExactlyOnceWith({
       username: 'waiter@example.test', password: 'secret',
     });
-    expect(sessionStorage.getItem('userAuth')).toBe('waiter@example.test');
-    expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
+    expect(hasFloorSessionMarker('waiter@example.test')).toBe(true);
+    expect(localStorage.getItem('ury_floor_logout_failed')).toBeNull();
   });
 
   it('clears the password after a failed username sign-in', async () => {
@@ -336,7 +338,7 @@ describe('floor session isolation', () => {
   });
 
   it.each([false, true])('keeps a provisional cookie on the paired sign-in screen (tab marker: %s)', async (marker) => {
-    if (marker) sessionStorage.setItem('userAuth', 'waiter@example.test');
+    if (marker) setFloorSessionMarker('waiter@example.test', false);
     boundary.state.user = { name: 'waiter@example.test', roles: ['URY Captain'], provisional: true };
     boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [] };
     await render();
@@ -373,7 +375,7 @@ describe('floor session isolation', () => {
   });
 
   it('keeps a signed-in waiter with the tab marker in the app', async () => {
-    sessionStorage.setItem('userAuth', 'waiter@example.test');
+    setFloorSessionMarker('waiter@example.test', false);
     boundary.state.user = { name: 'waiter@example.test', roles: ['URY Captain'] };
     boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [] };
     await render();
@@ -387,13 +389,13 @@ describe('floor session isolation', () => {
     boundary.logout.mockResolvedValue(false);
     boundary.state.user = { name: 'captain@example.test', roles: ['URY Captain'] };
     boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [] };
-    sessionStorage.setItem('ury_floor_logout_failed', 'true');
+    localStorage.setItem('ury_floor_logout_failed', 'waiter@example.test');
     await render();
     expect(container.querySelector('input[type=password]')).not.toBeNull();
     expect(container.textContent).not.toContain('Captain shell');
     expect(boundary.logout).toHaveBeenCalledOnce();
     expect(replace).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
+    expect(localStorage.getItem('ury_floor_logout_failed')).not.toBeNull();
   });
 
   it('leaves an unpaired device on the normal signed-in flow', async () => {

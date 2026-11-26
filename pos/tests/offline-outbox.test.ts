@@ -409,3 +409,34 @@ test('lets the authenticated owner retry a reviewed order after correcting its c
   await q.retryReviewed(row.client_order_id);
   expect(await q.list()).toEqual([]);
 });
+
+test('reprints and replays a previously captured tender after disabling capture', async () => {
+  const q = await outbox();
+  const row = await q.capture(data, 100);
+  print.mockResolvedValueOnce(false);
+  await q.settle(row.client_order_id, { kind: 'cash', mode_of_payment: 'Cash', amount: 100 });
+  const recovery = await outbox({ profile: { ...profile, ury_offline_capture: false } });
+  await expect(recovery.capture(data, 100)).rejects.toThrow();
+  await recovery.reprint(row.client_order_id, 'bill');
+  await recovery.replay();
+  expect(sends.at(-1)?.method).toContain('make_invoice');
+  expect(await recovery.list()).toEqual([]);
+});
+
+test('requires a matching submitted invoice to resolve a refused row on a disabled outlet', async () => {
+  const q = await outbox();
+  const row = await q.capture(data, 100);
+  const recovery = await outbox({ profile: { ...profile, ury_offline_capture: 0, currency: 'USD' } });
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json('Offline capture disabled', 417));
+  await recovery.replay();
+  expect((await recovery.list())[0].state).toBe('review');
+  const invoice = { name: 'INV-12', docstatus: 1, pos_profile: profile.name, customer: data.customer, grand_total: 100, currency: 'USD', is_return: 0 };
+  for (const change of [{ pos_profile: 'Other' }, { grand_total: 10 }, { docstatus: 2 }]) {
+    request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json({ ...invoice, ...change }));
+    await expect(recovery.resolveReviewed(row.client_order_id, invoice.name)).rejects.toThrow();
+    expect(await recovery.list()).toHaveLength(1);
+  }
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json(invoice));
+  await recovery.resolveReviewed(row.client_order_id, invoice.name);
+  await recovery.assertEmpty();
+});
