@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from contextlib import contextmanager
 from decimal import Decimal, ROUND_HALF_UP
+from fractions import Fraction
 
 import frappe
 from frappe import _
@@ -54,6 +55,13 @@ def _amount(minor, places):
     return float(Decimal(minor).scaleb(-places))
 
 
+def _prorate_minor(minor, ratio):
+    """Round the exact share to the nearest minor unit, with ties away from zero."""
+    magnitude, remainder = divmod(abs(minor) * ratio.numerator, ratio.denominator)
+    rounded = magnitude + (2 * remainder >= ratio.denominator)
+    return -rounded if minor < 0 else rounded
+
+
 def _partition(fields, row, ratios, currency_places, base_places, *, stock_places=None):
     parent, child = {}, {}
     for field in fields:
@@ -67,8 +75,8 @@ def _partition(fields, row, ratios, currency_places, base_places, *, stock_place
         else:
             places = base_places if field.startswith("base_") else currency_places
         minor = _units(value, places)
-        ratio = ratios.get(field, ratios.get("*", Decimal(0)))
-        moved = int((minor * ratio).to_integral_value(rounding=ROUND_HALF_UP))
+        ratio = ratios.get(field, ratios.get("*", 0))
+        moved = _prorate_minor(minor, ratio)
         parent[field], child[field] = _amount(minor - moved, places), _amount(moved, places)
     return parent, child
 
@@ -79,7 +87,7 @@ def _net(row, base=False):
 
 
 def _ratio(part, whole):
-    return min(Decimal(1), max(Decimal(0), part / whole)) if whole else Decimal(0)
+    return min(1, max(0, Fraction(part) / Fraction(whole))) if whole else 0
 
 
 def _fixed_tax_weights(item_names, source_rows, amount):
@@ -205,7 +213,7 @@ def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_
     row_ratios = dict(fallback)
     totals = {field: sum((_decimal(detail.get(field)) for detail in details), Decimal(0))
               for field in DETAIL_AMOUNTS}
-    moved = {field: sum((_decimal(detail.get(field)) * ratios[detail["item"]] for detail in details), Decimal(0))
+    moved = {field: sum(Fraction(_decimal(detail.get(field))) * ratios[detail["item"]] for detail in details)
              for field in DETAIL_AMOUNTS}
     for prefix in ("", "base_"):
         for field, detail_field in TAX_DETAIL_FIELDS.items():
@@ -282,7 +290,8 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
     # Match ERPNext's stock ledger rounding on actual POS documents.
     stock_places = (frappe.get_precision("Stock Ledger Entry", "actual_qty")
                     if getattr(check, "doctype", None) == "POS Invoice" else None)
-    local_total = base_total = local_move = base_move = Decimal(0)
+    local_total = base_total = Decimal(0)
+    local_move = base_move = Fraction(0)
     total_qty = moved_qty = Decimal(0)
     for row in check.get("items") or ():
         qty = _decimal(row.get("qty"))
@@ -298,9 +307,9 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
         total_qty += qty
         moved_qty += move
         local_total += _net(row)
-        local_move += _net(row) * ratio
+        local_move += Fraction(_net(row)) * ratio
         base_total += _net(row, base=True)
-        base_move += _net(row, base=True) * ratio
+        base_move += Fraction(_net(row, base=True)) * ratio
 
     local_ratio = _ratio(local_move, local_total) if local_total else _ratio(moved_qty, total_qty)
     base_ratio = _ratio(base_move, base_total) if base_total else local_ratio
@@ -425,8 +434,8 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
                 for row in child["taxes"]
             )
             other = _units(check.get(grand), places) - _units(check.get(net), places) - original_tax
-            child_grand = _units(child_header[net], places) + child_tax + int(
-                (other * (base_ratio if prefix else local_ratio)).to_integral_value(rounding=ROUND_HALF_UP)
+            child_grand = _units(child_header[net], places) + child_tax + _prorate_minor(
+                other, base_ratio if prefix else local_ratio,
             )
             child_header[grand] = _amount(child_grand, places)
             source["header"][grand] = _amount(_units(check.get(grand), places) - child_grand, places)

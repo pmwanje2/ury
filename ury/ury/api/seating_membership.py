@@ -148,15 +148,29 @@ def _print_released_drafts(frappe, table, drafts, boundary, opener, clock):
         policy = table_policy(frappe.db.get_value("URY Table", table.name, "branch"))
         if policy.get("custom_table_release_trigger") == ON_SETTLEMENT or policy.get("custom_enable_bussing_state"):
             return set()
-        # An overlapping unprinted sibling would have kept the old seating open.
-        open_arrivals = [arrivals.get(row.name, row.creation) for row in drafts if not row.invoice_printed]
-        boundary = min(open_arrivals, default=clock)
-    if boundary is None:
-        return set()
+
     receipts = frappe.get_all("POS Invoice", filters={"name": ("in", printed)},
                               fields=["name", "custom_printing_time", "modified"])
-    return {row.name for row in receipts if (row.custom_printing_time or row.modified) < boundary
-                and (row.name not in arrivals or arrivals[row.name] < boundary)}
+    arrival = {row.name: arrivals.get(row.name, row.creation) for row in drafts}
+    last_present = {row.name: max(arrival[row.name], row.custom_printing_time or row.modified) for row in receipts}
+    if boundary is not None:
+        return {name for name, end in last_present.items() if end < boundary}
+
+    # Without a release audit, reconstruct the uninterrupted chain of open checks.
+    # A printed check still belonged to this party if another member was open at print.
+    active = {row.name for row in drafts if not row.invoice_printed}
+    if not active:
+        if clock is None:
+            return set()
+        active = {name for name, end in last_present.items() if end >= clock}
+    while active:
+        family = _split_family(frappe, drafts, active)
+        start = min(arrival[name] for name in family)
+        overlaps = {name for name, end in last_present.items() if end >= start}
+        if overlaps <= family:
+            return set(printed) - family
+        active = family | overlaps
+    return set(printed)
 
 
 def _legacy_checks(frappe, table):

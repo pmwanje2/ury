@@ -377,6 +377,21 @@ function BillSplitDialog(props: BillSplitDialogProps) {
     : <LegacyBillSplitDialog {...props} />;
 }
 
+// BigInt division truncates towards zero. Adding half the positive denominator
+// to the magnitude makes both positive and negative ties round away from zero.
+function divideHalfUp(numerator: bigint, denominator: bigint): bigint {
+  const half = denominator / 2n;
+  return (numerator + (numerator < 0n ? -half : half)) / denominator;
+}
+
+function scaledUnits(value: number, places: number): bigint {
+  const [mantissa, exponent = '0'] = String(value).toLowerCase().split('e');
+  const [whole, fraction = ''] = mantissa.split('.');
+  const digits = BigInt(whole + fraction);
+  const shift = places + Number(exponent) - fraction.length;
+  return shift >= 0 ? digits * 10n ** BigInt(shift) : divideHalfUp(digits, 10n ** BigInt(-shift));
+}
+
 // Match the server's four-decimal split quantities, including the final share's remainder.
 function manualPaneTotals(items: BillSplitItem[], panes: Array<Record<string, number>>, currency?: string) {
   const children = new Map<string, BillSplitItem[]>();
@@ -388,39 +403,39 @@ function manualPaneTotals(items: BillSplitItem[], panes: Array<Record<string, nu
     children.set(key, siblings);
   }
 
-  const scale = 10 ** currencyFractionDigits(currency || siteCurrencyCode() || '');
-  const allocated = new Map<string, number>();
-  const remainingAmounts = new Map<string, number>();
+  const places = currencyFractionDigits(currency || siteCurrencyCode() || '');
+  const allocated = new Map<string, bigint>();
+  const remainingAmounts = new Map<string, bigint>();
   return panes.map((pane) => {
-    let total = 0;
+    let total = 0n;
     const visited = new Set<string>();
-    function addLine(item: BillSplitItem, units: number) {
-      const available = Math.round(item.qty * 10000);
-      if (units <= 0 || available <= 0 || visited.has(item.name)) return;
+    function addLine(item: BillSplitItem, units: bigint) {
+      const available = scaledUnits(item.qty, 4);
+      if (units <= 0n || available <= 0n || visited.has(item.name)) return;
       visited.add(item.name);
-      const previous = allocated.get(item.name) ?? 0;
+      const previous = allocated.get(item.name) ?? 0n;
       if (previous >= available) return;
       const moved = previous + units;
       allocated.set(item.name, moved);
       // Partition the remaining line amount in currency minor units, as each check is created.
-      const amount = remainingAmounts.get(item.name) ?? Math.round(Math.abs(item.amount) * scale) * Math.sign(item.amount);
-      const shareAmount = Math.sign(amount) * Math.round(Math.abs(amount) * units / (available - previous));
+      const amount = remainingAmounts.get(item.name) ?? scaledUnits(item.amount, places);
+      const shareAmount = divideHalfUp(amount * units, available - previous);
       remainingAmounts.set(item.name, amount - shareAmount);
       total += shareAmount;
       for (const child of children.get(item.reservation_line_key || item.name) ?? []) {
-        const childUnits = Math.round(child.qty * 10000);
+        const childUnits = scaledUnits(child.qty, 4);
         const share = moved === available
-          ? childUnits - (allocated.get(child.name) ?? 0)
-          : Math.floor(childUnits * units / available);
+          ? childUnits - (allocated.get(child.name) ?? 0n)
+          : childUnits * units / available;
         addLine(child, share);
       }
     }
     for (const item of items) {
       if (!item.custom_parent_line_key && pane[item.name] > 0) {
-        addLine(item, Math.round(pane[item.name] * 10000));
+        addLine(item, scaledUnits(pane[item.name], 4));
       }
     }
-    return total / scale;
+    return Number(total) / 10 ** places;
   });
 }
 
