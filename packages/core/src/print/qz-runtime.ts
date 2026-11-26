@@ -6,7 +6,7 @@ export interface QzBridge {
   version?: string;
   api?: { setPromiseType(createPromise: <T>(executor: PromiseExecutor<T>) => Promise<T>): void };
   security: {
-    setCertificatePromise(callback: QzCallback): void;
+    setCertificatePromise(callback: QzCallback, options?: { rejectOnFailure: boolean }): void;
     setSignatureAlgorithm(algorithm: 'SHA512'): void;
     setSignaturePromise(callback: (message: string) => QzCallback): void;
   };

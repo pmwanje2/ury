@@ -722,6 +722,7 @@ fixtures = [
                     "POS Profile-printer_settings",
                     "POS Profile-qz_print",
                     "POS Profile-qz_host",
+                    "POS Profile-custom_qz_receipt_queue",
                     "POS Profile-section_break_tjhrm",
                     "POS Profile-transfer_role_permissions",
                     "POS Profile-role_allowed_for_billing",

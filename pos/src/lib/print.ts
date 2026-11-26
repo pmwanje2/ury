@@ -34,11 +34,28 @@ export interface PrintBillCopyResult {
 
 export interface PrintBillCopyParams {
   orderId: string;
-  posProfile: Pick<PosProfileCombined, 'print_type' | 'qz_host' | 'letter_head'>;
+  posProfile: Pick<PosProfileCombined, 'print_type' | 'qz_host' | 'letter_head'> & Partial<Pick<PosProfileCombined, 'printer'>>;
   idempotencyKey: string;
   approvalToken?: string;
   reason?: string;
   reasonNote?: string;
+}
+
+export async function deliverQzReceipt(
+  profile: { qz_host?: string | null; printer?: string | null },
+  html: string,
+): Promise<boolean> {
+  try {
+    await printWithQz(profile.qz_host || 'localhost', html, profile.printer);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'QzSigningRefusedError') throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!window.confirm(`QZ Tray could not confirm printing (${detail}). Check the printer for a receipt. Print in the browser?`)) {
+      throw error;
+    }
+    return false;
+  }
 }
 
 export async function printBillCopy({
@@ -68,20 +85,17 @@ export async function printBillCopy({
   if (result.status === 'FAILED') {
     throw new Error(result.failure_reason || 'Copy print failed');
   }
-  if (delivery === 'qz') {
-    if (!posProfile.qz_host) {
-      throw new Error('QZ host is not set');
-    }
-    if (result.html) {
-      await printWithQz(posProfile.qz_host, result.html);
-    }
-  } else if (delivery === 'browser') {
+  let fallback = false;
+  if (delivery === 'qz' && result.html) {
+    fallback = !await deliverQzReceipt(posProfile, result.html);
+  }
+  if (delivery === 'browser' || fallback) {
     const copyParam = result.copy_number ? `&copy_number=${result.copy_number}` : '';
     const { queryString: letterheadParams } = buildLetterheadParams(posProfile.letter_head);
     const url =
       result.print_url ||
       `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}&format=URY%20Bill%20Copy${letterheadParams}&trigger_print=1${copyParam}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    window.open(url, fallback ? '_self' : '_blank', fallback ? undefined : 'noopener,noreferrer');
   }
   return result;
 }
@@ -100,16 +114,11 @@ export async function printOrder({
   const format = resolvePrintFormat({ custom_merged_pos_invoice: null }, printFormat || print_format);
   const auth = approvalToken || reason || reasonNote ? { approvalToken, reason, reasonNote } : undefined;
 
-  if (print_type === 'qz') {
-    if (!qz_host) {
-      throw new Error('QZ host is not set');
-    }
+  const fallback = print_type === 'qz';
+  if (fallback) {
     const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
-    await printWithQz(qz_host, html);
-    if (!skipStatusUpdate) {
-      await updatePrintStatus(orderId, auth);
-    }
-    return 'qz';
+    if (!skipStatusUpdate) await updatePrintStatus(orderId, auth);
+    if (await deliverQzReceipt({ qz_host, printer }, html)) return 'qz';
   } else if (print_type === 'network') {
     if (cashier && !multiple_cashier) {
       await networkPrint(orderId, printer as string, format as string, auth);
@@ -120,16 +129,11 @@ export async function printOrder({
       await updatePrintStatus(orderId);
     }
     return 'network';
-  } else {
-    // Authorize and record bill print before opening the browser printview tab.
-    if (!skipStatusUpdate) {
-      await updatePrintStatus(orderId, auth);
-    }
-    // Redirect to printview page, respecting configured POS Profile letter_head
-    const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
-    const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
-    const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-    return 'socket';
   }
+  if (!fallback && !skipStatusUpdate) await updatePrintStatus(orderId, auth);
+  const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
+  const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
+  const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
+  window.open(url, fallback ? '_self' : '_blank', fallback ? undefined : 'noopener,noreferrer');
+  return 'socket';
 }

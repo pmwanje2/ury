@@ -121,7 +121,7 @@ it('Desk unfreezes after an approved printer lookup followed by a refused print'
           return Promise.reject(denied);
         }
         const message = method === signMethod ? 'approved signature'
-          : method.endsWith('qz_certificate') ? 'certificate.pem'
+          : method.endsWith('qz_certificate') ? '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----'
             : method.endsWith('get_html_and_style') ? { html: '<p>receipt</p>' } : { status: 'Success' };
         return Promise.resolve({ message }).then((response) => { callback?.(response); return response; });
       },

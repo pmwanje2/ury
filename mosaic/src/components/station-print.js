@@ -1,4 +1,4 @@
-import { QzSigningRefusedError, runSignedQz } from '../../../ury/public/js/qz-signing.js';
+import { connectQz, QzSigningRefusedError, runSignedQz, withQzDeadline } from '../../../ury/public/js/qz-signing.js';
 
 // QZ remains Frappe's unmodified desktop bridge; signing stays on the server.
 export function loadQz({ window = globalThis.window, document = globalThis.document } = {}) {
@@ -26,23 +26,9 @@ function resolveBackupTarget(settings) {
   return null;
 }
 
-function withPrintDeadline(operation) {
-  const controller = new AbortController();
-  let timer;
-  const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      const error = new Error("PRINTER_TIMEOUT");
-      controller.abort(error);
-      reject(error);
-    }, 8000);
-  });
-  return Promise.race([Promise.resolve().then(() => operation(controller.signal)), deadline])
-    .finally(() => clearTimeout(timer));
-}
-
 function printFailureCode(error, fallback) {
   if (error instanceof QzSigningRefusedError) return "QZ_SIGNING_REFUSED";
-  if (error?.message === "PRINTER_TIMEOUT") return "PRINTER_TIMEOUT";
+  if (["QZ_TRUST_TIMEOUT", "PRINTER_TIMEOUT", "QZ_NOT_RUNNING"].includes(error?.message)) return error.message;
   if (fallback === "QZ_UNAVAILABLE" && /Cannot find printer/i.test(String(error?.message ?? error))) {
     return "PRINTER_NOT_FOUND";
   }
@@ -51,7 +37,7 @@ function printFailureCode(error, fallback) {
 
 export function createStationPrinter({
   production, user, call, storage = globalThis.localStorage, qz,
-  fetch = globalThis.fetch, now = Date.now, onChange = () => {},
+  now = Date.now, onChange = () => {},
   serverSettings = null,
 }) {
   const prefix = `ury:mosaic:station-print:${production}`;
@@ -87,19 +73,19 @@ export function createStationPrinter({
   const pending = new Set();
   let qzReady;
 
+  async function publicCertificate() {
+    const { message } = await call.get("ury.ury.api.ury_print.qz_certificate", {});
+    if (!message?.startsWith("-----BEGIN CERTIFICATE-----")) throw Error("QZ certificate is not configured");
+    return message;
+  }
+
   function getQz() {
     if (!qzReady) {
       qzReady = (async () => {
         const bridge = qz || await loadQz();
         bridge.security.setCertificatePromise((resolve, reject) => {
-          call.get("ury.ury.api.ury_print.qz_certificate", {}).then(async ({ message }) => {
-            if (!message) throw Error("QZ certificate is not configured");
-            if (message.includes("-----BEGIN CERTIFICATE-----")) return message;
-            const response = await fetch(`/private/${message.split("/").map(encodeURIComponent).join("/")}`, { cache: "no-store", credentials: "same-origin" });
-            if (!response.ok) throw Error("QZ certificate is unavailable");
-            return response.text();
-          }).then(resolve, reject);
-        });
+          publicCertificate().then(resolve, reject);
+        }, { rejectOnFailure: true });
         return bridge;
       })().catch(error => { qzReady = null; throw error; });
     }
@@ -123,14 +109,18 @@ export function createStationPrinter({
     }
   }
 
-  function sendToTarget(bridge, target, data, signal, onConnected) {
+  function sendToTarget(bridge, target, data, signal, startPrinting, onConnected) {
     // QZ rasterises raw HTML at pageWidth dots (without it the ticket is an 8-dot blank strip). Double density
     // prints one dot per column; QZ's single-density default prints each column twice and cuts the ticket in half.
     // Raster mode is for generic ESC/POS clones that mishandle ESC * images: QZ sends GS v 0 instead.
     const image = settings.commandMode === "raster" ? { imageEncoding: "GS_V_0" } : { dotDensity: "double" };
     return runSignedQz(bridge, postSignature, async () => {
-      if (!bridge.websocket.isActive()) await bridge.websocket.connect();
+      if (!bridge.websocket.isActive()) {
+        try { await connectQz(bridge, publicCertificate); }
+        catch (cause) { throw new Error("QZ_NOT_RUNNING", { cause }); }
+      }
       signal.throwIfAborted();
+      startPrinting();
       onConnected?.();
       await bridge.print(bridge.configs.create(target), [
         { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth, ...image } },
@@ -152,7 +142,7 @@ export function createStationPrinter({
     let renderedData = "";
     let bridgeInstance = null;
 
-    const job = async (signal) => {
+    const job = async (signal, startPrinting) => {
       const { message } = await call.get("frappe.www.printview.get_html_and_style", {
         doc: "URY KOT", name: kot.name, print_format: settings.printFormat,
       });
@@ -163,13 +153,13 @@ export function createStationPrinter({
       renderedData = `${message.style ? `<style>${message.style}</style>` : ""}${message.html}`;
       // QZ resolves a name to an OS print queue (USB or installed network printer); host is a raw socket.
       const target = settings.printer || { host: settings.host, port: Number(settings.port) };
-      await sendToTarget(bridge, target, renderedData, signal, () => { bridgeInstance = bridge; });
+      await sendToTarget(bridge, target, renderedData, signal, startPrinting, () => { bridgeInstance = bridge; });
     };
 
     let outcome;
     let failoverLabel = "";
     try {
-      await withPrintDeadline(job);
+      await withQzDeadline(job);
       printed.add(kot.name);
       storage.setItem(`${prefix}:printed`, JSON.stringify([...printed]));
       failures.delete(kot.name);
@@ -180,7 +170,7 @@ export function createStationPrinter({
       const backup = code === "QZ_SIGNING_REFUSED" ? null : resolveBackupTarget(settings);
       if (backup && renderedData && bridgeInstance) {
         try {
-          await withPrintDeadline(signal => sendToTarget(bridgeInstance, backup.target, renderedData, signal));
+          await withQzDeadline((signal, startPrinting) => sendToTarget(bridgeInstance, backup.target, renderedData, signal, startPrinting));
           printed.add(kot.name);
           storage.setItem(`${prefix}:printed`, JSON.stringify([...printed]));
           failures.delete(kot.name);
@@ -267,11 +257,16 @@ export function createStationPrinter({
       storage.setItem(`${prefix}:settings`, JSON.stringify(settings));
       return { ...settings };
     },
+    publicCertificate,
     async listPrinters() {
-      const bridge = await getQz();
-      return runSignedQz(bridge, postSignature, async () => {
-        if (!bridge.websocket.isActive()) await bridge.websocket.connect();
-        return bridge.printers.find();
+      return withQzDeadline(async (signal, startLookup) => {
+        const bridge = await getQz();
+        return runSignedQz(bridge, postSignature, async () => {
+          await connectQz(bridge, publicCertificate);
+          signal.throwIfAborted();
+          startLookup();
+          return bridge.printers.find();
+        }, signal);
       });
     },
     process,

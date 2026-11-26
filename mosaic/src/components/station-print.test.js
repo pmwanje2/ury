@@ -403,6 +403,7 @@ async function renderSettings(stationSettings, installedPrinters) {
 test("the settings dialog offers installed printers plus a manual network host option", async () => {
   const html = await renderSettings(settings({ host: "", printer: "KITCHEN-RAW" }), ["KITCHEN-RAW", "BAR-RAW"]);
 
+  assert.match(html, /Download QZ Certificate \(\.pem\)/);
   assert.match(html, /<select[^>]*>/);
   // Vue SSR writes an empty value as a bare attribute and has no SSR props for v-model selection.
   assert.match(html, /<option value>Network printer \(host and port\)<\/option>/);

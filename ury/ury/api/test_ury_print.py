@@ -227,7 +227,7 @@ class TestQzPrintUpdate(BillPrintTestCase):
 			result = qz_print_update("INV-001")
 
 		self.assertEqual(result, {"status": "Success"})
-		mock_release.assert_called_once_with("T-01")
+		mock_release.assert_called_once_with("T-01", printed=True, branch=None)
 
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
@@ -279,7 +279,7 @@ class TestPrintPosPage(BillPrintTestCase):
 			{"invoice_printed": 1, "custom_printing_time": ANY},
 			update_modified=True,
 		)
-		mock_release.assert_called_once_with("T-01")
+		mock_release.assert_called_once_with("T-01", printed=True, branch="Branch-1")
 
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
@@ -351,7 +351,7 @@ class TestQzCertificate(FrappeTestCase):
 		from cryptography import x509
 		from cryptography.hazmat.primitives.serialization import Encoding
 		from pathlib import Path
-		cert_value = x509.load_pem_x509_certificates(Path(where()).read_bytes())[0].public_bytes(Encoding.PEM).decode()
+		cert_value = x509.load_pem_x509_certificate(Path(where()).read_bytes()).public_bytes(Encoding.PEM).decode()
 		mock_get_config.return_value = {"qz_cert": cert_value}
 
 		result = qz_certificate()

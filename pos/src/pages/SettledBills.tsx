@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { call, parseFrappeError, printWithQz } from '@ury/core';
+import { deliverQzReceipt } from '../lib/print';
+import { call, parseFrappeError } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
 import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
@@ -127,8 +128,8 @@ export default function SettledBills() {
         ...(approval?.note ? { reason_note: approval.note } : {}),
       });
       if (result.delivery === 'qz' && result.html) {
-        const qzHost = usePOSStore.getState().posProfile?.qz_host;
-        if (qzHost) await printWithQz(qzHost, result.html);
+        const printed = await deliverQzReceipt(usePOSStore.getState().posProfile || {}, result.html);
+        if (!printed && result.print_url) window.open(result.print_url, '_self');
       } else if (result.delivery === 'browser' && result.print_url) {
         window.open(result.print_url, '_blank', 'noopener,noreferrer');
       }

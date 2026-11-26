@@ -496,7 +496,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
             return;
           }
 
-          const print = await printWithQz(this.qz_host, result?.message?.html);
+          const print = await printWithQz(this.qz_host, result?.message?.html, this.printer);
 
           if (print === "printed") {
             const updateSuccess = await this.updatePrintTable(invoiceNo);

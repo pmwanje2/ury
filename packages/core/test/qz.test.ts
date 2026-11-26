@@ -31,7 +31,8 @@ it('loads one Frappe bridge, connects, signs and prints to the default printer',
   };
   disconnectQzPrinter();
   expect(scripts()).toHaveLength(0);
-  bridge.websocket.isActive.mockReturnValueOnce(false);
+  bridge.websocket.isActive.mockReturnValue(false);
+  bridge.websocket.connect.mockImplementation(async () => { bridge.websocket.isActive.mockReturnValue(true); });
   const connect = loadQzPrinter('localhost');
   const print = printWithQz('localhost', '<p>receipt</p>');
   expect(scripts()).toHaveLength(1);

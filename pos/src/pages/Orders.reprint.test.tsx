@@ -191,7 +191,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
         html: "<article><h1>COPY #3</h1></article>",
       },
     });
-    const qzProfile = { ...mockPosProfile, print_type: "qz", qz_host: "localhost" } as PosProfileCombined;
+    const qzProfile = { ...mockPosProfile, print_type: "qz", qz_host: "localhost", printer: "Cashier" } as PosProfileCombined;
 
     const fn = (printLib as Record<string, unknown>).printBillCopy as
       | ((args: { orderId: string; posProfile: PosProfileCombined; idempotencyKey: string }) => Promise<{ copy_number?: number }>)
@@ -203,7 +203,7 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
       "ury.ury_pos.api.print_bill_copy",
       { invoice: "POS-INV-00024", idempotency_key: "k-qz-1", delivery: "qz" },
     );
-    expect(printWithQz).toHaveBeenCalledWith("localhost", "<article><h1>COPY #3</h1></article>");
+    expect(printWithQz).toHaveBeenCalledWith("localhost", "<article><h1>COPY #3</h1></article>", "Cashier");
     expect(res.copy_number).toBe(3);
   });
 

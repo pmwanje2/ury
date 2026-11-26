@@ -785,7 +785,7 @@ def _extract_station_device_config(production_unit):
         page_width = 576
     command_mode = str(row.get("custom_command_mode") or "standard").strip()
     if command_mode not in ("standard", "raster"):
-        command_mode = "standard"
+        frappe.throw(_("Choose a supported printer command mode."))
 
     def _split_target(value):
         if ":" in value and not value.startswith("/") and " " not in value:
@@ -871,22 +871,34 @@ def save_station_device_config(production_unit, config):
 
     printer = str(config.get("printer") or "").strip()
     host = str(config.get("host") or "").strip()
-    port = _cint(config.get("port") or 9100) or 9100
+    def station_port(key):
+        value = config.get(key)
+        if value is None or value == "":
+            return 9100
+        if not str(value).isdecimal() or not 1 <= int(value) <= 65535:
+            frappe.throw(_("Printer port must be a whole number from 1 to 65535."))
+        return int(value)
+
+    port = station_port("port") if host else 9100
     primary_value = printer or (f"{host}:{port}" if host else "")
 
     backup_printer = str(config.get("backupPrinter") or "").strip()
     backup_host = str(config.get("backupHost") or "").strip()
-    backup_port = _cint(config.get("backupPort") or 9100) or 9100
+    backup_port = station_port("backupPort") if backup_host else 9100
     backup_value = backup_printer or (f"{backup_host}:{backup_port}" if backup_host else "")
 
     page_width = str(config.get("pageWidth") or 576)
     if page_width not in ("576", "384"):
-        page_width = "576"
+        frappe.throw(_("Choose a supported printer paper width."))
     command_mode = str(config.get("commandMode") or "standard")
     if command_mode not in ("standard", "raster"):
-        command_mode = "standard"
+        frappe.throw(_("Choose a supported printer command mode."))
 
-    enabled = bool(config.get("enabled"))
+    enabled = bool(_cint(config.get("enabled")))
+    if (printer and host) or (backup_printer and backup_host):
+        frappe.throw(_("Choose either an installed printer or a network host for each target."))
+    if enabled and (not primary_value or not str(config.get("printFormat") or "").strip()):
+        frappe.throw(_("Auto print requires a primary printer and a print format."))
     unit_doc.custom_primary_printer = primary_value
     unit_doc.custom_backup_printer = backup_value
     unit_doc.custom_print_format = str(config.get("printFormat") or "").strip()
@@ -897,6 +909,10 @@ def save_station_device_config(production_unit, config):
         unit_doc.custom_printer_transport = "QZ Tray"
     elif getattr(unit_doc, "custom_device_mode", None) == "KDS + Auto Print":
         unit_doc.custom_device_mode = "KDS Display"
+    if not unit_doc.department:
+        # Legacy stations predate the mandatory department link. save() still runs
+        # permission, link, failover-chain and heartbeat validations.
+        unit_doc.flags.ignore_mandatory = True
     unit_doc.save()
     return _extract_station_device_config(production_unit)
 

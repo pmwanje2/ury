@@ -3,6 +3,8 @@ from frappe import _
 
 import base64
 import os
+from pathlib import Path
+from cryptography import x509
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -385,9 +387,23 @@ def qz_certificate():
     if frappe.session.user == "Guest":
         frappe.throw(_("Not permitted"), frappe.PermissionError)
     site_config = frappe.get_site_config()
-    qz_key_value = site_config.get("qz_cert")
-
-    return qz_key_value
+    configured = (site_config.get("qz_cert") or "").strip()
+    if not configured:
+        return None
+    try:
+        if configured.startswith("-----BEGIN"):
+            data = configured.encode()
+        else:
+            root = Path(frappe.get_site_path("private")).resolve()
+            path = (root / configured).resolve()
+            if not path.is_relative_to(root):
+                raise ValueError
+            data = path.read_bytes()
+        # Serialize only public certificates, even if the file contains other PEM objects.
+        certificates = x509.load_pem_x509_certificates(data)
+        return "--START INTERMEDIATE CERT--\n".join(cert.public_bytes(serialization.Encoding.PEM).decode() for cert in certificates)
+    except (ValueError, OSError):
+        frappe.throw(_("Configure a valid public QZ certificate in qz_cert."))
 
 
 def _get_qz_private_key():

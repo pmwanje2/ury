@@ -90,3 +90,40 @@ export function runSignedQz(bridge, post, operation, signal) {
   pending.set(bridge, result.then(() => undefined, () => closing));
   return result;
 }
+
+// Let the operator accept trust before starting the spooler's own deadline.
+export function withQzDeadline(operation) {
+  const controller = new AbortController();
+  let timer;
+  let startPrinting;
+  const deadline = new Promise((_, reject) => {
+    const arm = (ms, code) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const error = new Error(code);
+        controller.abort(error);
+        reject(error);
+      }, ms);
+    };
+    arm(60000, 'QZ_TRUST_TIMEOUT');
+    startPrinting = () => arm(30000, 'PRINTER_TIMEOUT');
+  });
+  return Promise.race([Promise.resolve().then(() => operation(controller.signal, startPrinting)), deadline])
+    .finally(() => clearTimeout(timer));
+}
+
+const connecting = new WeakMap();
+
+export function connectQz(bridge, certificate, host) {
+  if (bridge.websocket.isActive()) return Promise.resolve();
+  if (!connecting.has(bridge)) {
+    const connection = Promise.resolve().then(certificate).then(pem => {
+      // Older QZ versions silently send a null certificate when the resolver rejects.
+      if (!pem?.startsWith('-----BEGIN CERTIFICATE-----')) throw Error('QZ certificate is not configured');
+      bridge.security.setCertificatePromise(resolve => resolve(pem), { rejectOnFailure: true });
+      return bridge.websocket.connect(host ? { host, usingSecure: true } : undefined);
+    }).finally(() => connecting.delete(bridge));
+    connecting.set(bridge, connection);
+  }
+  return connecting.get(bridge);
+}

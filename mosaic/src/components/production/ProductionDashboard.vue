@@ -79,11 +79,17 @@ export default {
       if (!this.scope.ready) return;
       try {
         const filters = [];
-        if (this.scope.company !== "all") filters.push(["company", "=", this.scope.company]);
+        const orFilters = [];
+        if (this.scope.company !== "all") {
+          const company = ["company", "=", this.scope.company];
+          if (this.scope.branch === "all") filters.push(company);
+          else orFilters.push(company, ["company", "is", "not set"]);
+        }
         if (this.scope.branch !== "all") filters.push(["branch", "=", this.scope.branch]);
         const result = await this.db.getDocList("URY Production Unit", {
           fields: ["name", "enabled"],
           filters,
+          orFilters,
           limit: 0,
           orderBy: {
             field: "name",

@@ -1277,7 +1277,8 @@ def getPosProfile(pos_profile=None):
 
         if qz_print == 1:
             print_type = "qz"
-            qz_host = pos_profiles.qz_host
+            qz_host = pos_profiles.qz_host or "localhost"
+            printer = pos_profiles.get("custom_qz_receipt_queue") or None
 
         elif bill_present == True:
             print_type = "network"
