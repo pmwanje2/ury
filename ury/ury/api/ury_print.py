@@ -368,11 +368,24 @@ def receipt_delivery_view(delivery_id: str):
     from secrets import token_urlsafe
     from werkzeug.wrappers import Response
 
-    row = frappe.db.get_value("URY Receipt Delivery", {"name": delivery_id, "owner": frappe.session.user},
-                              ["invoice", "receipt_html"], as_dict=True)
-    if not row or not row.receipt_html:
+    filters = {"name": delivery_id, "owner": frappe.session.user}
+    invoice = frappe.db.get_value("URY Receipt Delivery", filters, "invoice")
+    if not invoice:
         frappe.throw(_("Invalid receipt delivery."), frappe.PermissionError)
-    _receipt_invoice(row.invoice)
+    _receipt_invoice(invoice)
+    try:
+        row = frappe.db.get_value(
+            "URY Receipt Delivery", dict(filters, invoice=invoice),
+            ["receipt_html", "delivered", "browser_rendered"], as_dict=True, for_update=True,
+        )
+    except frappe.QueryDeadlockError:
+        # MariaDB rejects a locking read when another request claimed this snapshot.
+        frappe.throw(_("The receipt changed while opening it. Return to the till."), frappe.PermissionError)
+    if not row or not row.receipt_html or row.delivered or row.browser_rendered:
+        frappe.throw(_("This receipt is unavailable. Request another print from the till."), frappe.PermissionError)
+    frappe.db.set_value("URY Receipt Delivery", delivery_id, "browser_rendered", 1)
+    # Frappe normally rolls back GET requests. Persist the claim on successful response.
+    frappe.local.flags.commit = True
     nonce = token_urlsafe(24)
     script = f'<script nonce="{nonce}">onafterprint=()=>window.close();onload=()=>window.print()</script>'
     return Response("<!doctype html><meta charset=utf-8>" + row.receipt_html + script, mimetype="text/html",

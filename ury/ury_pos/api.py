@@ -3761,7 +3761,7 @@ def _is_retryable_copy_race_error(exc: Exception) -> bool:
 
 _COPY_LOG_LOOKUP_FIELDS = [
     'name', 'print_job_id', 'invoice', 'status', 'failure_reason', 'attempt', 'copy_number', 'printer', 'job_owner',
-    'dispatch_token_hash', 'dispatch_until', 'fiscal_event',
+    'dispatch_token_hash', 'dispatch_until', 'render_grant_hash', 'qz_session_hash', 'fiscal_event',
 ]
 _DISABLED_REPRINT_OWNER_REASON = 'Requester account is disabled; reprint from Settled Bills.'
 
@@ -3878,6 +3878,27 @@ def _lease_hash(token):
     return sha256(token.encode()).hexdigest()
 
 
+def _qz_dispatch_session():
+    sid = frappe.session.sid
+    request = getattr(frappe.local, 'request', None)
+    # API-key authentication can set sid to the username across unrelated clients.
+    if request is not None and (sid == frappe.session.user or request.cookies.get('sid') != sid):
+        return None
+    return sid
+
+
+def _qz_recovery_token(record):
+    """A recovery credential grants confirmation or browser fallback, never QZ dispatch."""
+    import hmac
+
+    sid = _qz_dispatch_session()
+    if (not sid or record.job_owner != frappe.session.user or not record.qz_session_hash
+            or not hmac.compare_digest(record.qz_session_hash, _lease_hash(sid))):
+        return None
+    attempt = json.dumps(['qz-recovery', record.name, record.dispatch_token_hash, record.job_owner])
+    return hmac.digest(sid.encode(), attempt.encode(), 'sha256').hex()
+
+
 def _new_copy_lease():
     from secrets import token_urlsafe
     from frappe.utils import now_datetime
@@ -3930,8 +3951,11 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
         )
         if not record or record.printer or record.status not in ('RESERVED', 'QZ_DISPATCHING', 'BROWSER_DISPATCHING', 'DISPATCHING', 'COMPLETED'):
             frappe.throw('No client copy reservation for this request.', frappe.PermissionError)
-        if not dispatch_token or not compare_digest(record.dispatch_token_hash or '', _lease_hash(dispatch_token)):
-            frappe.throw('This print attempt no longer owns the copy.', frappe.PermissionError)
+        owns_lease = dispatch_token and compare_digest(record.dispatch_token_hash or '', _lease_hash(dispatch_token))
+        if not owns_lease:
+            recovery = _qz_recovery_token(record) if action in ('browser', 'confirm') else None
+            if not recovery or not dispatch_token or not compare_digest(recovery, dispatch_token):
+                frappe.throw('This print attempt no longer owns the copy.', frappe.PermissionError)
         result = {'copy_number': record.copy_number, 'print_job_id': record.name}
         if action in ('qz', 'browser'):
             # A cashier may explicitly switch a possibly spooled QZ copy to browser
@@ -3949,6 +3973,8 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
                 update.update(status='BROWSER_DISPATCHING', render_grant_hash=_lease_hash(grant),
                               dispatch_until=now_datetime() + timedelta(minutes=5))
                 result['render_grant'] = grant
+            elif sid := _qz_dispatch_session():
+                update['qz_session_hash'] = _lease_hash(sid)
             frappe.db.set_value(_COPY_LOG, record.name, update)
             record.status = 'DISPATCHING'
         elif action == 'release':
@@ -3956,6 +3982,10 @@ def _finish_copy_attempt(invoice, idempotency_key, dispatch_token, *, action):
                 frappe.throw('Dispatch already started. Check the original till.', frappe.PermissionError)
             frappe.db.set_value(_COPY_LOG, record.name, {'dispatch_token_hash': None, 'dispatch_until': None})
         elif record.status != 'COMPLETED':
+            browser_rendered = (record.status == 'BROWSER_DISPATCHING'
+                                and not record.render_grant_hash and not record.dispatch_until)
+            if record.status != 'QZ_DISPATCHING' and not browser_rendered:
+                frappe.throw('Start printing and render the browser copy before confirming delivery.', frappe.PermissionError)
             if idempotency_key == f'efris-auto-{invoice}':
                 if _require_fiscal_event(doc) != record.fiscal_event:
                     frappe.throw('Fiscal receipt changed before delivery confirmation.', frappe.PermissionError)
@@ -4037,7 +4067,12 @@ def print_bill_copy(
                 previous = _find_previous_copy_log(invoice, key, owner, idempotency_key, is_auto_fiscal)
                 if previous and previous.status not in ('RESERVED', 'FAILED', 'CANCELED'):
                     # A replay reports the original outcome without granting another dispatch.
-                    return _copy_result(previous)
+                    result = _copy_result(previous)
+                    if previous.status == 'QZ_DISPATCHING' and requested_delivery != 'network':
+                        recovery = _qz_recovery_token(previous)
+                        if recovery:
+                            result['recovery_token'] = recovery
+                    return result
 
                 fiscal_event = _require_fiscal_event(doc) if is_auto_fiscal else None
                 if previous and previous.status == 'RESERVED':

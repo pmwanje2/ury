@@ -26,6 +26,7 @@ export interface PrintBillCopyResult {
   failure_reason?: string | null;
   print_job_id?: string;
   dispatch_token?: string;
+  recovery_token?: string;
   copy_number?: number;
   copy_timestamp?: string;
   delivery?: 'network' | 'qz' | 'browser';
@@ -95,10 +96,13 @@ export async function deliverReservedCopy(
   profile: { qz_host?: string | null; printer?: string | null; letter_head?: string | null },
   result: PrintBillCopyResult,
 ): Promise<PrintBillCopyResult> {
-  if (result.status !== 'RESERVED') return result;
-  if (!result.dispatch_token) throw new Error('Client copy dispatch lease is unavailable.');
-  const attempt = { invoice, idempotency_key: key, dispatch_token: result.dispatch_token };
-  let dispatchStarted = false;
+  const recovering = result.status === 'QZ_DISPATCHING' && Boolean(result.recovery_token);
+  if (!recovering && result.status !== 'RESERVED') return result;
+  const token = recovering ? result.recovery_token : result.dispatch_token;
+  if (!token) throw new Error('Client copy dispatch lease is unavailable.');
+  const attempt = { invoice, idempotency_key: key, dispatch_token: token };
+  const confirmPrinted = () => window.confirm(`Did COPY #${result.copy_number} print? Check the printer. OK records delivery. Cancel shows recovery options.`);
+  let dispatchStarted = recovering;
   let claimError = false;
   const begin = async (transport: 'qz' | 'browser') => {
     try {
@@ -112,11 +116,16 @@ export async function deliverReservedCopy(
     }
   };
   try {
-    if (result.delivery !== 'qz' && result.delivery !== 'browser') {
+    if (!recovering && result.delivery !== 'qz' && result.delivery !== 'browser') {
       throw new Error('Client copy reservation is unavailable.');
     }
     let delivered = false;
-    if (result.delivery === 'qz') {
+    if (recovering) {
+      delivered = confirmPrinted();
+      if (!delivered && !window.confirm('Print this copy in the browser? Cancel retains it for later confirmation.')) {
+        throw new Error('Copy delivery is still pending.');
+      }
+    } else if (result.delivery === 'qz') {
       if (!result.html) throw new Error('Authorized QZ copy is unavailable.');
       try {
         await printWithQz(profile.qz_host || 'localhost', result.html, profile.printer, async () => { await begin('qz'); });
@@ -127,7 +136,7 @@ export async function deliverReservedCopy(
         }
         if (claimError) throw error;
         if (dispatchStarted) {
-          delivered = window.confirm(`Did COPY #${result.copy_number} print? Check the printer. OK records delivery. Cancel shows recovery options.`);
+          delivered = confirmPrinted();
         }
         if (!delivered && !window.confirm(dispatchStarted
           ? 'Print the same copy in the browser? Cancel retains the unconfirmed copy without printing again.'

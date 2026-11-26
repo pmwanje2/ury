@@ -19,6 +19,7 @@
   "dispatch_token_hash",
   "dispatch_until",
   "render_grant_hash",
+  "qz_session_hash",
   "fiscal_event"
  ],
  "fields": [
@@ -118,6 +119,13 @@
   {
    "fieldname": "render_grant_hash",
    "label": "Browser Render Grant Hash",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "qz_session_hash",
+   "label": "QZ Dispatch Session Hash",
    "fieldtype": "Data",
    "hidden": 1,
    "read_only": 1
