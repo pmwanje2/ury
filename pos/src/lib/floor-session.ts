@@ -46,6 +46,16 @@ export function isFloorPadActive(): boolean {
   return pad.paired === true && pad.till_open === true;
 }
 
+export function openFloorLogoutChannel(): BroadcastChannel | undefined {
+  try { return new BroadcastChannel('ury-floor-logout'); } catch { return undefined; }
+}
+
+function writeLogoutCookie(failed: boolean): void {
+  const secure = location.protocol === 'https:' ? '; Secure' : '';
+  const value = failed ? '1; Max-Age=34560000' : '; Max-Age=0';
+  document.cookie = FLOOR_LOGOUT_FAILED_MARKER + '=' + value + '; Path=/pos; SameSite=Strict' + secure;
+}
+
 function hasLogoutCookie(): boolean {
   return document.cookie.split('; ').includes(FLOOR_LOGOUT_FAILED_MARKER + '=1');
 }
@@ -66,17 +76,19 @@ export async function readFloorLogoutFailureMarker(): Promise<boolean> {
   try { return await readLogoutMarker() || hasFloorLogoutFailureMarker(); } catch { return true; }
 }
 
-export async function clearFloorLogoutFailureMarker(): Promise<void> {
+function clearLogoutMirrors(): void {
   try {
-    await writeLogoutMarker(null);
+    if (hasLogoutCookie()) writeLogoutCookie(false);
   } finally {
-    try {
-      if (hasLogoutCookie()) document.cookie = FLOOR_LOGOUT_FAILED_MARKER + '=; Max-Age=0; Path=/pos; SameSite=Strict';
-    } finally {
-      try { localStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
-      finally { sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
-    }
+    try { localStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
+    finally { sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
   }
+}
+
+export async function clearFloorLogoutFailureMarker(): Promise<void> {
+  // A verified login can clear a cookie-only failure even when IndexedDB is read-only.
+  if (await readLogoutMarker()) await writeLogoutMarker(null);
+  clearLogoutMirrors();
 }
 
 export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
@@ -156,16 +168,21 @@ export async function logoutWithFloorMarker(): Promise<boolean> {
   } catch {
     // Both quota pools can be exhausted. Leave a POS-scoped flag and still attempt server logout.
     if (!localSaved) {
-      try { document.cookie = FLOOR_LOGOUT_FAILED_MARKER + '=1; Max-Age=34560000; Path=/pos; SameSite=Strict'; }
+      try { writeLogoutCookie(true); }
       catch { /* Still attempt server logout if the browser also refuses cookies. */ }
     }
   }
+  const channel = openFloorLogoutChannel();
+  try { channel?.postMessage(null); } catch { /* Mounted guards also poll the marker. */ }
+  finally { channel?.close(); }
   try {
     if (await logout() === false) return false;
   } catch {
     return false;
   }
-  try { await clearFloorLogoutFailureMarker(); } catch { /* The server session has ended. */ }
+  // The server session has ended. Attempt each cleanup even if the durable store is unavailable.
+  try { await writeLogoutMarker(null); } catch { /* A surviving marker keeps the next boot locked. */ }
+  try { clearLogoutMirrors(); } catch { /* The server session has ended. */ }
   return true;
 }
 

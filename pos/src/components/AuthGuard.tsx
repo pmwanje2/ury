@@ -7,12 +7,14 @@ import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
 import OutboxPanel from './OutboxPanel';
 import { assertOutboxEmpty, onOutboxMembershipChange, queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
+import { clearTabConfirmation } from '../lib/floor-tab';
 import { getPosProfileFull } from '../lib/pos-profile-api';
 import {
   retryFloorSignOut,
   needsFloorReconciliation,
   hasFloorLogoutFailureMarker,
   readFloorLogoutFailureMarker,
+  openFloorLogoutChannel,
   hasFloorSessionMarker,
   hasRecoveryConfirmation,
   isFloorPadActive,
@@ -23,6 +25,8 @@ import {
 const LazyOutletPickerDialog = React.lazy(() =>
   import('./OutletSwitcher').then((mod) => ({ default: mod.OutletPickerDialog })),
 );
+
+const SESSION_CHECK_INTERVAL_MS = 5000;
 
 interface Props {
   children: React.ReactNode;
@@ -83,10 +87,12 @@ function UnconfirmedWorkspace({ user, children }: Props & { user: OfflineUser })
       setEmpty((previous) => previous === true ? null : previous);
       void check();
     });
+    const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
     window.addEventListener('focus', check);
     void check();
     return () => {
       revision++;
+      window.clearInterval(timer);
       stop();
       window.removeEventListener('focus', check);
     };
@@ -130,14 +136,36 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
   const floorPadActive = isFloorPadActive();
-  // Keep the gate mounted through async logout, including stale store renders before navigation.
-  const [failedOnBoot, setFailedOnBoot] = useState<boolean | null>(null);
+  const [failedLogout, setFailedLogout] = useState<boolean | null>(null);
   useEffect(() => {
     let active = true;
-    void readFloorLogoutFailureMarker().then(failed => { if (active) setFailedOnBoot(failed); });
-    return () => { active = false; };
+    let locked = false;
+    const check = async () => {
+      if (locked) return;
+      const failed = await readFloorLogoutFailureMarker();
+      if (!active || locked) return;
+      if (failed) {
+        // Keep this tab locked until a new authenticated page replaces it.
+        locked = true;
+        try { clearTabConfirmation(); } catch { /* A storage error must still lock the workspace. */ }
+      }
+      setFailedLogout(failed);
+    };
+    const channel = openFloorLogoutChannel();
+    if (channel) channel.onmessage = check;
+    const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    void check();
+    return () => {
+      active = false;
+      channel?.close();
+      window.clearInterval(timer);
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
   }, []);
-  const logoutFailed = failedOnBoot || hasFloorLogoutFailureMarker();
+  const logoutFailed = failedLogout || hasFloorLogoutFailureMarker();
   const recovery = needsFloorReconciliation();
 
   // A surviving cookie on a paired tablet must not admit the previous waiter.
@@ -177,7 +205,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   }, [user, posProfile, fetchPosProfile]);
 
   // Show loading state while either auth or config is loading
-  if (failedOnBoot === null || authLoading || (user && configLoading) || isRechecking) {
+  if (failedLogout === null || authLoading || (user && configLoading) || isRechecking) {
     return (
       <div className="min-h-screen">
         <Spinner  message={t('common.loading')} />
