@@ -3,6 +3,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 // Theme T4 (fork #62 e56a8211/f6a8d7b9): ending a shared-tablet session always
 // clears the tab and returns to the floor pad, even when the server logout fails.
 
+const guard = vi.hoisted(() => vi.fn(async (run: () => Promise<void>) => run()));
+vi.mock('../src/offline/outbox', async (original) => ({
+  ...await original<typeof import('../src/offline/outbox')>(), withEmptyOutbox: guard,
+}));
+
 const boundary = vi.hoisted(() => ({
   logout: vi.fn(),
   disconnectQzPrinter: vi.fn(),
@@ -123,4 +128,13 @@ it('disconnects the printer and leaves the floor even when stored markers cannot
   } finally {
     blocked.mockRestore();
   }
+});
+
+it('preserves the session while offline orders await sync', async () => {
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  const { floorSignOut } = await floorSession();
+  await floorSignOut();
+  expect(boundary.logout).not.toHaveBeenCalled();
+  expect(localStorage.getItem('userAuth')).toBe('true');
+  expect(replacement).not.toHaveBeenCalled();
 });

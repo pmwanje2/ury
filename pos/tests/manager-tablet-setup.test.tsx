@@ -149,6 +149,23 @@ describe('POS Header manager tablet setup access', () => {
 });
 
 describe('Staff PINs dialog', () => {
+  it('requires confirmation to revoke a PIN across outlets', async () => {
+    const StaffPinsDialog = await dialog('StaffPinsDialog');
+    fixtures.callGet.mockResolvedValue({ message: [{ user: 'waiter', full_name: 'Waiter', has_pin: true }] });
+    fixtures.callPost.mockResolvedValue({ message: { revoked: true, user: 'waiter' } });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    try {
+      await render(<StaffPinsDialog posProfile="POS-1" open onOpenChange={vi.fn()} />);
+      await act(async () => button('Revoke PIN').click());
+      expect(fixtures.callPost).not.toHaveBeenCalled();
+      await act(async () => button('Revoke PIN').click());
+      expect(fixtures.callPost).toHaveBeenCalledExactlyOnceWith('ury.ury_pos.floor_pin.revoke_pin', { pos_profile: 'POS-1', user: 'waiter' });
+      expect(container.textContent).toContain('Needs PIN');
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
   it('loads staff with pin_staff and shows an issued PIN once without storing it', async () => {
     const StaffPinsDialog = await dialog('StaffPinsDialog');
     fixtures.callGet.mockResolvedValue({
@@ -156,17 +173,17 @@ describe('Staff PINs dialog', () => {
     });
     fixtures.callPost.mockResolvedValue({ message: { pin: '4821' } });
 
-    await render(<StaffPinsDialog open={true} onOpenChange={vi.fn()} />);
+    await render(<StaffPinsDialog posProfile="POS-1" open={true} onOpenChange={vi.fn()} />);
     await settle();
 
-    expect(fixtures.callGet).toHaveBeenCalledWith('ury.ury_pos.floor_pin.pin_staff');
+    expect(fixtures.callGet).toHaveBeenCalledWith('ury.ury_pos.floor_pin.pin_staff', { pos_profile: 'POS-1' });
     expect(container.textContent).toContain('Waiter One');
     expect(container.textContent).toContain('Needs PIN');
     await act(async () => button('Give PIN').click());
     await settle();
 
     expect(fixtures.callPost).toHaveBeenCalledExactlyOnceWith(
-      'ury.ury_pos.floor_pin.issue_pin', { user: 'waiter@example.test' },
+      'ury.ury_pos.floor_pin.issue_pin', { pos_profile: 'POS-1', user: 'waiter@example.test' },
     );
     expect(container.textContent).toContain('4821');
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('4821');
@@ -179,7 +196,7 @@ describe('Staff PINs dialog', () => {
     const StaffPinsDialog = await dialog('StaffPinsDialog');
     fixtures.callGet.mockRejectedValue({ message: 'URY_FLOOR_PIN_NOT_PERMITTED: refused' });
 
-    await render(<StaffPinsDialog open={true} onOpenChange={vi.fn()} />);
+    await render(<StaffPinsDialog posProfile="POS-1" open={true} onOpenChange={vi.fn()} />);
     await settle();
 
     expect(container.textContent).toContain(t('errors.floor_pin_not_permitted'));
@@ -190,7 +207,7 @@ describe('Staff PINs dialog', () => {
     const StaffPinsDialog = await dialog('StaffPinsDialog');
     fixtures.callGet.mockRejectedValue({ message: 'URY_FLOOR_PIN_LOGIN_DISABLED: off' });
 
-    await render(<StaffPinsDialog open={true} onOpenChange={vi.fn()} />);
+    await render(<StaffPinsDialog posProfile="POS-1" open={true} onOpenChange={vi.fn()} />);
     await settle();
 
     expect(t('staff_pins.login_disabled')).not.toBe('staff_pins.login_disabled');
@@ -206,7 +223,7 @@ describe('Staff PINs dialog', () => {
     });
     fixtures.callPost.mockRejectedValue({ message: 'URY_FLOOR_PIN_TARGET_INELIGIBLE: no' });
 
-    await render(<StaffPinsDialog open={true} onOpenChange={vi.fn()} />);
+    await render(<StaffPinsDialog posProfile="POS-1" open={true} onOpenChange={vi.fn()} />);
     await settle();
     await act(async () => button('Give PIN').click());
     await settle();

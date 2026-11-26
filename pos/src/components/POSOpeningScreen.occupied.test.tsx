@@ -184,7 +184,7 @@ describe('opening screen logout', () => {
     await act(async () => { logoutButton()!.click(); });
     expect(core.logout).toHaveBeenCalledTimes(1);
     await act(async () => finish());
-    expect(window.location.href).toBe('/login?redirect-to=%2Fpos');
+    expect(window.location.href).toBe('/pos/order');
   });
 
   it('stays put and allows a retry when logout fails', async () => {

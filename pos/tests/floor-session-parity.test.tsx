@@ -6,6 +6,11 @@ import AuthGuard from '../src/components/AuthGuard';
 
 // Theme T4 (fork #70): idle sign-out on a paired floor tablet, configured on POS Profile.
 
+const guard = vi.hoisted(() => vi.fn(async (run: () => Promise<void>) => run()));
+vi.mock('../src/offline/outbox', async (original) => ({
+  ...await original<typeof import('../src/offline/outbox')>(), withEmptyOutbox: guard,
+}));
+
 const boundary = vi.hoisted(() => ({
   logout: vi.fn(),
   disconnectQzPrinter: vi.fn(),
@@ -165,4 +170,13 @@ describe('POS Profile floor-session settings', () => {
     expect(profile.floor_idle_signout_seconds).toBe(0);
     expect(profile.floor_signout_after_send).toBe(0);
   });
+});
+
+it('preserves the session while offline orders await sync', async () => {
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>POS</div></AuthGuard>);
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(boundary.logout).not.toHaveBeenCalled();
+  expect(localStorage.getItem('userAuth')).toBe('true');
+  expect(replacement).not.toHaveBeenCalled();
 });

@@ -85,7 +85,7 @@ class TestFloorPin(unittest.TestCase):
 		self.profile.add_comment = MagicMock()
 		self.frappe.get_doc.return_value = self.profile
 		self.frappe.get_all.return_value = [Doc(name="Floor POS")]
-		self.frappe.has_permission.return_value = True
+		self.frappe.has_permission.side_effect = lambda *args, user=None: user is None
 		self.frappe.get_roles.return_value = ["URY Captain"]
 		self.frappe.db.exists.return_value = True
 		self.user = "waiter@example.test"
@@ -177,7 +177,7 @@ class TestFloorPin(unittest.TestCase):
 	def test_pin_hash_is_keyed_hmac_not_plain_sha256(self):
 		api = self.api()
 		with patch.object(api.secrets, "randbelow", return_value=527):
-			api.issue_pin(self.user)
+			api.issue_pin(self.user, self.profile.name)
 		stored = self.frappe.db.set_value.call_args.args[3]
 		key = hmac.digest(b"site-key", b"ury-floor-pin-v1", "sha256")
 		self.assertEqual(stored, hmac.new(key, b"0527", hashlib.sha256).hexdigest())
@@ -187,7 +187,7 @@ class TestFloorPin(unittest.TestCase):
 
 	def test_pair_device_requires_pos_profile_write(self):
 		api = self.api()
-		self.frappe.has_permission.return_value = False
+		self.frappe.has_permission.side_effect = lambda *args, **kw: False
 		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.pair_device("Floor POS", "A"))
 		self.frappe.local.cookie_manager.set_cookie.assert_not_called()
 
@@ -202,7 +202,7 @@ class TestFloorPin(unittest.TestCase):
 
 	def test_pair_device_checks_authorization_before_profile_state(self):
 		api = self.api()
-		self.frappe.has_permission.return_value = False
+		self.frappe.has_permission.side_effect = lambda *args, **kw: False
 		self.profile.custom_floor_pin_login = 0
 		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.pair_device("Floor POS", "A"))
 
@@ -221,7 +221,7 @@ class TestFloorPin(unittest.TestCase):
 
 	def test_pair_device_checks_authorization_before_the_label(self):
 		api = self.api()
-		self.frappe.has_permission.return_value = False
+		self.frappe.has_permission.side_effect = lambda *args, **kw: False
 		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.pair_device("Floor POS", ""))
 
 	def test_pair_device_sets_httponly_secure_strict_signed_cookie(self):
@@ -248,16 +248,52 @@ class TestFloorPin(unittest.TestCase):
 		self.frappe.request.cookies.clear()
 		self.assertEqual(api.get_floor_pad(), {"paired": False, "till_open": False})
 
+	def test_selected_outlet_enforces_applicable_users_and_writer_exclusion(self):
+		api = self.pair()
+		other = Doc(self.profile, name="Other")
+		profiles = {p.name: p for p in (other, self.profile)}
+		self.frappe.get_doc.side_effect = lambda dt, name: profiles[name]
+		self.frappe.get_all.side_effect = lambda dt, **kw: [self.user] if dt == "User" else list(profiles.values())
+		for writer in (False, True):
+			with self.subTest(writer=writer):
+				self.profile.applicable_for_users = [Doc(user=self.user if writer else "another")]
+				self.frappe.has_permission.side_effect = lambda dt, mode, doc, user=None: user is None or (writer and doc is self.profile)
+				self.assertEqual(api.pin_staff(self.profile.name), [])
+				self.assertEqual(api.pin_staff(other.name)[0]["user"], self.user)
+				self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user, self.profile.name))
+				self.refused("URY_FLOOR_PIN_REFUSED", Unauthenticated, self.sign_in)
+		self.frappe.db.set_value.assert_not_called()
+
+	def test_revoke_denies_unmanaged_outlet_and_out_of_scope_target(self):
+		api = self.api()
+		self.profile.disabled = 1
+		self.frappe.has_permission.side_effect = lambda *a, **kw: False
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.revoke_pin(self.user, self.profile.name))
+		self.profile.disabled = 0
+		self.frappe.has_permission.side_effect = lambda *a, user=None: user is None
+		self.frappe.db.exists.return_value = False
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.revoke_pin(self.user, self.profile.name))
+		self.frappe.db.set_value.assert_not_called()
+
+	def test_revoke_is_idempotent_and_audited(self):
+		api = self.api()
+		for _ in range(2):
+			self.assertEqual(api.revoke_pin(self.user, self.profile.name), {"revoked": True, "user": self.user})
+		args = self.frappe.db.set_value.call_args.args
+		self.assertEqual(args[:3], ("User", self.user, "custom_floor_pin_hash"))
+		self.assertIsNone(args[3])
+		self.assertIn(self.user, str(self.audit.call_args))
+
 	# Manager screens
 
 	def test_issue_pin_requires_pos_profile_write(self):
-		self.frappe.has_permission.return_value = False
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user))
+		self.frappe.has_permission.side_effect = lambda *args, **kw: False
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user, self.profile.name))
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_pin_staff_requires_pos_profile_write(self):
-		self.frappe.has_permission.return_value = False
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff())
+		self.frappe.has_permission.side_effect = lambda *args, **kw: False
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff(self.profile.name))
 		self.frappe.db.get_value.assert_not_called()
 
 	def test_pin_staff_lists_only_enabled_eligible_branch_users_with_full_name(self):
@@ -265,7 +301,7 @@ class TestFloorPin(unittest.TestCase):
 			"waiter@example.test", "second-waiter@example.test", "disabled@example.test",
 			"off-branch@example.test", "manager@example.test", "system@example.test",
 		]
-		self.frappe.get_all.side_effect = [[Doc(name="Floor POS")], users]
+		self.frappe.get_all.side_effect = [users]
 		roles = {
 			"waiter@example.test": ["URY Captain"],
 			"second-waiter@example.test": ["URY Captain"],
@@ -293,7 +329,7 @@ class TestFloorPin(unittest.TestCase):
 			doctype != "URY User" or filters.get("user") in {"waiter@example.test", "second-waiter@example.test"}
 		)
 
-		result = self.api().pin_staff()
+		result = self.api().pin_staff(self.profile.name)
 
 		self.assertEqual(result, [
 			{"user": "waiter@example.test", "full_name": "Amina Waiter", "has_pin": True},
@@ -302,14 +338,14 @@ class TestFloorPin(unittest.TestCase):
 
 	def test_pin_staff_has_pin_flag_never_returns_hash(self):
 		digest = "digest-for-amina"
-		self.frappe.get_all.side_effect = [[Doc(name="Floor POS")], [self.user]]
+		self.frappe.get_all.side_effect = [[self.user]]
 		self.frappe.utils.get_fullname.return_value = "Amina Waiter"
 		self.frappe.db.get_value.side_effect = lambda _doctype, _user, field=None, **_kwargs: (
 			digest if field == "custom_floor_pin_hash" else 1
 		)
 		self.frappe.db.exists.return_value = True
 
-		result = self.api().pin_staff()
+		result = self.api().pin_staff(self.profile.name)
 
 		self.assertTrue(result[0]["has_pin"])
 		self.assertNotIn(digest, json.dumps(result))
@@ -317,22 +353,22 @@ class TestFloorPin(unittest.TestCase):
 	def test_issue_pin_refuses_target_outside_branch_or_without_floor_role(self):
 		api = self.api()
 		self.frappe.db.exists.return_value = False
-		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user, self.profile.name))
 		self.frappe.db.exists.return_value = True
 		self.frappe.get_roles.return_value = ["Kitchen User"]
-		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user, self.profile.name))
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_issue_pin_refuses_stay_signed_in_role_and_system_manager(self):
 		for roles in (["URY Captain", "URY Manager"], ["URY Captain", "System Manager"]):
 			self.frappe.get_roles.return_value = roles
-			self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin(self.user))
-		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin("Administrator"))
+			self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin(self.user, self.profile.name))
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin("Administrator", self.profile.name))
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_issue_pin_refuses_a_disabled_target_user(self):
 		self.frappe.db.get_value.side_effect = lambda dt, filters, field=None, **kw: 0 if field == "enabled" else None
-		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin(self.user, self.profile.name))
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_manager_endpoints_refuse_when_no_profile_has_pin_login_on_as_validation(self):
@@ -340,27 +376,27 @@ class TestFloorPin(unittest.TestCase):
 			with self.subTest(field=field):
 				self.profile.update(custom_floor_pin_login=1, disabled=0)
 				self.profile[field] = value
-				self.refused("URY_FLOOR_PIN_LOGIN_DISABLED", Invalid, lambda: self.api().issue_pin(self.user))
-				self.refused("URY_FLOOR_PIN_LOGIN_DISABLED", Invalid, lambda: self.api().pin_staff())
+				self.refused("URY_FLOOR_PIN_LOGIN_DISABLED", Invalid, lambda: self.api().issue_pin(self.user, self.profile.name))
+				self.refused("URY_FLOOR_PIN_LOGIN_DISABLED", Invalid, lambda: self.api().pin_staff(self.profile.name))
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_manager_endpoints_check_authorization_before_profile_state(self):
-		self.frappe.has_permission.return_value = False
+		self.frappe.has_permission.side_effect = lambda *args, **kw: False
 		self.profile.custom_floor_pin_login = 0
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user))
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff())
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user, self.profile.name))
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff(self.profile.name))
 
 	def test_manager_endpoints_require_write_on_the_enabled_profile_itself(self):
 		# Doctype-level write alone is not enough: the PIN-enabled profile must be writable.
 		self.frappe.has_permission.side_effect = lambda doctype, ptype="read", doc=None, **kw: doc is None
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user))
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff())
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user, self.profile.name))
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff(self.profile.name))
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_issue_pin_returns_four_digits_and_stores_only_hmac(self):
 		api = self.api()
 		with patch.object(api.secrets, "randbelow", return_value=7):
-			result = api.issue_pin(self.user)
+			result = api.issue_pin(self.user, self.profile.name)
 		self.assertEqual(result, {"pin": "0007"})
 		args, kwargs = self.frappe.db.set_value.call_args
 		self.assertEqual(args[:3], ("User", self.user, "custom_floor_pin_hash"))
@@ -371,19 +407,19 @@ class TestFloorPin(unittest.TestCase):
 		api = self.api()
 		self.frappe.db.set_value.side_effect = [UniqueCollision(), None]
 		with patch.object(api.secrets, "randbelow", side_effect=[7, 8]):
-			self.assertEqual(api.issue_pin(self.user), {"pin": "0008"})
+			self.assertEqual(api.issue_pin(self.user, self.profile.name), {"pin": "0008"})
 		self.assertEqual(self.frappe.db.set_value.call_count, 2)
 		self.frappe.db.set_value.side_effect = UniqueCollision()
 		self.frappe.db.set_value.reset_mock()
 		# Running out of free PINs is not an authorization denial.
-		self.refused("URY_FLOOR_PIN_ISSUE_EXHAUSTED", Invalid, lambda: api.issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_ISSUE_EXHAUSTED", Invalid, lambda: api.issue_pin(self.user, self.profile.name))
 		self.assertEqual(self.frappe.db.set_value.call_count, 20)
 
 	def test_issue_pin_replaces_previous_pin(self):
 		api = self.api()
 		with patch.object(api.secrets, "randbelow", side_effect=[7, 8]):
-			api.issue_pin(self.user)
-			api.issue_pin(self.user)
+			api.issue_pin(self.user, self.profile.name)
+			api.issue_pin(self.user, self.profile.name)
 		writes = self.frappe.db.set_value.call_args_list
 		self.assertEqual(writes[0].args[:3], writes[1].args[:3])
 		self.assertNotEqual(writes[0].args[3], writes[1].args[3])
@@ -395,7 +431,7 @@ class TestFloorPin(unittest.TestCase):
 		self.frappe.db.get_value.side_effect = lambda dt, user, field=None, **kw: (
 			previous if field == "custom_floor_pin_hash" else 1)
 		with patch.object(api.secrets, "randbelow", side_effect=[7, 8]):
-			self.assertEqual(api.issue_pin(self.user), {"pin": "0008"})
+			self.assertEqual(api.issue_pin(self.user, self.profile.name), {"pin": "0008"})
 		self.assertEqual(self.frappe.db.set_value.call_count, 1)
 
 	def test_issue_pin_retries_native_database_unique_violation(self):
@@ -406,18 +442,18 @@ class TestFloorPin(unittest.TestCase):
 		self.frappe.db.set_value.side_effect = [collision, None]
 		with patch.object(api.secrets, "randbelow", side_effect=[7, 8]):
 			try:
-				result = api.issue_pin(self.user)
+				result = api.issue_pin(self.user, self.profile.name)
 			except RuntimeError:
 				self.fail("Native db.set_value unique collision was not retried")
 		self.assertEqual(result, {"pin": "0008"})
 		self.frappe.db.set_value.side_effect = RuntimeError("database unavailable")
 		with self.assertRaisesRegex(RuntimeError, "database unavailable"):
-			api.issue_pin(self.user)
+			api.issue_pin(self.user, self.profile.name)
 
 	def test_issue_pin_activity_log_never_contains_pin(self):
 		api = self.api()
 		with patch.object(api.secrets, "randbelow", return_value=527):
-			api.issue_pin(self.user)
+			api.issue_pin(self.user, self.profile.name)
 		self.audit.assert_called_once()
 		self.assertIn("Floor PIN issued", str(self.audit.call_args))
 		self.assertIn(self.user, str(self.audit.call_args))

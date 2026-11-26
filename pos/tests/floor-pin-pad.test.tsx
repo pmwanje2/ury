@@ -229,10 +229,11 @@ describe('paired floor tablet sign-in', () => {
   it.each([
     ['unpaired tablet', { paired: false, till_open: true }],
     ['closed till', { paired: true, till_open: false }],
-  ])('does not render the floor pad for a Guest on a %s', async (_name, floorPad) => {
+  ])('renders only username sign-in for a Guest on a %s', async (_name, floorPad) => {
     setFloorPad(floorPad);
     await render();
-    expect(container.textContent).not.toContain('Staff sign-in');
+    expect(container.querySelector('input[type=password]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="4-digit PIN"]')).toBeNull();
     expect(container.textContent).not.toContain('Captain shell');
   });
 });

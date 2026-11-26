@@ -96,7 +96,7 @@ function button(label: string): HTMLButtonElement {
 async function logout() {
   await act(async () => button('Logout').click());
   expect(request).toHaveBeenCalledTimes(1);
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('/pos/order');
 }
 
 describe('pre-session logout', () => {
@@ -137,7 +137,7 @@ describe('pre-session logout', () => {
     expect(button('Logout').disabled).toBe(false);
     await act(async () => button('Logout').click());
     expect(request).toHaveBeenCalledTimes(2);
-    expect(location.href).toBe('/login?redirect-to=%2Fpos');
+    expect(location.href).toBe('/pos/order');
   });
 
   it('ignores double clicks and keeps storage until logout is confirmed', async () => {
@@ -153,7 +153,7 @@ describe('pre-session logout', () => {
     expect(localStorage.getItem('posOrderTabsData')).toBe('cart');
     expect(location.href).toBe('/pos');
     await act(async () => complete({ ok: true }));
-    expect(location.href).toBe('/login?redirect-to=%2Fpos');
+    expect(location.href).toBe('/pos/order');
   });
 
   it('preserves checked items and remarks when logout fails', async () => {
