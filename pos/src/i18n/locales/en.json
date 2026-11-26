@@ -1057,6 +1057,8 @@
     "username_label": "Username",
     "password_label": "Password",
     "sign_in": "Sign in",
+    "otp": "Verification code",
+    "pending_signout": "Sign-in is locked while offline orders sync. Ask a manager to reconcile any orders that need review.",
     "back_to_pin": "Back to PIN",
     "refused": "That PIN didn't work. Ask a manager for a new PIN.",
     "locked": "PIN sign-in is paused on this tablet. Ask a manager.",

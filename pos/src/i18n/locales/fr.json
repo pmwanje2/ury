@@ -860,6 +860,8 @@
     "username_label": "Identifiant",
     "password_label": "Mot de passe",
     "sign_in": "Se connecter",
+    "otp": "Code de vérification",
+    "pending_signout": "La connexion est verrouillée pendant la synchronisation des commandes hors ligne. Demandez à un responsable de traiter les commandes à vérifier.",
     "back_to_pin": "Retour au PIN",
     "refused": "Ce PIN ne fonctionne pas. Demandez un nouveau PIN à un responsable.",
     "locked": "La connexion par PIN est suspendue sur cette tablette. Demandez à un responsable.",

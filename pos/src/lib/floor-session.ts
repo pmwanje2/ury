@@ -83,21 +83,50 @@ export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | 
     const seconds = profile.floor_idle_signout_seconds ?? 0;
     if (seconds <= 0) return;
 
-    return watchIdle(() => {
-      void floorSignOut();
-    }, seconds * 1000);
+    let cancelSignOut: (() => void) | undefined;
+    return watchIdle(
+      () => { cancelSignOut = retryFloorSignOut(); },
+      seconds * 1000,
+      () => cancelSignOut?.(),
+    );
   }, [profile, user]);
+}
+
+type SignOutResult = 'signed_out' | 'blocked' | 'cancelled';
+
+// Recheck under the outbox lock, including when replay ran in a different tab.
+export function retryFloorSignOut(onResult?: (result: SignOutResult) => void): () => void {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const attempt = async () => {
+    const result = await floorSignOut(() => !cancelled);
+    if (cancelled) return;
+    onResult?.(result);
+    if (result === 'blocked') timer = setTimeout(attempt, 5000);
+  };
+  void attempt();
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
 }
 
 /**
  * End a shared-tablet session even when the server cannot answer, so the next
  * waiter never inherits the previous user's tab state.
  */
-export async function floorSignOut(): Promise<void> {
+export async function floorSignOut(stillRequested?: () => boolean): Promise<SignOutResult> {
+  let signedOut = false;
   try {
-    await withEmptyOutbox(endFloorSession);
+    await withEmptyOutbox(async () => {
+      if (stillRequested && !stillRequested()) return;
+      await endFloorSession();
+      signedOut = true;
+    });
+    return signedOut ? 'signed_out' : 'cancelled';
   } catch (error) {
-    showToast.error(String(error instanceof Error ? error.message : error));
+    if (!stillRequested) showToast.error(error instanceof Error ? error.message : String(error));
+    return 'blocked';
   }
 }
 

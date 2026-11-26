@@ -843,6 +843,8 @@
     "username_label": "Usuario",
     "password_label": "Contraseña",
     "sign_in": "Iniciar sesión",
+    "otp": "Código de verificación",
+    "pending_signout": "El inicio de sesión está bloqueado mientras se sincronizan los pedidos sin conexión. Pide a un gerente que revise los pedidos pendientes de revisión.",
     "back_to_pin": "Volver al PIN",
     "refused": "Ese PIN no funcionó. Pide un PIN nuevo a un encargado.",
     "locked": "El acceso con PIN está pausado en esta tableta. Avisa a un encargado.",

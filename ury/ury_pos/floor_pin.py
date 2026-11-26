@@ -87,17 +87,23 @@ def _enabled(profile):
 	return not profile.get("disabled") and profile.get("custom_floor_pin_login")
 
 
+def _in_outlet_scope(user, profile):
+	return (
+		isinstance(user, str) and bool(user) and user not in ("Administrator", "Guest")
+		and (not profile.get("applicable_for_users") or user in {row.user for row in profile.applicable_for_users})
+		and frappe.db.exists("URY User", {"parent": profile.branch, "parenttype": "Branch", "user": user})
+	)
+
+
 def _eligible(user, profile):
 	roles = set(frappe.get_roles(user))
 	return (
-		user not in ("Administrator", "Guest")
-		and "System Manager" not in roles
+		"System Manager" not in roles
 		and frappe.db.get_value("User", user, "enabled") == 1
 		and bool(roles & {r.role for r in profile.get("custom_floor_pin_roles", [])})
 		and not roles & {r.role for r in profile.get("custom_floor_stay_signed_in_roles", [])}
-		and (not profile.get("applicable_for_users") or user in {row.user for row in profile.applicable_for_users})
+		and _in_outlet_scope(user, profile)
 		and not frappe.has_permission("POS Profile", "write", profile, user=user)
-		and frappe.db.exists("URY User", {"parent": profile.branch, "parenttype": "Branch", "user": user})
 	)
 
 
@@ -181,7 +187,9 @@ def _require_eligible(user, profile):
 @frappe.whitelist(methods=["POST"])
 def revoke_pin(user, pos_profile):
 	profile = _managed_profile(pos_profile)
-	_require_eligible(user, profile)
+	# A disabled or promoted waiter may still hold a previously issued PIN.
+	if not _in_outlet_scope(user, profile):
+		_refuse("URY_FLOOR_PIN_TARGET_INELIGIBLE", "This user is outside this outlet.", frappe.ValidationError)
 	frappe.db.set_value("User", user, "custom_floor_pin_hash", None, update_modified=False)
 	add_authentication_log(f"Floor PIN revoked for {user} by {frappe.session.user}", frappe.session.user)
 	return {"revoked": True, "user": user}

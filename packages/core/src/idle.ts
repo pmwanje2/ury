@@ -2,9 +2,10 @@
  * Call `onIdle` once after `ms` of no pointer or key activity. The deadline is
  * wall-clock based, so a tablet that slept past it fires on wake (focus or
  * visibilitychange) instead of one full period later. `ms <= 0` disables it.
+ * An optional cleanup cancels deferred idle work on activity or stop.
  * Returns a function that removes every listener and timer.
  */
-export function watchIdle(onIdle: () => void, ms: number): () => void {
+export function watchIdle(onIdle: () => void, ms: number, onIdleEnd?: () => void): () => void {
   if (ms <= 0) return () => {};
 
   let deadline = Date.now() + ms;
@@ -29,6 +30,7 @@ export function watchIdle(onIdle: () => void, ms: number): () => void {
   };
 
   const reset = () => {
+    if (fired) onIdleEnd?.();
     fired = false;
     deadline = Date.now() + ms;
     arm();
@@ -39,6 +41,7 @@ export function watchIdle(onIdle: () => void, ms: number): () => void {
   };
 
   const stop = () => {
+    if (fired) onIdleEnd?.();
     clearTimer();
     window.removeEventListener('pointerdown', reset);
     window.removeEventListener('keydown', reset);

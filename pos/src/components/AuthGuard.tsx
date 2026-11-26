@@ -5,8 +5,10 @@ import { Spinner } from '@ury/ui';
 import { RefreshCw } from 'lucide-react';
 import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
+import { useOutbox } from '../offline/use-outbox';
+import type { OfflineProfile, OfflineUser } from '../offline/outbox';
 import {
-  floorSignOut,
+  retryFloorSignOut,
   hasFloorLogoutFailureMarker,
   hasFloorSessionMarker,
   isFloorPadActive,
@@ -20,6 +22,23 @@ const LazyOutletPickerDialog = React.lazy(() =>
 
 interface Props {
   children: React.ReactNode;
+}
+
+function ColdBootSignOut({ profile, user }: { profile: OfflineProfile; user: OfflineUser }) {
+  const [state, setState] = useState<'checking' | 'blocked' | 'signed_out'>('checking');
+  useOutbox(state === 'blocked' ? profile : null, user, true);
+
+  useEffect(() => retryFloorSignOut((result) => {
+    if (result !== 'cancelled') setState(result);
+  }), []);
+
+  if (state === 'signed_out') return <FloorPinPad />;
+  if (state === 'checking') return <Spinner message={t('common.loading')} />;
+  return (
+    <div className="flex min-h-screen items-center justify-center px-6">
+      <p role="status">{t('floor_pin.pending_signout')}</p>
+    </div>
+  );
 }
 
 const AuthGuard: React.FC<Props> = ({ children }) => {
@@ -39,7 +58,6 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
-  const [isColdBootSigningOut, setIsColdBootSigningOut] = useState(false);
   const floorPadActive = isFloorPadActive();
   const logoutFailed = hasFloorLogoutFailureMarker();
 
@@ -49,7 +67,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
       && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
   );
 
-  const showFloorPad = floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut || logoutFailed);
+  const showFloorPad = floorPadActive && (!user || user.provisional || coldBoot || logoutFailed);
   useFloorIdle(showFloorPad ? null : user, posProfile);
 
   useEffect(() => {
@@ -74,12 +92,6 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     return () => window.removeEventListener('pos:outlet-switched', handleOutletSwitched);
   }, [user, posProfile, fetchPosProfile]);
 
-  useEffect(() => {
-    if (!coldBoot || isColdBootSigningOut) return;
-    setIsColdBootSigningOut(true);
-    void floorSignOut();
-  }, [coldBoot, isColdBootSigningOut]);
-
   // Show loading state while either auth or config is loading
   if (authLoading || (user && configLoading) || isRechecking) {
     return (
@@ -99,6 +111,10 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
         </div>
       </div>
     );
+  }
+
+  if (coldBoot && posProfile && user) {
+    return <ColdBootSignOut key={JSON.stringify([posProfile.name, user.name])} profile={posProfile} user={user} />;
   }
 
   if (showFloorPad) {
