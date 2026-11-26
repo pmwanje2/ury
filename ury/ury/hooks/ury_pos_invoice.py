@@ -2001,11 +2001,16 @@ def release_merged_tables(doc):
         if not invoice.restaurant_table:
             continue
 
+        from ury.ury.api.table_lifecycle import open_checks_on
+        if any(check.name != invoice.name for check in open_checks_on([invoice.restaurant_table])):
+            continue
+
         frappe.db.set_value(
             "URY Table",
             invoice.restaurant_table,
             {
                 "occupied": 0,
+                "seating_checks": "[]",
                 "latest_invoice_time": None,
             },
             update_modified=False,

@@ -381,8 +381,10 @@ def _sync_active_order_with_merge_cluster(table):
         update_modified=False,
     )
 
-    for table_name in members:
+    from ury.ury.api.seating_membership import update_members
 
+    for table_name in sorted(members):
+        update_members(frappe, table_name, add=[primary.name])
         frappe.db.set_value(
             "URY Table",
             table_name,
@@ -503,6 +505,13 @@ def _reconcile_invoice_merged_tables(invoice, persist=False):
             partners_value,
             update_modified=False,
         )
+        from ury.ury.api.seating_membership import update_members
+
+        for table in sorted(set(expected) ^ set(current)):
+            if table in expected:
+                update_members(frappe, table, add=[invoice.name])
+            else:
+                update_members(frappe, table, remove=[invoice.name])
 
     return invoice
 
@@ -536,6 +545,7 @@ def _reconcile_open_invoices_for_tables(table_names):
 
 
 TABLE_RELEASE_FIELDS = {
+    "seating_checks": "[]",
     "occupied": 0,
     "latest_invoice_time": None,
     "merged_with": None,
@@ -583,7 +593,7 @@ def release_tables_after_print(invoice):
         return True
     if not _has_open_pos_invoices_for_cluster(tables):
         for table in tables:
-            frappe.db.set_value("URY Table", table, {"occupied": 0, "latest_invoice_time": None, "custom_table_state": "Available"})
+            frappe.db.set_value("URY Table", table, {"occupied": 0, "seating_checks": "[]", "latest_invoice_time": None, "custom_table_state": "Available"})
 
     return True
 

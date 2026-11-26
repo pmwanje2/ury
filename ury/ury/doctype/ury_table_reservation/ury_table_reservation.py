@@ -1,6 +1,8 @@
 # Copyright (c) 2026, Tridz Technologies Pvt. Ltd and contributors
 # For license information, please see license.txt
 
+import json
+
 import frappe
 from frappe.model.document import Document
 from frappe import _
@@ -203,6 +205,7 @@ class URYTableReservation(Document):
                 self.reserved_table,
                 {
                     "occupied": 1,
+                    "seating_checks": json.dumps([self.get("pos_invoice")] if self.get("pos_invoice") else []),
                     "custom_table_state": "Seated",
                     "custom_dirty_since": None,
                     "latest_invoice_time": now_datetime(),
@@ -210,7 +213,7 @@ class URYTableReservation(Document):
             )
         if self.status == "Confirmed" and old_status == "Seated" and self.reserved_table:
             # Unseated before ordering: the table is free again.
-            frappe.db.set_value("URY Table", self.reserved_table, {"occupied": 0, "latest_invoice_time": None, "custom_table_state": "Available"})
+            frappe.db.set_value("URY Table", self.reserved_table, {"occupied": 0, "seating_checks": "[]", "latest_invoice_time": None, "custom_table_state": "Available"})
 
     def validate_conflicts(self):
         # Only Confirmed / Active / Requested reservations require validation rules

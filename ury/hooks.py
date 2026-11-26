@@ -311,14 +311,19 @@ doc_events = {
             "ury.ury.api.table_reservation.complete_seated_reservation_on_submit",
             "ury.ury.api.table_lifecycle.on_check_closed",
         ],
-        "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
+        "on_update": [
+            "ury.ury.api.seating_membership.invoice_updated",
+            "ury.ury.hooks.ury_pos_invoice.on_update",
+        ],
         "before_discard": "ury.ury.doctype.ury_order.ury_order.assert_no_shared_kitchen_void",
         "on_discard": [
+            "ury.ury.api.seating_membership.invoice_updated",
             "ury.ury.api.table_reservation.release_reservation_check_binding",
             "ury.ury.api.table_lifecycle.on_check_closed",
         ],
         "before_cancel": "ury.ury.hooks.ury_pos_invoice.before_cancel",
         "on_cancel": [
+            "ury.ury.api.seating_membership.invoice_updated",
             "ury.ury.hooks.ury_pos_invoice.on_trash",
             "ury.ury.api.table_reservation.release_reservation_check_binding",
         ],

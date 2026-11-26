@@ -1,41 +1,22 @@
-from datetime import datetime, timedelta
-
 import frappe
 
-from frappe.utils import get_datetime, get_time
+from frappe.utils import get_datetime
 from ury.ury.api.ury_dashboard import _business_day_bounds
 from ury.ury.api.kitchen_ticket_history import owned_kots
+from ury.ury.api.seating_membership import table_checks
 from ury.ury.report_api.utils import require_dashboard_user
 
 
-def _paid_check_in_kitchen(table, now):
-	# latest_invoice_time is a site-local TIME, including for overnight seatings.
-	if table.latest_invoice_time is None:
-		start = get_datetime(table.modified)
-		boundary_field = "modified"
-	else:
-		boundary_field = "creation"
-		start = datetime.combine(now.date(), get_time(table.latest_invoice_time))
-		if start > now:
-			start -= timedelta(days=1)
-
+def _other_check_in_kitchen(table, current):
+	names = table_checks(frappe, table) - {current}
+	if not names:
+		return False
 	checks = frappe.get_all(
-		"POS Invoice",
-		filters={"restaurant_table": table.name, "docstatus": 1, "status": "Paid", boundary_field: [">=", start]},
-		fields=["name", "creation", "ury_applied_rounds"],
+		"POS Invoice", filters={"name": ("in", sorted(names)), "docstatus": ("in", [0, 1])},
+		fields=["name", "ury_applied_rounds"],
 	)
-	for check in checks:
-		if check.creation is None:
-			continue
-		# Legacy tables can lack a seating clock. For checks predating the table
-		# update, also require an active ticket updated here since that boundary.
-		scope = {}
-		if check.creation < start:
-			scope = {"restaurant_table": table.name, "modified": [">=", start]}
-		tickets = owned_kots(frappe, check, active=True, filters=scope, fields=["order_status"])
-		if any(ticket.order_status != "Served" for ticket in tickets):
-			return True
-	return False
+	return any(ticket.order_status != "Served" for check in checks
+	           for ticket in owned_kots(frappe, check, active=True, fields=["order_status"]))
 
 
 @frappe.whitelist(methods=["GET"])
@@ -50,7 +31,7 @@ def get_service_line(branch=None):
 	tables = frappe.get_all(
 		"URY Table",
 		filters=table_filters,
-		fields=["name", "occupied", "is_take_away", "latest_invoice_time", "modified"],
+		fields=["name", "occupied", "is_take_away", "seating_checks"],
 		order_by="name",
 	)
 
@@ -82,7 +63,7 @@ def get_service_line(branch=None):
 			if kot:
 				stage = "fired" if any(row.order_status != "Served" for row in kot) else "served"
 
-		if stage != "fired" and _paid_check_in_kitchen(t, now):
+		if stage != "fired" and _other_check_in_kitchen(t, invoice[0].name if invoice else None):
 			stage = "fired"
 
 		if minutes is not None and minutes > 75:

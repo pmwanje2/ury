@@ -3,6 +3,7 @@ from frappe import _
 from frappe.utils import cint, now_datetime
 
 from ury.brand import coded_message
+from ury.ury.api.seating_membership import update_members
 
 ON_SETTLEMENT = "On Settlement (Hospitality Default)"
 _POLICY_FIELDS = [
@@ -47,10 +48,13 @@ def assert_table_seatable(table, branch):
             dirty_table_error()
 
 
-def set_table_state(table, state, *, since=None, clear_cluster=False):
+def set_table_state(table, state, *, since=None, clear_cluster=False, check=None):
     occupied = state in ("Seated", "Check Printed")
     values = {"custom_table_state": state, "occupied": int(occupied)}
+    if occupied and check:
+        update_members(frappe, table, add=[check])
     if not occupied:
+        values["seating_checks"] = "[]"
         values["latest_invoice_time"] = None
     elif since:
         values["latest_invoice_time"] = since
@@ -101,7 +105,8 @@ def update_tables_after_transfer(source, destination, invoice):
     policy = table_policy(invoice.branch)
     hold = policy.get("custom_table_release_trigger") == ON_SETTLEMENT
     state = "Check Printed" if hold and cint(invoice.get("invoice_printed")) else "Seated"
-    set_table_state(destination, state, since=invoice.creation)
+    set_table_state(destination, state, since=invoice.creation, check=invoice.name)
+    update_members(frappe, source, remove=[invoice.name])
 
     siblings = find_checks([source], for_update=True)
     if siblings:

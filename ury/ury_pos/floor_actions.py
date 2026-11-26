@@ -268,7 +268,7 @@ def transfer_check_outlet(
             frappe.db.set_value(
                 "URY Table",
                 old_table_name,
-                {"occupied": 0, "latest_invoice_time": None},
+                {"occupied": 0, "seating_checks": "[]", "latest_invoice_time": None},
             )
 
     from ury.ury_pos.pricing_actions import sync_service_charge

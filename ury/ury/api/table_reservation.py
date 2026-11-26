@@ -1134,7 +1134,7 @@ def transfer_seated_reservation(from_table, to_table, pos_invoice):
             )
             if not still_open and not other_seated:
                 frappe.db.set_value(
-                    "URY Table", old_table, {"occupied": 0, "latest_invoice_time": None}, update_modified=False
+                    "URY Table", old_table, {"occupied": 0, "seating_checks": "[]", "latest_invoice_time": None}, update_modified=False
                 )
     return moved_names
 
@@ -1264,6 +1264,7 @@ def sync_branch_table_occupancy(branch=None):
                 table_name,
                 {
                     "occupied": 0,
+                    "seating_checks": "[]",
                     "latest_invoice_time": None,
                     "custom_table_state": "Available",
                 },
