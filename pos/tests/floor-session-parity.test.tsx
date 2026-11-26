@@ -6,6 +6,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { testLocks } from './offline-locks';
 import { OfflineOutbox } from '../src/offline/outbox';
 import { hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+import OutboxPanel from '../src/components/OutboxPanel';
 import AuthGuard from '../src/components/AuthGuard';
 
 // Theme T4 (fork #70): idle sign-out on a paired floor tablet, configured on POS Profile.
@@ -106,6 +107,7 @@ function render(node: React.ReactNode) {
 describe('paired floor idle sign-out', () => {
   it('AuthGuard signs out a non-stay user after the configured idle period', async () => {
     render(<AuthGuard><div>POS</div></AuthGuard>);
+    await act(async () => {});
     expect(container.textContent).toContain('POS');
 
     await act(async () => vi.advanceTimersByTimeAsync(59999));
@@ -272,4 +274,13 @@ it('admits a stay-signed-in user once the cold-boot outbox check finds no rows',
   render(<AuthGuard><div>Stay-signed-in workspace</div></AuthGuard>);
   await vi.waitFor(() => expect(container.textContent).toContain('Stay-signed-in workspace'));
   expect(boundary.logout).not.toHaveBeenCalled();
+});
+
+vi.mock('../src/lib/logout-store', () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {} }));
+
+it('withholds stale hook rows from the panel when the current tab belongs to another user', () => {
+  setFloorSessionMarker('other@example.com', false);
+  render(<OutboxPanel posProfile={{ name: 'Till', ury_offline_capture: 1 }} user={boundary.auth.user} />);
+  expect(container.querySelector('[data-client-order]')).toBeNull();
+  expect(container.textContent).not.toContain('queued');
 });

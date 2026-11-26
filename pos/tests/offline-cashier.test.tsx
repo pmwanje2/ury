@@ -1,3 +1,4 @@
+import { setFloorSessionMarker } from '../src/lib/floor-session';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
@@ -28,6 +29,7 @@ beforeEach(async () => {
   Object.defineProperty(navigator, 'locks', { configurable: true, value: testLocks() });
   await initI18n('en');
   document.cookie = 'user_id=cashier%40example.com';
+  setFloorSessionMarker('cashier@example.com', false);
   useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Cashier', roles: ['Cashier'] } });
   usePOSStore.setState({ posProfile: { name: 'Till A', ury_offline_capture: 1, default_payment_mode: 'Cash',
     role_allowed_for_billing: [{ role: 'Cashier' }], cashier: 'cashier@example.com', owner: 'cashier@example.com',

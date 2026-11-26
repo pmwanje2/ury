@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import AuthGuard from "./AuthGuard";
 
+vi.mock("../lib/logout-store", () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {} }));
 const mockUseRootStore = vi.fn();
 
 vi.mock("../store/root-store", () => ({
@@ -58,7 +59,7 @@ describe("AuthGuard", () => {
     expect(screen.getByTestId("spinner")).toBeInTheDocument();
   });
 
-  it("shows error message when auth error occurs", () => {
+  it("shows error message when auth error occurs", async () => {
     mockUseRootStore.mockReturnValue({
       checkAuth: vi.fn(),
       user: null,
@@ -74,11 +75,11 @@ describe("AuthGuard", () => {
 
     render(<AuthGuard><div>Content</div></AuthGuard>);
     
-    expect(screen.getByText("auth.access_denied")).toBeInTheDocument();
+    expect(await screen.findByText("auth.access_denied")).toBeInTheDocument();
     expect(screen.getByText("Auth failed")).toBeInTheDocument();
   });
 
-  it("shows POS profile configuration error", () => {
+  it("shows POS profile configuration error", async () => {
     mockUseRootStore.mockReturnValue({
       checkAuth: vi.fn(),
       user: { name: "user1" },
@@ -94,10 +95,10 @@ describe("AuthGuard", () => {
 
     render(<AuthGuard><div>Content</div></AuthGuard>);
     
-    expect(screen.getByText("auth.configuration_error")).toBeInTheDocument();
+    expect(await screen.findByText("auth.configuration_error")).toBeInTheDocument();
   });
 
-  it("shows permission denied when user does not have access", () => {
+  it("shows permission denied when user does not have access", async () => {
     mockUseRootStore.mockReturnValue({
       checkAuth: vi.fn(),
       user: { name: "user1" },
@@ -113,7 +114,7 @@ describe("AuthGuard", () => {
 
     render(<AuthGuard><div>Content</div></AuthGuard>);
     
-    expect(screen.getByText("auth.permission_required")).toBeInTheDocument();
+    expect(await screen.findByText("auth.permission_required")).toBeInTheDocument();
     expect(screen.queryByText(/POS User/)).not.toBeInTheDocument();
   });
 
@@ -136,7 +137,7 @@ describe("AuthGuard", () => {
     expect(await screen.findByText("Protected Content")).toBeInTheDocument();
   });
 
-  it("calls checkAuth on mount", () => {
+  it("calls checkAuth on mount", async () => {
     const checkAuth = vi.fn();
     mockUseRootStore.mockReturnValue({
       checkAuth,
@@ -154,7 +155,7 @@ describe("AuthGuard", () => {
     render(<AuthGuard><div>Content</div></AuthGuard>);
     
     expect(checkAuth).toHaveBeenCalled();
-    expect(screen.getByLabelText("floor_pin.password_label")).toHaveAttribute("type", "password");
+    expect(await screen.findByLabelText("floor_pin.password_label")).toHaveAttribute("type", "password");
   });
 
   it("calls fetchPosProfile when user becomes available", () => {

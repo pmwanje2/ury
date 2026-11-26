@@ -1,3 +1,4 @@
+import { setFloorSessionMarker } from '../src/lib/floor-session';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { IDBFactory } from 'fake-indexeddb';
@@ -30,6 +31,7 @@ const waitForUI = (assertion: () => void) => vi.waitFor(async () => {
 
 beforeEach(async () => {
   sessionStorage.clear();
+  setFloorSessionMarker(user.name, false);
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(call, 'get').mockResolvedValue({ message: [] });
   vi.stubGlobal('indexedDB', new IDBFactory());

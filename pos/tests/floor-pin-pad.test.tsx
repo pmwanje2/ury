@@ -408,3 +408,5 @@ describe('floor session isolation', () => {
     expect(boundary.logout).not.toHaveBeenCalled();
   });
 });
+
+vi.mock('../src/lib/logout-store', () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {} }));

@@ -1,3 +1,4 @@
+import { setFloorSessionMarker } from '../src/lib/floor-session';
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { act } from "react";
@@ -39,6 +40,7 @@ let root: Root;
 
 beforeEach(async () => {
   sessionStorage.clear();
+  setFloorSessionMarker(user.name, false);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("indexedDB", new IDBFactory());
   vi.stubGlobal("navigator", {
