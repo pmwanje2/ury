@@ -4,7 +4,7 @@ const APP_LOCAL_STORAGE_KEYS = [
 ];
 const APP_SESSION_STORAGE_KEYS = [
   'posProfile', 'menuCategories', 'customerGroups', 'territories', 'payment_modes',
-  'ury.setup.configureState',
+  'ury.setup.configureState', 'userAuth', 'ury_floor_reconcile',
 ];
 const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session', 'ury_pending_bill_copy'];
 

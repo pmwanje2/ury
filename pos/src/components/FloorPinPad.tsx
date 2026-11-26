@@ -2,6 +2,7 @@ import { FormEvent, useRef, useState } from 'react';
 import { auth, call, parseFrappeError } from '@ury/core';
 import { Button, Input } from '@ury/ui';
 import { t } from '../i18n';
+import { withOutboxLogin } from '../offline/outbox';
 import { clearFloorLogoutFailureMarker, getFloorPad, setFloorSessionMarker } from '../lib/floor-session';
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
@@ -14,9 +15,19 @@ const REFUSAL_COPY: Array<[string, string]> = [
   ['URY_FLOOR_PIN_REFUSED', 'floor_pin.refused'],
 ];
 
-function signedIn() {
+interface Challenge {
+  tmp_id: string;
+  username: string;
+  verification: { method?: string; prompt?: string | false; setup?: boolean; token_delivery?: boolean };
+}
+
+async function signedIn(owner?: string) {
+  const user = await auth.getLoggedInUser();
+  if (!user || user === 'Guest' || (owner && user !== owner)) {
+    throw new Error(t('floor_pin.login_failed'));
+  }
+  setFloorSessionMarker(user, !!owner);
   clearFloorLogoutFailureMarker();
-  setFloorSessionMarker();
   window.location.reload();
 }
 
@@ -27,7 +38,14 @@ export default function FloorPinPad({ offline = false, usernameOnly = false }: {
   const pinRef = useRef('');
   const [keypadRefused, setKeypadRefused] = useState(false);
   const passwordOnly = usernameOnly || keypadRefused;
-  const [challenge, setChallenge] = useState('');
+  const [challenge, setChallenge] = useState<Challenge | null>(null);
+  const verification = challenge?.verification;
+  const deliveryFailed = !!verification && (
+    ('token_delivery' in verification && !verification.token_delivery) ||
+    (verification.method !== 'OTP App' && verification.setup === false)
+  );
+  const setupMissing = verification?.method === 'OTP App' && verification.setup === false && !verification.prompt;
+  const otpUnavailable = deliveryFailed || setupMissing;
   const [otp, setOtp] = useState('');
   const [usernameForm, setUsernameForm] = useState(false);
   const [username, setUsername] = useState('');
@@ -43,18 +61,24 @@ export default function FloorPinPad({ offline = false, usernameOnly = false }: {
 
   const submitPin = async (value: string) => {
     try {
-      const result = await call.post<{ message?: { csrf_token?: string } }>(
-        'ury.ury_pos.floor_pin.sign_in', { pin: value },
-      );
-      if (result?.message?.csrf_token) window.csrf_token = result.message.csrf_token;
-      signedIn();
+      await withOutboxLogin(null, async () => {
+        try {
+          const result = await call.post<{ message?: { csrf_token?: string } }>(
+            'ury.ury_pos.floor_pin.sign_in', { pin: value },
+          );
+          if (result?.message?.csrf_token) window.csrf_token = result.message.csrf_token;
+          await signedIn();
+        } catch (reason) {
+          const message = parseFrappeError(reason, '');
+          const refusal = REFUSAL_COPY.find(([code]) => message.includes(code));
+          if (refusal?.[0] === 'URY_FLOOR_TILL_CLOSED' || refusal?.[0] === 'URY_FLOOR_DEVICE_NOT_PAIRED') {
+            setKeypadRefused(true);
+          }
+          setError(t(refusal?.[1] ?? 'floor_pin.try_again'));
+        }
+      });
     } catch (reason) {
-      const message = parseFrappeError(reason, '');
-      const refusal = REFUSAL_COPY.find(([code]) => message.includes(code));
-      if (refusal?.[0] === 'URY_FLOOR_TILL_CLOSED' || refusal?.[0] === 'URY_FLOOR_DEVICE_NOT_PAIRED') {
-        setKeypadRefused(true);
-      }
-      setError(t(refusal?.[1] ?? 'floor_pin.try_again'));
+      setError(parseFrappeError(reason, t('floor_pin.owner_required')));
     } finally {
       clearPin();
       busyRef.current = false;
@@ -85,15 +109,23 @@ export default function FloorPinPad({ offline = false, usernameOnly = false }: {
     setBusy(true);
     setError('');
     try {
-      const result = await auth.loginWithUsernamePassword(challenge ? { tmp_id: challenge, otp } : { username, password });
-      if (result?.verification || result?.tmp_id) {
-        if (!result.tmp_id) throw new Error(t('floor_pin.login_failed'));
-        setChallenge(result.tmp_id);
-      } else if (result?.message === 'Logged In' || result?.message === 'No App') {
-        signedIn();
-      } else {
-        throw new Error(t('floor_pin.login_failed'));
-      }
+      if (otpUnavailable) return;
+      const identity = challenge?.username ?? username.trim();
+      await withOutboxLogin(identity, async (pending) => {
+        // Keep the recovery gate across reloads, even if session verification loses connectivity.
+        if (pending) sessionStorage.setItem('ury_floor_reconcile', identity);
+        const result = await auth.loginWithUsernamePassword(
+          challenge ? { tmp_id: challenge.tmp_id, otp } : { username: identity, password },
+        );
+        if (result?.verification || result?.tmp_id) {
+          if (!result.tmp_id || !result.verification) throw new Error(t('floor_pin.login_failed'));
+          setChallenge({ tmp_id: result.tmp_id, username: identity, verification: result.verification });
+        } else if (result?.message === 'Logged In' || result?.message === 'No App') {
+          await signedIn(pending ? identity : undefined);
+        } else {
+          throw new Error(t('floor_pin.login_failed'));
+        }
+      });
     } catch (reason) {
       setError(parseFrappeError(reason, t('floor_pin.login_failed')));
     } finally {
@@ -159,9 +191,15 @@ export default function FloorPinPad({ offline = false, usernameOnly = false }: {
             <h1 className="text-center text-2xl font-semibold text-gray-900">{t('floor_pin.title')}</h1>
             {challenge ? (
               <div>
-                <label htmlFor="otp" className="mb-2 block text-sm font-medium text-gray-700">{t('floor_pin.otp')}</label>
-                <Input id="otp" name="otp" autoComplete="one-time-code" inputMode="numeric" autoFocus
-                  required value={otp} onChange={(event) => setOtp(event.target.value)} />
+                {typeof verification?.prompt === 'string' && <p>{verification.prompt}</p>}
+                {verification?.method === 'OTP App' && verification.setup && !verification.prompt && <p>{t('floor_pin.app_code')}</p>}
+                {deliveryFailed && <p role="alert">{t('floor_pin.delivery_failed')}</p>}
+                {setupMissing && <p role="alert">{t('floor_pin.setup_missing')}</p>}
+                {!otpUnavailable && <>
+                  <label htmlFor="otp" className="mb-2 block text-sm font-medium text-gray-700">{t('floor_pin.otp')}</label>
+                  <Input id="otp" name="otp" autoComplete="one-time-code" inputMode="numeric" autoFocus
+                    required value={otp} onChange={(event) => setOtp(event.target.value)} />
+                </>}
               </div>
             ) : (
               <>
@@ -176,9 +214,9 @@ export default function FloorPinPad({ offline = false, usernameOnly = false }: {
               </>
             )}
             {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-            <Button type="submit" className="w-full" disabled={busy}>{t('floor_pin.sign_in')}</Button>
+            {!otpUnavailable && <Button type="submit" className="w-full" disabled={busy}>{t('floor_pin.sign_in')}</Button>}
             {challenge && <Button type="button" variant="link" className="w-full" disabled={busy}
-              onClick={() => { setChallenge(''); setOtp(''); setError(''); }}>
+              onClick={() => { setChallenge(null); setOtp(''); setError(''); }}>
               {t('floor_pin.username_fallback')}
             </Button>}
             {!challenge && !passwordOnly && <Button disabled={busy} type="button" variant="link" className="w-full" onClick={() => { setUsernameForm(false); setError(''); }}>

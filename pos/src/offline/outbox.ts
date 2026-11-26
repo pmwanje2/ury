@@ -153,6 +153,11 @@ const save = async (entry: OfflineEntry) => {
 const remove = async (entry: OfflineEntry) => {
   await transaction(['orders'], 'readwrite', (tx, result) => { tx.objectStore('orders').delete(entry.sequence!); result(undefined); }); changed();
 };
+export async function queuedProfilesFor(user: string): Promise<string[]> {
+  const rows = await all();
+  return [...new Set(rows.filter((row) => row.owner === user).map((row) => row.profile))];
+}
+
 export async function assertOutboxEmpty(): Promise<void> {
   if ((await all()).length) throw new Error('Offline outbox has pending or Needs review items. Reconcile them before logout or till close.');
 }
@@ -160,6 +165,17 @@ const exclusive = <T,>(run: () => Promise<T>): Promise<T> => {
   if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(LOCK, run);
   return Promise.reject(new Error('This browser cannot lock the offline outbox across tabs. Offline capture is unavailable.'));
 };
+// Capture, replay, and identity changes share the same cross-tab lock.
+export async function withOutboxLogin(user: string | null, login: (pending: boolean) => Promise<void>): Promise<void> {
+  const guarded = async () => {
+    const rows = await all();
+    if (rows.some((row) => !user || row.owner !== user)) throw new Error(t('floor_pin.owner_required'));
+    await login(rows.length > 0);
+  };
+  if (typeof navigator !== 'undefined' && navigator.locks) await exclusive(guarded);
+  else await guarded();
+}
+
 export async function withEmptyOutbox(run: () => Promise<void>): Promise<void> {
   const emptyRun = async () => { await assertOutboxEmpty(); await run(); };
   // Capture/replay fail closed without Web Locks, so an empty browser can still log out.
@@ -566,6 +582,18 @@ export class OfflineOutbox {
       } catch (error) { this.replayFailure(error); }
     }).finally(() => { this.replaying = false; this.replayPromise = undefined; changed(); });
     return this.replayPromise;
+  }
+
+  async retryReviewed(clientId: string): Promise<void> {
+    await exclusive(async () => {
+      await this.verifyCashier();
+      const row = (await this.list()).find((entry) => entry.client_order_id === clientId);
+      if (!row || row.state !== 'review' || row.needs_approval) throw new Error(t('offline.retry_unavailable'));
+      row.state = 'pending';
+      row.reason = undefined;
+      await save(row);
+    });
+    await this.replay();
   }
 
   async approveAndReplay(clientId: string, token: string, reason: string): Promise<void> {

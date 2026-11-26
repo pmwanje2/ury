@@ -5,10 +5,12 @@ import { Spinner } from '@ury/ui';
 import { RefreshCw } from 'lucide-react';
 import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
-import { useOutbox } from '../offline/use-outbox';
-import type { OfflineProfile, OfflineUser } from '../offline/outbox';
+import OutboxPanel from './OutboxPanel';
+import { queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
+import { getPosProfileFull } from '../lib/pos-profile-api';
 import {
   retryFloorSignOut,
+  needsFloorReconciliation,
   hasFloorLogoutFailureMarker,
   hasFloorSessionMarker,
   isFloorPadActive,
@@ -24,21 +26,49 @@ interface Props {
   children: React.ReactNode;
 }
 
-function ColdBootSignOut({ profile, user }: { profile: OfflineProfile; user: OfflineUser }) {
-  const [state, setState] = useState<'checking' | 'blocked' | 'signed_out'>('checking');
-  useOutbox(state === 'blocked' ? profile : null, user, true);
+function RecoveryOutbox({ profile, user }: { profile: OfflineProfile | null; user: OfflineUser }) {
+  const [otherProfiles, setOtherProfiles] = useState<OfflineProfile[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [reauthenticate, setReauthenticate] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const names = await queuedProfilesFor(user.name);
+      const others = await Promise.allSettled(names.filter((name) => name !== profile?.name).map(getPosProfileFull));
+      if (active) {
+        setOtherProfiles(others.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+        setLoadFailed(others.some((result) => result.status === 'rejected'));
+      }
+    };
+    void load().catch(() => { if (active) setLoadFailed(true); });
+    return () => { active = false; };
+  }, [profile?.name, user.name, attempt]);
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-6">
+      <p role="status">{t('floor_pin.pending_signout')}</p>
+      {profile && <OutboxPanel posProfile={profile} user={user} />}
+      {otherProfiles.map((outlet) => <OutboxPanel key={outlet.name} posProfile={outlet} user={user} />)}
+      {loadFailed && <Button variant="outline" onClick={() => setAttempt(attempt + 1)}>{t('floor_pin.retry_outbox')}</Button>}
+      {reauthenticate ? <FloorPinPad usernameOnly /> : (
+        <Button variant="link" onClick={() => setReauthenticate(true)}>{t('floor_pin.owner_sign_in')}</Button>
+      )}
+    </div>
+  );
+}
+
+function ColdBootSignOut({ profile, user, passwordOnly }: { profile: OfflineProfile | null; user: OfflineUser; passwordOnly: boolean }) {
+  const [state, setState] = useState<'checking' | 'blocked' | 'signed_out' | 'logout_failed'>('checking');
 
   useEffect(() => retryFloorSignOut((result) => {
     if (result !== 'cancelled') setState(result);
   }), []);
 
-  if (state === 'signed_out') return <FloorPinPad />;
+  if (state === 'signed_out' || state === 'logout_failed') return <FloorPinPad usernameOnly={passwordOnly || state === 'logout_failed'} />;
   if (state === 'checking') return <Spinner message={t('common.loading')} />;
-  return (
-    <div className="flex min-h-screen items-center justify-center px-6">
-      <p role="status">{t('floor_pin.pending_signout')}</p>
-    </div>
-  );
+  return <RecoveryOutbox profile={profile} user={user} />;
 }
 
 const AuthGuard: React.FC<Props> = ({ children }) => {
@@ -59,16 +89,19 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
   const floorPadActive = isFloorPadActive();
-  const logoutFailed = hasFloorLogoutFailureMarker();
+  // Keep the gate mounted through async logout, including stale store renders before navigation.
+  const [failedOnBoot] = useState(hasFloorLogoutFailureMarker);
+  const logoutFailed = failedOnBoot || hasFloorLogoutFailureMarker();
+  const recovery = needsFloorReconciliation();
 
   // A surviving cookie on a paired tablet must not admit the previous waiter.
   const coldBoot = Boolean(
     floorPadActive && user && !user.provisional && posProfile
-      && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
+      && !hasFloorSessionMarker(user.name) && !logoutFailed && !isStaySignedIn(user, posProfile),
   );
 
   const showFloorPad = floorPadActive && (!user || user.provisional || coldBoot || logoutFailed);
-  useFloorIdle(showFloorPad ? null : user, posProfile);
+  useFloorIdle(showFloorPad || logoutFailed || recovery ? null : user, posProfile);
 
   useEffect(() => {
     // Start auth check
@@ -101,6 +134,12 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     );
   }
 
+  if ((coldBoot || logoutFailed || recovery) && user && !user.provisional) {
+    return <ColdBootSignOut key={JSON.stringify([posProfile?.name, user.name])} profile={posProfile} user={user} passwordOnly={logoutFailed || !floorPadActive} />;
+  }
+
+  if (logoutFailed || recovery) return <FloorPinPad usernameOnly offline={user?.provisional} />;
+
   if (authError || configError) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -111,10 +150,6 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
         </div>
       </div>
     );
-  }
-
-  if (coldBoot && posProfile && user) {
-    return <ColdBootSignOut key={JSON.stringify([posProfile.name, user.name])} profile={posProfile} user={user} />;
   }
 
   if (showFloorPad) {

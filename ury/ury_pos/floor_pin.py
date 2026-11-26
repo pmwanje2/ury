@@ -96,13 +96,16 @@ def _in_outlet_scope(user, profile):
 
 
 def _eligible(user, profile):
+	return _in_outlet_scope(user, profile) and _can_hold_pin(user, profile)
+
+
+def _can_hold_pin(user, profile):
 	roles = set(frappe.get_roles(user))
 	return (
 		"System Manager" not in roles
 		and frappe.db.get_value("User", user, "enabled") == 1
 		and bool(roles & {r.role for r in profile.get("custom_floor_pin_roles", [])})
 		and not roles & {r.role for r in profile.get("custom_floor_stay_signed_in_roles", [])}
-		and _in_outlet_scope(user, profile)
 		and not frappe.has_permission("POS Profile", "write", profile, user=user)
 	)
 
@@ -237,15 +240,16 @@ def issue_pin(user, pos_profile):
 @frappe.whitelist(methods=["GET"])
 def pin_staff(pos_profile):
 	profile = _managed_profile(pos_profile)
-	return [
-		{
-			"user": user,
-			"full_name": get_fullname(user),
-			"has_pin": bool(frappe.db.get_value("User", user, "custom_floor_pin_hash")),
-		}
-		for user in frappe.get_all("User", filters={"enabled": 1}, pluck="name")
-		if _eligible(user, profile)
-	]
+	roster = []
+	candidates = frappe.get_all("User", or_filters={"enabled": 1, "custom_floor_pin_hash": ["is", "set"]}, pluck="name")
+	for user in candidates:
+		if not _in_outlet_scope(user, profile):
+			continue
+		can_issue = _can_hold_pin(user, profile)
+		has_pin = bool(frappe.db.get_value("User", user, "custom_floor_pin_hash"))
+		if can_issue or has_pin:
+			roster.append({"user": user, "full_name": get_fullname(user), "has_pin": has_pin, "can_issue": can_issue})
+	return roster
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

@@ -44,24 +44,38 @@ export function isFloorPadActive(): boolean {
   return pad.paired === true && pad.till_open === true;
 }
 
-export function hasFloorSessionMarker(): boolean {
+export function hasFloorSessionMarker(user: string): boolean {
   try {
-    return localStorage.getItem(FLOOR_SESSION_MARKER) === 'true';
+    return sessionStorage.getItem(FLOOR_SESSION_MARKER) === user;
   } catch {
     return false;
   }
 }
 
-export function setFloorSessionMarker(): void {
-  localStorage.setItem(FLOOR_SESSION_MARKER, 'true');
+export function setFloorSessionMarker(user: string, recovery: boolean): void {
+  if (recovery) {
+    sessionStorage.setItem('ury_floor_reconcile', user);
+    sessionStorage.removeItem(FLOOR_SESSION_MARKER);
+  } else {
+    sessionStorage.setItem(FLOOR_SESSION_MARKER, user);
+    sessionStorage.removeItem('ury_floor_reconcile');
+  }
+}
+
+export function needsFloorReconciliation(): boolean {
+  try {
+    return !!sessionStorage.getItem('ury_floor_reconcile');
+  } catch {
+    return true;
+  }
 }
 
 export function hasFloorLogoutFailureMarker(): boolean {
   try {
     return sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) === 'true';
   } catch {
-    // Keep a paired tablet at the sign-in pad when its logout marker cannot be read.
-    return isFloorPadActive();
+    // An unreadable logout marker cannot confirm that the previous session ended.
+    return true;
   }
 }
 
@@ -92,7 +106,7 @@ export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | 
   }, [profile, user]);
 }
 
-type SignOutResult = 'signed_out' | 'blocked' | 'cancelled';
+type SignOutResult = 'signed_out' | 'logout_failed' | 'blocked' | 'cancelled';
 
 // Recheck under the outbox lock, including when replay ran in a different tab.
 export function retryFloorSignOut(onResult?: (result: SignOutResult) => void): () => void {
@@ -116,21 +130,21 @@ export function retryFloorSignOut(onResult?: (result: SignOutResult) => void): (
  * waiter never inherits the previous user's tab state.
  */
 export async function floorSignOut(stillRequested?: () => boolean): Promise<SignOutResult> {
-  let signedOut = false;
+  let outcome: SignOutResult = 'cancelled';
   try {
     await withEmptyOutbox(async () => {
       if (stillRequested && !stillRequested()) return;
-      await endFloorSession();
-      signedOut = true;
+      outcome = await endFloorSession();
     });
-    return signedOut ? 'signed_out' : 'cancelled';
+    return outcome;
   } catch (error) {
     if (!stillRequested) showToast.error(error instanceof Error ? error.message : String(error));
     return 'blocked';
   }
 }
 
-async function endFloorSession(): Promise<void> {
+async function endFloorSession(): Promise<SignOutResult> {
+  const retrying = hasFloorLogoutFailureMarker();
   let logoutFailed = false;
   try {
     // @ury/core logout() resolves false when the server logout failed.
@@ -144,11 +158,12 @@ async function endFloorSession(): Promise<void> {
     } catch {
       // A blocked marker must not interrupt sign-out.
     }
-    for (const key of SESSION_KEYS) {
+    for (const key of [...SESSION_KEYS, FLOOR_SESSION_MARKER, 'ury_floor_reconcile']) {
       try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
     }
     try { localStorage.removeItem(FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
     disconnectQzPrinter();
-    window.location.replace(FLOOR_HOME);
+    if (!retrying || !logoutFailed) window.location.replace(FLOOR_HOME);
   }
+  return logoutFailed ? 'logout_failed' : 'signed_out';
 }
