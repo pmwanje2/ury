@@ -430,13 +430,33 @@ test('requires a matching submitted invoice to resolve a refused row on a disabl
   request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json('Offline capture disabled', 417));
   await recovery.replay();
   expect((await recovery.list())[0].state).toBe('review');
-  const invoice = { name: 'INV-12', docstatus: 1, pos_profile: profile.name, customer: data.customer, grand_total: 100, currency: 'USD', is_return: 0 };
-  for (const change of [{ pos_profile: 'Other' }, { grand_total: 10 }, { docstatus: 2 }]) {
+  const invoice = { name: 'INV-12', ury_client_order_id: row.client_order_id, docstatus: 1, pos_profile: profile.name, customer: data.customer, grand_total: 100, currency: 'USD', is_return: 0 };
+  for (const change of [{ pos_profile: 'Other' }, { grand_total: 10 }, { docstatus: 2 },
+    { ury_client_order_id: 'another-order' }, { ury_client_order_id: '' }, { ury_client_order_id: null }]) {
     request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json({ ...invoice, ...change }));
     await expect(recovery.resolveReviewed(row.client_order_id, invoice.name)).rejects.toThrow();
     expect(await recovery.list()).toHaveLength(1);
   }
   request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json(invoice));
   await recovery.resolveReviewed(row.client_order_id, invoice.name);
+  await recovery.assertEmpty();
+});
+
+test('accepts the exact previously acknowledged invoice when its client order ID is absent', async () => {
+  const q = await outbox();
+  const row = await q.queueGatewaySettlement({
+    clientOrderId: 'client-1', roundId: 'round-1', invoice: 'INV-ACK', customer: data.customer,
+    settlement: { kind: 'cash', mode_of_payment: 'Cash', amount: 100 },
+  });
+  const recovery = await outbox({ profile: { ...profile, ury_offline_capture: 0, currency: 'USD' } });
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json('Offline capture disabled', 417));
+  await recovery.replay();
+  expect((await recovery.list())[0]).toMatchObject({ state: 'review', server_invoice: 'INV-ACK' });
+  await expect(recovery.resolveReviewed(row.client_order_id, 'INV-OTHER')).rejects.toThrow();
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json({
+    name: 'INV-ACK', docstatus: 1, pos_profile: profile.name, grand_total: 100,
+    customer: data.customer, currency: 'USD', is_return: 0, ury_client_order_id: '',
+  }));
+  await recovery.resolveReviewed(row.client_order_id, 'INV-ACK');
   await recovery.assertEmpty();
 });

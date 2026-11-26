@@ -2,6 +2,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { hasFloorLogoutFailureMarker } from '../src/lib/floor-session';
 import { showToast } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 import { checkPOSOpening, validatePOSClose } from '../src/lib/pos-opening-api';
@@ -77,6 +78,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  document.cookie = 'user_id=; Max-Age=0; path=/';
   localStorage.clear();
   sessionStorage.clear();
   vi.restoreAllMocks();
@@ -127,16 +129,20 @@ describe('pre-session logout', () => {
     await render();
     if (failure === 'HTTP') request.mockResolvedValueOnce({ ok: false, status: 403 });
     else request.mockRejectedValueOnce(new Error('Offline'));
+    document.cookie = 'user_id=cashier%40example.com; path=/';
     const localBefore = { ...localStorage };
     const sessionBefore = { ...sessionStorage };
     await act(async () => button('Logout').click());
     expect(location.href).toBe('/pos');
-    expect({ ...localStorage }).toEqual(localBefore);
+    expect({ ...localStorage }).toEqual({ ...localBefore, ury_floor_logout_failed: state.user.name });
     expect({ ...sessionStorage }).toEqual(sessionBefore);
+    sessionStorage.clear(); // A new tab has no copy of the failed tab's session storage.
+    expect(hasFloorLogoutFailureMarker()).toBe(true);
     expect(toast).toHaveBeenCalledWith('Failed to logout. Please try again.');
     expect(button('Logout').disabled).toBe(false);
     await act(async () => button('Logout').click());
     expect(request).toHaveBeenCalledTimes(2);
+    expect(hasFloorLogoutFailureMarker()).toBe(false);
     expect(location.href).toBe('/pos/order');
   });
 
@@ -152,7 +158,9 @@ describe('pre-session logout', () => {
     expect(button('Logout').disabled).toBe(true);
     expect(localStorage.getItem('posOrderTabsData')).toBe('cart');
     expect(location.href).toBe('/pos');
+    expect(hasFloorLogoutFailureMarker()).toBe(true);
     await act(async () => complete({ ok: true }));
+    expect(hasFloorLogoutFailureMarker()).toBe(false);
     expect(location.href).toBe('/pos/order');
   });
 

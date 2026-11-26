@@ -2,6 +2,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as core from '@ury/core';
+import { IDBFactory } from 'fake-indexeddb';
+import { testLocks } from './offline-locks';
+import { OfflineOutbox } from '../src/offline/outbox';
 import { hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
 import AuthGuard from '../src/components/AuthGuard';
 
@@ -239,4 +242,34 @@ it('locks identity switching on cold boot until the existing outbox drains', asy
   expect(boundary.logout).not.toHaveBeenCalled();
   await act(async () => vi.advanceTimersByTimeAsync(10000));
   expect(boundary.logout).toHaveBeenCalledOnce();
+});
+
+it.each(['owner', 'other user'])('holds the stay-role layout on cold boot with queued rows for %s', async (source) => {
+  vi.useRealTimers();
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
+  sessionStorage.removeItem('userAuth');
+  const profile = { name: 'Till', custom_floor_stay_signed_in_roles: [{ role: 'URY Captain' }], ury_offline_capture: 1 };
+  boundary.auth.posProfile = profile;
+  const queue = new OfflineOutbox({
+    profile, user: { ...boundary.auth.user, name: source === 'owner' ? boundary.auth.user.name : 'other@example.com' },
+  });
+  await queue.capture({ pos_profile: 'Till', no_of_pax: 1, invoice: null, last_invoice: null, order_type: 'Take Away',
+    items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 10 }] }, 10);
+  const Layout = vi.fn(() => <button>Reprint queued order</button>);
+  render(<AuthGuard><Layout /></AuthGuard>);
+  expect(Layout).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="4-digit PIN"]')).not.toBeNull());
+  expect(Layout).not.toHaveBeenCalled();
+  expect(boundary.logout).not.toHaveBeenCalled();
+});
+
+it('admits a stay-signed-in user once the cold-boot outbox check finds no rows', async () => {
+  vi.useRealTimers();
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  sessionStorage.removeItem('userAuth');
+  boundary.auth.posProfile = { name: 'Till', custom_floor_stay_signed_in_roles: [{ role: 'URY Captain' }] };
+  render(<AuthGuard><div>Stay-signed-in workspace</div></AuthGuard>);
+  await vi.waitFor(() => expect(container.textContent).toContain('Stay-signed-in workspace'));
+  expect(boundary.logout).not.toHaveBeenCalled();
 });

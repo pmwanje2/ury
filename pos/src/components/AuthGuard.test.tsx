@@ -117,7 +117,7 @@ describe("AuthGuard", () => {
     expect(screen.queryByText(/POS User/)).not.toBeInTheDocument();
   });
 
-  it("renders children when authenticated and authorized", () => {
+  it("renders children when authenticated and authorized", async () => {
     mockUseRootStore.mockReturnValue({
       checkAuth: vi.fn(),
       user: { name: "user1" },
@@ -133,7 +133,7 @@ describe("AuthGuard", () => {
 
     render(<AuthGuard><div>Protected Content</div></AuthGuard>);
     
-    expect(screen.getByText("Protected Content")).toBeInTheDocument();
+    expect(await screen.findByText("Protected Content")).toBeInTheDocument();
   });
 
   it("calls checkAuth on mount", () => {
