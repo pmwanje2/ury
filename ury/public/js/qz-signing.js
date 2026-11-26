@@ -114,16 +114,41 @@ export function withQzDeadline(operation) {
 
 const connecting = new WeakMap();
 
-export function connectQz(bridge, certificate, host) {
+export function connectQz(bridge, certificate, host, signal) {
+  signal?.throwIfAborted();
   if (bridge.websocket.isActive()) return Promise.resolve();
-  if (!connecting.has(bridge)) {
-    const connection = Promise.resolve().then(certificate).then(pem => {
-      // Older QZ versions silently send a null certificate when the resolver rejects.
-      if (!pem?.startsWith('-----BEGIN CERTIFICATE-----')) throw Error('QZ certificate is not configured');
-      bridge.security.setCertificatePromise(resolve => resolve(pem), { rejectOnFailure: true });
-      return bridge.websocket.connect(host ? { host, usingSecure: true } : undefined);
-    }).finally(() => connecting.delete(bridge));
-    connecting.set(bridge, connection);
+  const existing = connecting.get(bridge);
+  if (existing) return existing;
+
+  const controller = new AbortController();
+  let rejectConnection;
+  const cancelled = new Promise((_, reject) => { rejectConnection = reject; });
+  function abort(reason) {
+    controller.abort(reason);
+    if (connecting.get(bridge) === connection) connecting.delete(bridge);
+    rejectConnection(reason);
   }
-  return connecting.get(bridge);
+  const onAbort = () => abort(signal.reason);
+  const timer = setTimeout(() => abort(new Error('QZ_TRUST_TIMEOUT')), 60000);
+  const open = async () => {
+    let pem;
+    try {
+      pem = await certificate(controller.signal);
+      if (!pem?.startsWith('-----BEGIN CERTIFICATE-----')) throw Error('Missing public certificate');
+    } catch (cause) {
+      controller.signal.throwIfAborted();
+      throw new Error('QZ_CERT_ERROR', { cause });
+    }
+    controller.signal.throwIfAborted();
+    bridge.security.setCertificatePromise(resolve => resolve(pem), { rejectOnFailure: true });
+    return bridge.websocket.connect(host ? { host, usingSecure: true } : { usingSecure: true });
+  };
+  const connection = Promise.race([Promise.resolve().then(open), cancelled]).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+    if (connecting.get(bridge) === connection) connecting.delete(bridge);
+  });
+  connecting.set(bridge, connection);
+  signal?.addEventListener('abort', onAbort, { once: true });
+  return connection;
 }

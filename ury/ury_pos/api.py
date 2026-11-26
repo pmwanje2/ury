@@ -607,15 +607,8 @@ def get_production_units_for_branch():
 	if not branch:
 		return {"production_units": []}
 
-	productions = frappe.get_all(
-		"URY Production Unit",
-		filters={"branch": branch},
-		fields=["name"]
-	)
-
-	production_names = [p.name for p in productions]
-
-	return {"production_units": production_names}
+	from ury.ury.api.ury_kot_display import get_production_units
+	return {"production_units": [unit["name"] for unit in get_production_units(branch=branch)]}
 
 
 def format_merged_table_label(primary, merged_tables=None):

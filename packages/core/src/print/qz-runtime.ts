@@ -12,7 +12,7 @@ export interface QzBridge {
   };
   websocket: {
     isActive(): boolean;
-    connect(options: { host: string; usingSecure: boolean }): Promise<void>;
+    connect(options: { host?: string; usingSecure: boolean }): Promise<void>;
     disconnect(): Promise<void>;
   };
   printers: { getDefault(): Promise<string> };

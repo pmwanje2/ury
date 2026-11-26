@@ -230,7 +230,13 @@ before_uninstall = "ury.uninstall.uninstall"
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }
 
+has_permission = {
+    "URY Production Unit": "ury.ury.doctype.ury_production_unit.station_scope.has_station_permission",
+}
+
 permission_query_conditions = {
+    "URY Production Unit": "ury.ury.doctype.ury_production_unit.station_scope.station_query_conditions",
+    "URY KOT": "ury.ury.doctype.ury_production_unit.station_scope.station_query_conditions",
     "Quality Review": "ury.ury.hooks.checklist.permission_checklists",
 }
 

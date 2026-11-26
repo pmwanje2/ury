@@ -1,0 +1,39 @@
+{
+ "doctype": "DocType",
+ "name": "URY Receipt Delivery",
+ "module": "URY",
+ "engine": "InnoDB",
+ "field_order": [
+  "invoice",
+  "print_number",
+  "reprint_label",
+  "delivered"
+ ],
+ "fields": [
+  {
+   "fieldname": "invoice",
+   "fieldtype": "Link",
+   "options": "POS Invoice",
+   "label": "Invoice",
+   "reqd": 1
+  },
+  {
+   "fieldname": "print_number",
+   "fieldtype": "Int",
+   "label": "Authorized Print Number",
+   "reqd": 1
+  },
+  {
+   "fieldname": "reprint_label",
+   "fieldtype": "Data",
+   "label": "Reprint Label"
+  },
+  {
+   "fieldname": "delivered",
+   "fieldtype": "Check",
+   "label": "Delivered",
+   "default": "0"
+  }
+ ],
+ "permissions": []
+}

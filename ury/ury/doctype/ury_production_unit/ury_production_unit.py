@@ -9,7 +9,24 @@ from ury.brand import coded_message
 from ury.ury.api.ury_kot_routing import RoutingError, validate_failover_chain
 
 
+_DEVICE_SETTINGS_SAVE = object()
+
+
 class URYProductionUnit(Document):
+    def save_device_settings(self):
+        # Only a server-loaded, existing station can take this narrow exception.
+        self.flags.device_settings_save = _DEVICE_SETTINGS_SAVE
+        try:
+            self.save()
+        finally:
+            self.flags.pop("device_settings_save", None)
+
+    def _get_missing_mandatory_fields(self):
+        missing = super()._get_missing_mandatory_fields()
+        if self.flags.device_settings_save is _DEVICE_SETTINGS_SAVE and not self.department:
+            return [item for item in missing if item[0] != "department"]
+        return missing
+
     def validate(self):
         failover_target = self.get("custom_failover_production_unit")
         if failover_target:

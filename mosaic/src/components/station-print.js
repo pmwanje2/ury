@@ -28,7 +28,7 @@ function resolveBackupTarget(settings) {
 
 function printFailureCode(error, fallback) {
   if (error instanceof QzSigningRefusedError) return "QZ_SIGNING_REFUSED";
-  if (["QZ_TRUST_TIMEOUT", "PRINTER_TIMEOUT", "QZ_NOT_RUNNING"].includes(error?.message)) return error.message;
+  if (["QZ_CERT_ERROR", "QZ_TRUST_TIMEOUT", "PRINTER_TIMEOUT", "QZ_NOT_RUNNING"].includes(error?.message)) return error.message;
   if (fallback === "QZ_UNAVAILABLE" && /Cannot find printer/i.test(String(error?.message ?? error))) {
     return "PRINTER_NOT_FOUND";
   }
@@ -73,8 +73,11 @@ export function createStationPrinter({
   const pending = new Set();
   let qzReady;
 
-  async function publicCertificate() {
-    const { message } = await call.get("ury.ury.api.ury_print.qz_certificate", {});
+  async function publicCertificate(signal) {
+    const method = "ury.ury.api.ury_print.qz_certificate";
+    const { message } = signal && call.axios
+      ? (await call.axios.get(`/api/method/${method}`, { signal })).data
+      : await call.get(method, {});
     if (!message?.startsWith("-----BEGIN CERTIFICATE-----")) throw Error("QZ certificate is not configured");
     return message;
   }
@@ -116,8 +119,11 @@ export function createStationPrinter({
     const image = settings.commandMode === "raster" ? { imageEncoding: "GS_V_0" } : { dotDensity: "double" };
     return runSignedQz(bridge, postSignature, async () => {
       if (!bridge.websocket.isActive()) {
-        try { await connectQz(bridge, publicCertificate); }
-        catch (cause) { throw new Error("QZ_NOT_RUNNING", { cause }); }
+        try { await connectQz(bridge, publicCertificate, undefined, signal); }
+        catch (cause) {
+          if (cause?.message === "QZ_CERT_ERROR" || cause?.message === "QZ_TRUST_TIMEOUT") throw cause;
+          throw new Error("QZ_NOT_RUNNING", { cause });
+        }
       }
       signal.throwIfAborted();
       startPrinting();
@@ -262,7 +268,7 @@ export function createStationPrinter({
       return withQzDeadline(async (signal, startLookup) => {
         const bridge = await getQz();
         return runSignedQz(bridge, postSignature, async () => {
-          await connectQz(bridge, publicCertificate);
+          await connectQz(bridge, publicCertificate, undefined, signal);
           signal.throwIfAborted();
           startLookup();
           return bridge.printers.find();

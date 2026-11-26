@@ -21,4 +21,4 @@ export function runSignedQz<T>(
 
 export function withQzDeadline<T>(operation: (signal: AbortSignal, startPrinting: () => void) => Promise<T>): Promise<T>;
 
-export function connectQz(bridge: QzBridge, certificate: () => Promise<string>, host?: string): Promise<void>;
+export function connectQz(bridge: QzBridge, certificate: (signal: AbortSignal) => Promise<string>, host?: string, signal?: AbortSignal): Promise<void>;

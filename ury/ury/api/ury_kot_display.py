@@ -724,6 +724,7 @@ def record_station_heartbeat(production_unit):
         return {"status": "Ignored"}
 
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    _require_station_scope(unit_doc)
     can_heartbeat = frappe.has_permission("URY Production Unit", "write", doc=unit_doc) or (
         frappe.has_permission("URY Production Unit", "read", doc=unit_doc)
         and frappe.has_permission("URY KOT", "write")
@@ -785,7 +786,7 @@ def _extract_station_device_config(production_unit):
         page_width = 576
     command_mode = str(row.get("custom_command_mode") or "standard").strip()
     if command_mode not in ("standard", "raster"):
-        frappe.throw(_("Choose a supported printer command mode."))
+        command_mode = "standard"
 
     def _split_target(value):
         if ":" in value and not value.startswith("/") and " " not in value:
@@ -819,12 +820,41 @@ def _extract_station_device_config(production_unit):
     }
 
 
+def _require_station_scope(unit_doc):
+    # Invoke the station permission hook directly too: Frappe can short-circuit
+    # its document checks for Administrator or grant access via a document share.
+    if not frappe.call("ury.ury.doctype.ury_production_unit.station_scope.has_station_permission", doc=unit_doc):
+        frappe.throw(_("This station is outside your company or branch scope."), frappe.PermissionError)
+
+
+@frappe.whitelist()
+def get_production_units(company=None, branch=None):
+    from ury.ury.doctype.ury_production_unit.station_scope import station_company
+
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and branch and branch != session_branch:
+        return []
+    selected_branch = session_branch or branch
+    rows = frappe.get_list(
+        "URY Production Unit", fields=["name", "enabled", "branch", "company"],
+        filters={"branch": selected_branch} if selected_branch else {},
+        order_by="name asc", limit_page_length=0,
+    )
+    result = []
+    for unit in rows:
+        owner = station_company(unit)
+        if owner and (not company or owner == company):
+            result.append({"name": unit.name, "enabled": unit.enabled})
+    return result
+
+
 @frappe.whitelist()
 def get_station_device_config(production_unit):
     """Return server-stored order device & backup printer settings for a Production Unit."""
     if not production_unit:
         return None
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    _require_station_scope(unit_doc)
     if not frappe.has_permission("URY Production Unit", "read", doc=unit_doc):
         frappe.throw(
             coded_message("KOT-DEVICE-NOT-PERMITTED", _("You do not have permission to read station settings.")),
@@ -856,6 +886,7 @@ def save_station_device_config(production_unit, config):
         )
 
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    _require_station_scope(unit_doc)
     if not frappe.has_permission("URY Production Unit", "write", doc=unit_doc):
         frappe.throw(
             coded_message("KOT-DEVICE-NOT-PERMITTED", _("You do not have permission to update station settings.")),
@@ -909,11 +940,7 @@ def save_station_device_config(production_unit, config):
         unit_doc.custom_printer_transport = "QZ Tray"
     elif getattr(unit_doc, "custom_device_mode", None) == "KDS + Auto Print":
         unit_doc.custom_device_mode = "KDS Display"
-    if not unit_doc.department:
-        # Legacy stations predate the mandatory department link. save() still runs
-        # permission, link, failover-chain and heartbeat validations.
-        unit_doc.flags.ignore_mandatory = True
-    unit_doc.save()
+    unit_doc.save_device_settings()
     return _extract_station_device_config(production_unit)
 
 
@@ -1337,6 +1364,7 @@ def kot_list(production_unit=None):
     availability_branch = branch
     if production_unit:
         unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+        _require_station_scope(unit_doc)
         if not frappe.has_permission("URY Production Unit", "read", doc=unit_doc):
             frappe.throw(
                 coded_message(

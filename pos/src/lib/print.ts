@@ -1,5 +1,6 @@
+import { v4 as uuid } from 'uuid';
 import { assertOfflineActionAllowed } from '../offline/cashier';
-import { call, printWithQz } from '@ury/core';
+import { call, isLinkDown, printWithQz } from '@ury/core';
 import { buildLetterheadParams } from '@ury/core/print-format';
 import {
   getInvoicePrintHtml,
@@ -100,6 +101,55 @@ export async function printBillCopy({
   return result;
 }
 
+async function receiptRequest<T>(method: string, args: Record<string, unknown>): Promise<T> {
+  const post = () => call.post<T>(`ury.ury.api.ury_print.${method}`, args);
+  try {
+    return await post();
+  } catch (error) {
+    // The server keys preparation and confirmation independently of the HTTP response.
+    if (!isLinkDown(error)) throw error;
+    return post();
+  }
+}
+
+async function confirmBrowserDelivery(url: string): Promise<void> {
+  let popup = window.open(url, '_blank');
+  if (!popup) {
+    // The QZ attempt may have outlived browser user activation. An actual click
+    // opens printview without repeating the receipt authorization.
+    popup = await new Promise<Window>((resolve, reject) => {
+      const dialog = document.createElement('dialog');
+      const open = document.createElement('button');
+      open.textContent = 'Open receipt for browser printing';
+      const cancel = document.createElement('button');
+      cancel.textContent = 'Cancel';
+      dialog.append(open, cancel);
+      document.body.append(dialog);
+      const dismiss = () => {
+        dialog.remove();
+        reject(new Error('Browser printing was cancelled.'));
+      };
+      cancel.onclick = dismiss;
+      dialog.oncancel = dismiss;
+      open.onclick = () => {
+        const receipt = window.open(url, '_blank');
+        if (!receipt) {
+          open.textContent = 'Allow pop-ups, then open receipt';
+          return;
+        }
+        dialog.remove();
+        resolve(receipt);
+      };
+      dialog.showModal();
+    });
+  }
+  popup.opener = null;
+  // Frappe closes printview after the native dialog. Browsers cannot report
+  // whether the operator printed or cancelled, so confirm the physical receipt.
+  while (!popup.closed) await new Promise(resolve => setTimeout(resolve, 300));
+  if (!window.confirm('Did the browser print the receipt?')) throw new Error('Receipt delivery was not confirmed.');
+}
+
 export async function printOrder({
   orderId,
   posProfile,
@@ -115,10 +165,31 @@ export async function printOrder({
   const auth = approvalToken || reason || reasonNote ? { approvalToken, reason, reasonNote } : undefined;
 
   const fallback = print_type === 'qz';
+  let deliveryId: string | undefined;
+  const completeDelivery = async () => {
+    if (!deliveryId) return;
+    try {
+      await receiptRequest('complete_receipt_delivery', { invoice: orderId, delivery_id: deliveryId });
+    } catch {
+      throw new Error('Receipt delivered, but its status could not be confirmed. Check the invoice before reprinting.');
+    }
+  };
   if (fallback) {
     const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
-    if (!skipStatusUpdate) await updatePrintStatus(orderId, auth);
-    if (await deliverQzReceipt({ qz_host, printer }, html)) return 'qz';
+    if (!skipStatusUpdate) {
+      const { message } = await receiptRequest<{ message: { delivery_id: string } }>(
+        'prepare_receipt_delivery', {
+          invoice: orderId, request_id: uuid(), approval_token: approvalToken,
+          reason, reason_note: reasonNote,
+        },
+      );
+      if (!message?.delivery_id) throw new Error('Receipt authorization was unavailable.');
+      deliveryId = message.delivery_id;
+    }
+    if (await deliverQzReceipt({ qz_host, printer }, html)) {
+      await completeDelivery();
+      return 'qz';
+    }
   } else if (print_type === 'network') {
     if (cashier && !multiple_cashier) {
       await networkPrint(orderId, printer as string, format as string, auth);
@@ -134,6 +205,11 @@ export async function printOrder({
   const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
   const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
   const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
-  window.open(url, fallback ? '_self' : '_blank', fallback ? undefined : 'noopener,noreferrer');
+  if (fallback) {
+    await confirmBrowserDelivery(url);
+    await completeDelivery();
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
   return 'socket';
 }

@@ -39,12 +39,15 @@ export function resolveDrawerKickHex(opts?: {
   throw new Error(`Unsupported cash drawer pin "${String(rawPin)}". Use Pin 2 or Pin 5.`);
 }
 
-export async function loadQzPrinter(host: string): Promise<void> {
+export async function loadQzPrinter(host: string, signal?: AbortSignal): Promise<void> {
   const qz = await loadQz();
-  await connectQz(qz, async () => {
-    const { data } = await axios.get('/api/method/ury.ury.api.ury_print.qz_certificate');
+  await connectQz(qz, async requestSignal => {
+    const endpoint = '/api/method/ury.ury.api.ury_print.qz_certificate';
+    const { data } = signal
+      ? await axios.get(endpoint, { signal: requestSignal })
+      : await axios.get(endpoint);
     return data.message;
-  }, host);
+  }, host, signal);
 }
 
 export function disconnectQzPrinter(): void {
@@ -56,7 +59,7 @@ export async function printWithQz(host: string, htmlToPrint: string, queue?: str
   return withQzDeadline(async (signal, startPrinting) => {
     const qz = await loadQz();
     return runSignedQz(qz, call.post, async () => {
-      if (!qz.websocket.isActive()) await loadQzPrinter(host);
+      if (!qz.websocket.isActive()) await loadQzPrinter(host, signal);
       signal.throwIfAborted();
       startPrinting();
       const printer = queue?.trim() || await qz.printers.getDefault();
