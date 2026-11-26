@@ -157,6 +157,28 @@ describe("PaymentDialog fiscal receipt order", () => {
     expect(errors.join(" ")).not.toContain("payment.payment_not_processed");
   });
 
+  it.each(["success", "print refused", "retirement refused"])(
+    "retires recovery only after acknowledged primary delivery (%s)", async outcome => {
+      const close = "ury.ury_pos.api.close_unused_fiscal_copy";
+      vi.mocked(call.get).mockResolvedValue({ message: { fdn: "FDN-1", efris_status: "Submitted" } });
+      vi.mocked(call.post).mockImplementation(async method => {
+        if (method === close && outcome === "retirement refused") throw new Error("Request interrupted");
+        return { ok: true };
+      });
+      if (outcome === "print refused") vi.mocked(printOrder).mockRejectedValueOnce(new Error("No receipt delivered"));
+      const props = renderDialog();
+      fireEvent.click(screen.getByText(/payment.pay_button/));
+      await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+      expect(printOrder).toHaveBeenCalledOnce();
+      if (outcome === "print refused") {
+        expect(call.post).not.toHaveBeenCalledWith(close, expect.anything());
+      } else {
+        expect(callOrder(close)).toBeGreaterThan(vi.mocked(printOrder).mock.invocationCallOrder[0]);
+        expect(showToast.error).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("polls get_efris_status until the FDN arrives before printing the fiscal receipt", async () => {
     let pollCount = 0;
     vi.mocked(call.get).mockImplementation(async (method: string) => {

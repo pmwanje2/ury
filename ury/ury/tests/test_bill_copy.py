@@ -83,14 +83,14 @@ class BillCopy(unittest.TestCase):
 
     def test_copy_shows_which_account_owes_the_remaining_balance(self):
         path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
-        doc = frappe._dict(customer='AC-012', currency='UGX', items=[], payments=[frappe._dict(mode_of_payment='Visa',amount=40)],
+        doc = frappe._dict(customer='AC-012', currency='UGX', copy_number=1, items=[], payments=[frappe._dict(mode_of_payment='Visa',amount=40)],
                            outstanding_amount=60, taxes=[], copy_timestamp='today')
         html = Environment(autoescape=True).from_string(json.loads(path.read_text())['html']).render(doc=doc, _=lambda x:x)
         self.assertIn('Charged to account AC-012: 60 UGX',html); self.assertIn('Visa: 40 UGX',html)
 
     def test_fully_on_account_copy_omits_zero_cash(self):
         path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
-        doc = frappe._dict(customer='AC-012', currency='UGX', items=[], taxes=[], copy_timestamp='today',
+        doc = frappe._dict(customer='AC-012', currency='UGX', copy_number=1, items=[], taxes=[], copy_timestamp='today',
                            outstanding_amount=100, payments=[frappe._dict(mode_of_payment='Cash', amount=0)])
         html = Environment(autoescape=True).from_string(json.loads(path.read_text())['html']).render(doc=doc, _=lambda x:x)
         self.assertIn('Charged to account AC-012: 100 UGX', html)
@@ -227,7 +227,7 @@ class BillCopy(unittest.TestCase):
         self.assertEqual(browser['status'], 'RESERVED')
         self.assertEqual(browser['copy_number'], 1)
         self.assertEqual(browser['delivery'], 'browser')
-        self.assertIn('COPY #1', browser['html'])
+        self.assertNotIn('html', browser)
         self.assertIn('copy_number=1', browser['print_url'])
         self.assertEqual(qz['status'], 'RESERVED')
         self.assertEqual(qz['copy_number'], 2)
@@ -238,36 +238,21 @@ class BillCopy(unittest.TestCase):
         self.assertEqual(records[0]['copy_number'], 1)
         self.assertEqual(records[1]['copy_number'], 2)
 
-    def test_printview_populates_copy_number_and_renders_hash_n(self):
+    def test_regular_print_does_not_inherit_last_logged_copy_number(self):
         from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
         from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
 
         doc = object.__new__(CustomPOSInvoice)
-        doc.__dict__.update(name='POS-INV-00024', docstatus=1, customer='Walk In', currency='UGX', outstanding_amount=0)
-        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, \
-             patch.object(POSInvoice, 'before_print'), \
-             patch('ury.ury.doctype.ury_order.ury_order.check_split_target_access'):
+        doc.__dict__.update(name='INV', docstatus=1, copy_number=3, outstanding_amount=0)
+        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, patch.object(POSInvoice, 'before_print'), patch(
+            'ury.ury.doctype.ury_order.ury_order.check_split_target_access'
+        ):
             f.db.exists.return_value = True
-            f.get_doc.return_value = frappe._dict(name='POS-INV-00024', docstatus=1, custom_merged_pos_invoice=None)
-            f.form_dict = {}
+            f.get_doc.return_value = frappe._dict(name='INV', docstatus=1)
             f.db.get_value.return_value = 3
-            CustomPOSInvoice.before_print(doc)
-        self.assertEqual(doc.copy_number, 3)
-
-        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
-        copy_html = json.loads(path.read_text())['html']
-        # Direct /printview without in-memory copy_number still prints COPY #n
-        pv_doc = frappe._dict(
-            name='POS-INV-00024', docstatus=1, currency='UGX', items=[], taxes=[], payments=[],
-            grand_total=100, rounded_total=100, outstanding_amount=0, copy_timestamp='2026-11-23 12:34',
-        )
-        fake_f = MagicMock()
-        fake_f.db.get_value.return_value = None
-        html_default = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
-        self.assertIn('COPY #1', html_default)
-        fake_f.db.get_value.return_value = 4
-        html_logged = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
-        self.assertIn('COPY #4', html_logged)
+            f.form_dict = {}
+            doc.before_print()
+        self.assertFalse(doc.copy_number)
 
     def test_bill_copy_includes_merged_partner_items_payments_and_efris(self):
         """Reproduces Hydrogen's billcopy-merged live probe (POS-INV-00031 + partner POS-INV-00030)."""
@@ -307,62 +292,15 @@ class BillCopy(unittest.TestCase):
                       'POS-INV-00030', 'Water', 'Cash', '326041234568', 'C: Exempt', '25000'):
             self.assertIn(token, html, token)
 
-    def test_before_print_and_bill_copy_query_pass_frappe_v16_select_validation(self):
-        """P0: Frappe v16 rejects SQL function strings like max(copy_number) in get_value."""
-        from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
-        from frappe.database.query import _validate_select_field
-        from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
-
-        def _raise_frappe_throw(msg, exc=frappe.ValidationError, **kw):
-            raise exc(msg)
-
-        seen_before_print = []
-        doc = object.__new__(CustomPOSInvoice)
-        doc.__dict__.update(name='POS-INV-00024', docstatus=1, customer='Walk In', currency='UGX', outstanding_amount=0)
-        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, \
-             patch.object(POSInvoice, 'before_print'), \
-             patch('ury.ury.doctype.ury_order.ury_order.check_split_target_access'), \
-             patch('frappe.database.query._', lambda msg: msg), \
-             patch('frappe.database.query.frappe.throw', side_effect=_raise_frappe_throw):
-            f.db.exists.return_value = True
-            f.get_doc.return_value = frappe._dict(name='POS-INV-00024', docstatus=1, custom_merged_pos_invoice=None)
-            f.form_dict = {}
-
-            def capture_bp(doctype, flt, fieldname=None, **kw):
-                seen_before_print.append((doctype, flt, fieldname, kw))
-                _validate_select_field(fieldname)
-                return 3
-
-            f.db.get_value.side_effect = capture_bp
-            CustomPOSInvoice.before_print(doc)
-
-        self.assertEqual(doc.copy_number, 3)
-        self.assertEqual(len(seen_before_print), 1)
-        self.assertEqual(seen_before_print[0][2], 'copy_number')
-        self.assertEqual(seen_before_print[0][3].get('order_by'), 'copy_number desc')
-
-        # Now validate URY Bill Copy template's fallback query through Frappe v16's real validator too.
+    def test_template_requires_server_assigned_copy_number(self):
         path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
-        copy_html = json.loads(path.read_text())['html']
-        pv_doc = frappe._dict(
-            name='POS-INV-00024', docstatus=1, currency='UGX', items=[], taxes=[], payments=[],
-            grand_total=100, rounded_total=100, outstanding_amount=0, copy_timestamp='2026-11-24 00:30',
-        )
-        seen_template = []
-        with patch('frappe.database.query._', lambda msg: msg), \
-             patch('frappe.database.query.frappe.throw', side_effect=_raise_frappe_throw):
-            def capture_tpl(doctype, flt, fieldname=None, **kw):
-                seen_template.append((doctype, flt, fieldname, kw))
-                _validate_select_field(fieldname)
-                return 4
-
-            fake_f = MagicMock()
-            fake_f.db.get_value.side_effect = capture_tpl
-            html = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
-        self.assertIn('COPY #4', html)
-        self.assertEqual(len(seen_template), 1)
-        self.assertEqual(seen_template[0][2], 'copy_number')
-        self.assertEqual(seen_template[0][3].get('order_by'), 'copy_number desc')
+        template = Environment().from_string(json.loads(path.read_text())['html'])
+        doc = frappe._dict(name='INV', items=[], payments=[], taxes=[])
+        fake = MagicMock()
+        fake.db.get_value.return_value = 4
+        fake.throw.side_effect = frappe.PermissionError('No authorized copy')
+        with self.assertRaises(frappe.PermissionError):
+            template.render(doc=doc, frappe=fake, _=lambda msg: msg)
 
     def test_active_copy_replay_returns_number_without_dispatch_payload(self):
         """P1: An overlapping request can see the copy number but cannot dispatch it."""

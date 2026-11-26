@@ -308,6 +308,75 @@ class SiteContracts(TestCase):
             self.assertNotIn("dispatch_token", replay)
             self.assertEqual(api.confirm_bill_copy(invoice, "copy", replacement["dispatch_token"])["status"], "COMPLETED")
 
+    def render_copy(self, invoice, number, grant=None):
+        from frappe.www.printview import get_html_and_style
+
+        params = frappe._dict(doctype="POS Invoice", name=invoice, format="URY Bill Copy", copy_number=number)
+        if grant:
+            params.render_grant = grant
+        with patch.object(frappe.local, "form_dict", params):
+            return get_html_and_style("POS Invoice", invoice, print_format="URY Bill Copy", no_letterhead=True)["html"]
+
+    def test_browser_render_grant_is_required_and_consumed_once(self):
+        from ury.ury_pos import api
+
+        invoice = self.committed_copy()
+        copy = api.print_bill_copy(invoice, "browser", delivery="browser")
+        with self.assertRaises(frappe.PermissionError):
+            self.render_copy(invoice, copy["copy_number"])
+        claim = api.begin_bill_copy_dispatch(invoice, "browser", copy["dispatch_token"], "browser")
+        grant = claim["render_grant"]
+        self.assertNotEqual(grant, copy["dispatch_token"])
+        self.assertIn("COPY #1", self.render_copy(invoice, 1, grant))
+        with self.assertRaises(frappe.PermissionError):
+            self.render_copy(invoice, 1, grant)
+        api.confirm_bill_copy(invoice, "browser", copy["dispatch_token"])
+        with self.assertRaises(frappe.PermissionError):
+            self.render_copy(invoice, 1, grant)
+
+    def test_reassigned_and_completed_reservations_cannot_reopen_the_original_url(self):
+        from ury.ury_pos import api
+
+        invoice = self.committed_copy()
+        reserve = lambda: api.print_bill_copy(invoice, "copy", delivery="browser")
+        original = reserve()
+        api.release_bill_copy(invoice, "copy", original["dispatch_token"])
+        replacement = reserve()
+        self.assertNotEqual(original["dispatch_token"], replacement["dispatch_token"])
+        for stage in ("reassigned", "completed"):
+            with self.subTest(stage=stage):
+                if stage == "completed":
+                    api.confirm_bill_copy(invoice, "copy", replacement["dispatch_token"])
+                with self.assertRaises(frappe.PermissionError):
+                    self.render_copy(invoice, original["copy_number"])
+
+    def test_expired_browser_grant_cannot_render_or_move_to_another_copy(self):
+        from datetime import timedelta
+        from frappe.utils import now_datetime
+        from ury.ury_pos import api
+
+        invoice = self.committed_copy()
+        copy = api.print_bill_copy(invoice, "browser", delivery="browser")
+        grant = api.begin_bill_copy_dispatch(invoice, "browser", copy["dispatch_token"]).get("render_grant")
+        with self.assertRaises(frappe.PermissionError):
+            self.render_copy(invoice, 2, grant)
+        with patch("frappe.utils.now_datetime", return_value=now_datetime() + timedelta(seconds=301)):
+            with self.assertRaises(frappe.PermissionError):
+                self.render_copy(invoice, 1, grant)
+
+    def test_qz_dispatch_cannot_be_released_even_by_its_owner(self):
+        from ury.ury_pos import api
+
+        invoice = self.committed_copy()
+        copy = api.print_bill_copy(invoice, "qz", delivery="qz")
+        token = copy["dispatch_token"]
+        api.begin_bill_copy_dispatch(invoice, "qz", token, "qz")
+        with self.assertRaises(frappe.PermissionError):
+            api.release_bill_copy(invoice, "qz", token)
+        self.assertNotIn("dispatch_token", api.print_bill_copy(invoice, "qz", delivery="qz"))
+        self.assertTrue(api.begin_bill_copy_dispatch(invoice, "qz", token, "browser")["render_grant"])
+        self.assertEqual(api.confirm_bill_copy(invoice, "qz", token)["status"], "COMPLETED")
+
     def committed_copy(self):
         from ury.ury_pos import api
 

@@ -100,7 +100,7 @@ vi.mock("@ury/core", () => ({
   printWithQz: vi.fn().mockResolvedValue(undefined),
   call: {
     get: vi.fn().mockResolvedValue({ message: { has_permission: true } }),
-    post: vi.fn().mockImplementation(async (method: string) => method.endsWith("begin_bill_copy_dispatch") ? {message: {status: "DISPATCHING"}} : method.endsWith("confirm_bill_copy")
+    post: vi.fn().mockImplementation(async (method: string) => method.endsWith("begin_bill_copy_dispatch") ? {message: {status: "DISPATCHING", render_grant: 'one-use'}} : method.endsWith("confirm_bill_copy")
       ? { message: { status: "COMPLETED" } } : ({
       message: {
         status: "RESERVED", dispatch_token: "attempt-1",

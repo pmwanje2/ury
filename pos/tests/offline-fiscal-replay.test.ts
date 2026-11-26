@@ -100,6 +100,33 @@ test("offline settlement carries room_number through gateway queueing, provision
   expect(settledInvoices).toEqual(["INV-ROOM-1"]);
 });
 
+test("offline no-print choice survives capture and replay without polling for a fiscal copy", async () => {
+  const profile = makeProfile();
+  vi.spyOn(window, "open").mockReturnValue(null);
+  const poll = vi.spyOn(call, "get").mockResolvedValue({ message: {} });
+  const post = vi.spyOn(call, "post").mockResolvedValue({ message: {} });
+  await submitSettlementOfflineAware({
+    profile, user, invoice: "NO-PRINT", amount: 15000, due: 15000, modeOfPayment: "Cash",
+    fiscalReceiptRequested: 0, onlineSettle: async () => { throw { httpStatus: 502 }; },
+  });
+  const queue = cashierOutbox(profile, user);
+  const [stored] = await queue.list();
+  const sends: Record<string, unknown>[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("get_logged_user")) return json(user.name);
+    if (url.endsWith("make_invoice")) {
+      sends.push(JSON.parse(String(init?.body)));
+      return json({ name: "NO-PRINT", status: "Submitted" });
+    }
+    return json(true);
+  }));
+  await queue.replay();
+  expect.soft(stored.settlement).toMatchObject({ fiscal_receipt_requested: 0 });
+  expect.soft(sends).toEqual([expect.objectContaining({ fiscal_receipt_requested: 0 })]);
+  expect(poll).not.toHaveBeenCalled();
+  expect(post).not.toHaveBeenCalled();
+});
+
 test("replayed offline settlement enters the pending->reprint path and prints COPY #n once FDN arrives", async () => {
   const profile = {
     ...makeProfile(),
@@ -115,7 +142,7 @@ test("replayed offline settlement enters the pending->reprint path and prints CO
     if (method === "ury.ury_pos.api.queue_fiscal_reprint") {
       return { message: { status: "AWAITING_FDN" } };
     }
-    if (method === "ury.ury_pos.api.begin_bill_copy_dispatch") return { message: { status: "DISPATCHING" } };
+    if (method === "ury.ury_pos.api.begin_bill_copy_dispatch") return { message: { status: "DISPATCHING", render_grant: 'one-use' } };
     if (method === "ury.ury_pos.api.confirm_bill_copy") return { message: { status: "COMPLETED" } };
     if (method === "ury.ury_pos.api.print_bill_copy") {
       return {

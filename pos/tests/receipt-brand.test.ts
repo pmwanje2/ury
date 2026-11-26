@@ -21,15 +21,17 @@ it.each([['POS', posHtml], ['dashboard', dashboardHtml], ['Serve', serveHtml]] a
 );
 
 it('POS fiscal browser printview explicitly suppresses letterhead', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const open = vi.spyOn(window, 'open').mockReturnValue({ closed: true } as Window);
+    const confirmed = vi.spyOn(window, 'confirm').mockReturnValue(true);
     try {
       await posPrint({ orderId: 'INV-1', posProfile: { print_type: 'socket' } as never, skipStatusUpdate: true, printFormat: 'Thermal receipt' });
       const params = new URL(String(open.mock.lastCall![0]), location.origin).searchParams;
+      expect(confirmed).toHaveBeenCalledOnce();
       expect(params.get('format')).toBe('Thermal receipt');
       expect(params.get('no_letterhead')).toBe('1');
       expect(params.get('letterhead')).toBe('No Letterhead');
       expect(params.get('settings')).toBe('{}');
-    } finally { open.mockRestore(); }
+    } finally { open.mockRestore(); confirmed.mockRestore(); }
   },
 );
 
