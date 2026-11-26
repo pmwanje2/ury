@@ -903,7 +903,7 @@
     "retry_review": "Reintentar pedido revisado",
     "reconcile_invoice": "Conciliar con una factura enviada",
     "invoice_prompt": "Comprueba los artículos y el pago del pedido {{order}} ({{customer}}, {{amount}} {{tender}}). Introduce el número de su factura de TPV enviada para retirar el pedido de la cola.",
-    "invoice_mismatch": "La factura enviada debe coincidir con este pedido. El pedido sigue en la cola.",
+    "invoice_mismatch": "La factura enviada debe estar vinculada a este pedido y sus datos deben coincidir. El pedido sigue en la cola.",
     "retry_unavailable": "Resuelve los requisitos de revisión antes de reintentar este pedido.",
     "outbox": "Cola sin conexión",
     "replaying": "Sincronizando",

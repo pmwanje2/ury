@@ -161,32 +161,30 @@ export async function floorSignOut(stillRequested?: () => boolean): Promise<Sign
   }
 }
 
-async function endFloorSession(): Promise<SignOutResult> {
-  const retrying = hasFloorLogoutFailureMarker();
+export async function logoutWithFloorMarker(): Promise<boolean> {
   // Persist before the network request: the tab may close while logout is in flight.
   try {
     localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, getSessionUser() || localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) || 'true');
   } catch {
     try { sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true'); } catch { /* Still attempt server logout. */ }
   }
-  let logoutFailed = false;
   try {
-    // @ury/core logout() resolves false when the server logout failed.
-    logoutFailed = (await logout()) === false;
+    if (await logout() === false) return false;
   } catch {
-    logoutFailed = true;
-  } finally {
-    try {
-      if (!logoutFailed) clearFloorLogoutFailureMarker();
-    } catch {
-      // A blocked marker must not interrupt sign-out.
-    }
-    for (const key of [...SESSION_KEYS, FLOOR_SESSION_MARKER, 'ury_floor_reconcile']) {
-      try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
-    }
-    try { localStorage.removeItem(FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
-    disconnectQzPrinter();
-    if (!retrying || !logoutFailed) window.location.replace(FLOOR_HOME);
+    return false;
   }
-  return logoutFailed ? 'logout_failed' : 'signed_out';
+  try { clearFloorLogoutFailureMarker(); } catch { /* The server session has ended. */ }
+  return true;
+}
+
+async function endFloorSession(): Promise<SignOutResult> {
+  const retrying = hasFloorLogoutFailureMarker();
+  const signedOut = await logoutWithFloorMarker();
+  for (const key of [...SESSION_KEYS, FLOOR_SESSION_MARKER, RECOVERY_MARKER]) {
+    try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
+  }
+  try { localStorage.removeItem(FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
+  disconnectQzPrinter();
+  if (!retrying || signedOut) window.location.replace(FLOOR_HOME);
+  return signedOut ? 'signed_out' : 'logout_failed';
 }

@@ -120,6 +120,26 @@ const LOCK = 'ury-pos-offline-capture';
 export const OUTBOX_CHANGED = 'ury-outbox-changed';
 const changed = () => { if (typeof window !== 'undefined') window.dispatchEvent(new Event(OUTBOX_CHANGED)); };
 
+// Only inserts and removals can change whether an unconfirmed tab may show the POS.
+const OUTBOX_MEMBERSHIP = 'ury-outbox-membership';
+function membershipChanged() {
+  window.dispatchEvent(new Event(OUTBOX_MEMBERSHIP));
+  // Wake other tabs without storing any order or user data. IndexedDB remains authoritative.
+  try { localStorage.setItem(OUTBOX_MEMBERSHIP, uuid()); } catch { /* Recheck on focus. */ }
+}
+
+export function onOutboxMembershipChange(check: () => void): () => void {
+  const storageChanged = (event: StorageEvent) => {
+    if (event.key === OUTBOX_MEMBERSHIP) check();
+  };
+  window.addEventListener('storage', storageChanged);
+  window.addEventListener(OUTBOX_MEMBERSHIP, check);
+  return () => {
+    window.removeEventListener('storage', storageChanged);
+    window.removeEventListener(OUTBOX_MEMBERSHIP, check);
+  };
+}
+
 // Resolve only on transaction COMMIT, not on individual request success.
 async function transaction<T>(stores: string[], mode: IDBTransactionMode,
   run: (tx: IDBTransaction, result: (value: T) => void) => void): Promise<T> {
@@ -145,13 +165,18 @@ const all = () => typeof indexedDB === 'undefined' ? Promise.resolve([] as Offli
     const request = tx.objectStore('orders').getAll(); request.onsuccess = () => result(request.result);
   });
 const save = async (entry: OfflineEntry) => {
+  const inserting = entry.sequence === undefined;
   await transaction(['orders'], 'readwrite', (tx, result) => {
     const request = tx.objectStore('orders').put(entry);
     request.onsuccess = () => { entry.sequence = Number(request.result); result(undefined); };
-  }); changed();
+  });
+  if (inserting) membershipChanged();
+  changed();
 };
 const remove = async (entry: OfflineEntry) => {
-  await transaction(['orders'], 'readwrite', (tx, result) => { tx.objectStore('orders').delete(entry.sequence!); result(undefined); }); changed();
+  await transaction(['orders'], 'readwrite', (tx, result) => { tx.objectStore('orders').delete(entry.sequence!); result(undefined); });
+  membershipChanged();
+  changed();
 };
 export async function queuedProfilesFor(user: string): Promise<string[]> {
   const rows = await all();
@@ -159,7 +184,12 @@ export async function queuedProfilesFor(user: string): Promise<string[]> {
 }
 
 export async function assertOutboxEmpty(): Promise<void> {
-  if ((await all()).length) throw new Error('Offline outbox has pending or Needs review items. Reconcile them before logout or till close.');
+  if (typeof indexedDB === 'undefined') return;
+  const count = await transaction<number>(['orders'], 'readonly', (tx, result) => {
+    const request = tx.objectStore('orders').count();
+    request.onsuccess = () => result(request.result);
+  });
+  if (count) throw new Error('Offline outbox has pending or Needs review items. Reconcile them before logout or till close.');
 }
 const exclusive = <T,>(run: () => Promise<T>): Promise<T> => {
   if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(LOCK, run);
@@ -619,7 +649,7 @@ export class OfflineOutbox {
       if (!invoice || invoice.name !== name || invoice.docstatus !== 1 || invoice.is_return !== 0 ||
           invoice.pos_profile !== profile.name || (entry.order.customer && invoice.customer !== entry.order.customer) ||
           (profile.currency && invoice.currency !== profile.currency) ||
-          (invoice.ury_client_order_id && invoice.ury_client_order_id !== clientId) ||
+          (invoice.ury_client_order_id ? invoice.ury_client_order_id !== clientId : entry.server_invoice !== name) ||
           typeof invoice.grand_total !== 'number' || !Number.isFinite(invoice.grand_total) ||
           Math.abs(invoice.grand_total - total) > offlineTolerance(profile.currency)) throw mismatch();
       forgetOpenTableCheck(entry.owner, entry.order.table);

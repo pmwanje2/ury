@@ -920,7 +920,7 @@
     "retry_review": "Réessayer la commande vérifiée",
     "reconcile_invoice": "Rapprocher avec une facture validée",
     "invoice_prompt": "Vérifiez les articles et le paiement de la commande {{order}} ({{customer}}, {{amount}} {{tender}}). Saisissez le numéro de sa facture de caisse validée pour retirer cette commande de la file.",
-    "invoice_mismatch": "La facture validée doit correspondre à cette commande. La commande reste dans la file.",
+    "invoice_mismatch": "La facture validée doit être liée à cette commande et ses données doivent correspondre. La commande reste dans la file.",
     "retry_unavailable": "Traitez les points à vérifier avant de réessayer cette commande.",
     "outbox": "File hors ligne",
     "replaying": "Synchronisation",

@@ -6,7 +6,7 @@ import { RefreshCw } from 'lucide-react';
 import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
 import OutboxPanel from './OutboxPanel';
-import { queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
+import { assertOutboxEmpty, onOutboxMembershipChange, queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
 import { getPosProfileFull } from '../lib/pos-profile-api';
 import {
   retryFloorSignOut,
@@ -56,6 +56,46 @@ function RecoveryOutbox({ profile, user }: { profile: OfflineProfile | null; use
   );
 }
 
+function OwnerSignIn({ user, passwordOnly }: { user: OfflineUser; passwordOnly: boolean }) {
+  return (
+    <>
+      <p role="status" className="px-6 py-3 text-center">{t('floor_pin.owner_required')}</p>
+      <FloorPinPad recoveryOwner={user.name} usernameOnly={passwordOnly} />
+    </>
+  );
+}
+
+function UnconfirmedWorkspace({ user, children }: Props & { user: OfflineUser }) {
+  const [empty, setEmpty] = useState<boolean | null>(null);
+  useEffect(() => {
+    let revision = 0;
+    const check = async () => {
+      const current = ++revision;
+      try {
+        await assertOutboxEmpty();
+        if (current === revision) setEmpty(true);
+      } catch {
+        if (current === revision) setEmpty(false);
+      }
+    };
+    const stop = onOutboxMembershipChange(() => {
+      setEmpty((previous) => previous === true ? null : previous);
+      void check();
+    });
+    window.addEventListener('focus', check);
+    void check();
+    return () => {
+      revision++;
+      stop();
+      window.removeEventListener('focus', check);
+    };
+  }, []);
+
+  if (empty === null) return <Spinner message={t('common.loading')} />;
+  if (!empty) return <OwnerSignIn user={user} passwordOnly={!isFloorPadActive()} />;
+  return <>{children}</>;
+}
+
 function ColdBootSignOut({ profile, user, passwordOnly }: { profile: OfflineProfile | null; user: OfflineUser; passwordOnly: boolean }) {
   const [state, setState] = useState<'checking' | 'blocked' | 'signed_out' | 'logout_failed'>('checking');
 
@@ -66,12 +106,7 @@ function ColdBootSignOut({ profile, user, passwordOnly }: { profile: OfflineProf
   if (state === 'signed_out' || state === 'logout_failed') return <FloorPinPad usernameOnly={passwordOnly || state === 'logout_failed'} />;
   if (state === 'checking') return <Spinner message={t('common.loading')} />;
   if (!hasRecoveryConfirmation(user.name) || hasFloorLogoutFailureMarker()) {
-    return (
-      <>
-        <p role="status" className="px-6 py-3 text-center">{t('floor_pin.owner_required')}</p>
-        <FloorPinPad recoveryOwner={user.name} usernameOnly={passwordOnly} />
-      </>
-    );
+    return <OwnerSignIn user={user} passwordOnly={passwordOnly} />;
   }
   return <RecoveryOutbox profile={profile} user={user} />;
 }
@@ -231,6 +266,9 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     );
   }
 
+  if (!hasFloorSessionMarker(user.name)) {
+    return <UnconfirmedWorkspace key={user.name} user={user}>{children}</UnconfirmedWorkspace>;
+  }
   return <>{children}</>;
 };
 
