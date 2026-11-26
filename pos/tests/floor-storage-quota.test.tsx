@@ -511,15 +511,73 @@ it('locks a confirmed tab on logout if its non-empty generation cannot be verifi
   expect(hasFloorSessionMarker(state.user.name)).toBe(false);
 });
 
-it('locks a private retry without Web Locks until verified sign-in', async () => {
+it.each(['till logout', 'Switch Waiter'])('locks locally on %s during replacement login without Web Locks', async action => {
   vi.stubGlobal('navigator', { onLine: true, locks: undefined });
   await passwordLogin(state.user.name);
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
+  const generationWrites = vi.spyOn(logoutStore, 'writeGeneration');
+
+  // If A starts a durable write, suspend it there until B has replaced the shared session.
+  let reachedWrite!: () => void;
+  const writing = new Promise<void>(resolve => { reachedWrite = resolve; });
+  let resumeLogout!: () => void;
+  const paused = new Promise<void>(resolve => { resumeLogout = resolve; });
+  const writeMarker = logoutStore.writeLogoutMarker;
+  const markerWrites = vi.spyOn(logoutStore, 'writeLogoutMarker').mockImplementationOnce(async owner => {
+    reachedWrite();
+    await paused;
+    await writeMarker(owner);
+  });
+
+  const attempt = action === 'till logout' ? clearCashierStorage(true) : floorSignOut();
+  const finished = Promise.allSettled([attempt]);
+  await Promise.race([writing, finished]);
+  const restoreA = saveTab();
+  const cashierB = 'replacement@example.test';
+  window.name = '';
+  sessionStorage.clear();
+  let restoreB!: () => void;
+  let generationB!: string;
+  try {
+    await passwordLogin(cashierB);
+    generationB = await currentFloorGeneration();
+    restoreB = saveTab();
+  } finally {
+    restoreA();
+    resumeLogout();
+    await finished;
+  }
+  expect(logout).not.toHaveBeenCalled();
+  expect(markerWrites).not.toHaveBeenCalled();
+  expect(generationWrites.mock.calls).toEqual([[generationB]]); // B's verified login was the only rotation.
+  expect(await currentFloorGeneration()).toBe(generationB);
+  expect(isFloorSessionConfirmedForTab(state.user.name)).toBe(false);
+  const gate = render(<AuthGuard><main>Old workspace</main></AuthGuard>);
+  await screen.findByLabelText('Password');
+  expect(screen.queryByText('Old workspace')).toBeNull();
+  gate.unmount();
+
+  restoreB();
+  const previous = state.user;
+  state.user = { ...previous, name: cashierB };
+  try {
+    render(<AuthGuard><main>Replacement workspace</main></AuthGuard>);
+    await screen.findByText('Replacement workspace');
+    expect(hasFloorSessionMarker(cashierB)).toBe(true);
+    expect(logout).not.toHaveBeenCalled();
+  } finally { state.user = previous; }
+});
+
+it('locks a private retry without Web Locks until verified sign-in', async () => {
+  await passwordLogin(state.user.name);
   const logout = vi.spyOn(core, 'logout').mockResolvedValueOnce(false).mockResolvedValue(true);
-  // The first explicit till logout is allowed without Web Locks.
   await expect(clearCashierStorage(true)).rejects.toThrow();
   expect(logout).toHaveBeenCalledTimes(1);
   const generation = await currentFloorGeneration();
   expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe(generation);
+
+  // The retry reopens in an environment without the lock used for the original attempt.
+  vi.stubGlobal('navigator', { onLine: true, locks: undefined });
   const markerWrites = vi.spyOn(logoutStore, 'writeLogoutMarker');
   const showGuard = () => render(<AuthGuard><main>Cashier workspace</main></AuthGuard>);
   for (let boot = 0; boot < 2; boot++) {

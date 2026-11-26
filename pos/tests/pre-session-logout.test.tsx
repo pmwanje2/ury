@@ -1,3 +1,4 @@
+import { testLocks } from './offline-locks';
 import { MemoryRouter } from 'react-router-dom';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -43,6 +44,7 @@ let location: { href: string };
 let request: ReturnType<typeof vi.fn>;
 
 beforeEach(async () => {
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.clearAllMocks();
   await initI18n('en');

@@ -1,3 +1,4 @@
+import { testLocks } from '../../tests/offline-locks';
 // Ported from fork pos/tests/POSOpeningScreen.test.tsx (ffe5f38c, 90038eea,
 // d3cd943d, cb80fde7) and the opening-screen logout cases of pos/tests/logout.test.ts (82a14437).
 import { act } from 'react';
@@ -45,6 +46,7 @@ const context: Context = {
 };
 
 beforeEach(async () => {
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   localStorage.clear();
   sessionStorage.clear();
   document.cookie = 'ury_floor_generation=; Max-Age=0; Path=/pos';

@@ -1,3 +1,4 @@
+import { testLocks } from './offline-locks';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
@@ -38,6 +39,7 @@ async function floorSession(): Promise<FloorSession> {
 let replacement: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   vi.clearAllMocks();
   localStorage.clear();
   sessionStorage.clear();

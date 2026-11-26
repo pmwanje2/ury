@@ -67,6 +67,7 @@ let root: Root | undefined;
 let replacement: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   vi.useFakeTimers();
   vi.clearAllMocks();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);

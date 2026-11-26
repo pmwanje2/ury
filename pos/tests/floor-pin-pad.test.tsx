@@ -1,3 +1,4 @@
+import { testLocks } from './offline-locks';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -90,6 +91,7 @@ async function openUsernameForm() {
 }
 
 beforeEach(async () => {
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   pendingOwner = null;
   vi.clearAllMocks();
