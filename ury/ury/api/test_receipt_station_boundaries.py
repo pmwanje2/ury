@@ -513,6 +513,31 @@ class SiteContracts(TestCase):
         frappe.db.rollback()  # Read the committed attempt count from a fresh snapshot.
         self.assertEqual(frappe.db.count(api._COPY_LOG, {"invoice": invoice, "attempt": [">", 0]}), 1)
 
+    def check_render_login(self, *, renew):
+        from ury.ury_pos import api
+
+        invoice, key, copy = self.fiscal_reservation("browser")
+        token = copy["dispatch_token"]
+        grant = api.begin_bill_copy_dispatch(invoice, key, token, "browser")["render_grant"]
+        if renew:
+            frappe.db.rollback()  # Start a fresh request after the isolated dispatch committed.
+            frappe.db.set_value(api._COPY_LOG, copy["print_job_id"], "dispatch_until", "2000-01-01")
+            frappe.db.commit()
+            recovery = api.print_bill_copy(invoice, key, delivery="browser")["recovery_token"]
+            grant = api.begin_bill_copy_dispatch(invoice, key, recovery, "browser")["render_grant"]
+
+        with patch.dict(frappe.session, sid="second-login-for-the-same-cashier"):
+            with self.assertRaises(frappe.PermissionError):
+                self.render_copy(invoice, 1, grant)
+        self.assertIn("COPY #1", self.render_copy(invoice, 1, grant))
+        self.assertEqual(api.confirm_bill_copy(invoice, key, token)["status"], "COMPLETED")
+
+    def test_initial_render_grant_belongs_to_original_login(self):
+        self.check_render_login(renew=False)
+
+    def test_renewed_render_grant_belongs_to_original_login(self):
+        self.check_render_login(renew=True)
+
     def test_registration_distinguishes_missing_intent_from_another_cashiers_job(self):
         from ury.ury_pos import api
 

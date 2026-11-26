@@ -219,7 +219,10 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
   it.each(["Orders", "Settled Bills"])("%s recovers copy #1 after reload and isolates cashier sessions", async page => {
     const { name } = mockRootState.selectedOrder;
     const bill = { ...mockRootState.selectedOrder, pos_profile: "Till", items: [], taxes: [], payments: [] };
-    vi.mocked(call.get).mockResolvedValue({message: [bill]});
+    let liveLogin = "login-one";
+    vi.mocked(call.get).mockImplementation(async method => method === "ury.www.pos.get_receipt_copy_session"
+      ? {message: {user: mockRootState.ordersOwner, receipt_copy_session: liveLogin, csrf_token: "csrf-" + liveLogin}}
+      : {message: [bill]});
     const boot = {receipt_copy_session: "login-one"};
     vi.stubGlobal("frappe", {boot});
     const requests: string[] = [];
@@ -287,16 +290,67 @@ describe("Orders settled receipt reprint (COPY #n + URY Bill Reprint Log)", () =
       view.unmount();
 
       // A fresh login in another tab need not run this tab's logout cleanup.
-      boot.receipt_copy_session = "login-two";
+      liveLogin = "login-two";
       view = await mount();
       click();
       await waitFor(() => expect(printed).toHaveBeenCalledTimes(6));
       expect(requests[5]).not.toBe(requests[4]);
+      expect(window.csrf_token).toBe("csrf-login-two");
       view.unmount();
     });
     open.mockRestore();
     printed.mockRestore();
     vi.unstubAllGlobals();
+  });
+
+  it.each(["Orders", "Settled Bills"])("%s retries the same pending copy when session storage is full", async page => {
+    const invoice = mockRootState.selectedOrder.name;
+    const bill = {...mockRootState.selectedOrder, pos_profile: "Till", items: [], taxes: [], payments: []};
+    vi.stubGlobal("frappe", {boot: {receipt_copy_session: "quota-login"}});
+    vi.mocked(call.get).mockImplementation(async method => method === "ury.www.pos.get_receipt_copy_session"
+      ? {message: {user: mockRootState.ordersOwner, receipt_copy_session: "quota-login", csrf_token: "new-csrf"}}
+      : {message: [bill]});
+    const setItem = Storage.prototype.setItem;
+    const storage = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (this === sessionStorage) throw new DOMException("Storage full", "QuotaExceededError");
+      setItem.call(this, key, value);
+    });
+    const printed = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    const open = vi.spyOn(window, "open").mockReturnValue({closed: true, location: {replace: vi.fn()}} as unknown as Window);
+    const keys: string[] = [];
+    const confirms: string[] = [];
+    try {
+      await vi.mocked(call.post).withImplementation(async (method, args) => {
+        if (method.endsWith("confirm_bill_copy")) {
+          confirms.push(args.idempotency_key);
+          return {message: {status: "COMPLETED"}};
+        }
+        if (method.endsWith("begin_bill_copy_dispatch")) return {message: {status: "DISPATCHING", render_grant: "once"}};
+        keys.push(args.idempotency_key);
+        return {message: keys.length === 1
+          ? {status: "RESERVED", delivery: "browser", dispatch_token: "lease", copy_number: 1}
+          : {status: "BROWSER_DISPATCHING", recovery_token: "ack", copy_number: 1}};
+      }, async () => {
+        for (const attempt of [1, 2]) {
+          const view = render(page === "Orders" ? <Orders /> : <SettledBills />);
+          if (page === "Settled Bills") {
+            fireEvent.click(screen.getByRole("button", {name: "Search"}));
+            fireEvent.click(await screen.findByRole("button", {name: new RegExp(invoice)}));
+          }
+          fireEvent.click(screen.getByRole("button", {name: /order\.print_receipt|print copy|retry copy/i}));
+          await waitFor(() => expect(printed).toHaveBeenCalledTimes(attempt));
+          view.unmount();
+        }
+        expect(keys).toEqual([expect.any(String), keys[0]]);
+        expect(confirms).toEqual([keys[0]]);
+        expect(open).toHaveBeenCalledOnce();
+      });
+    } finally {
+      storage.mockRestore();
+      open.mockRestore();
+      printed.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("still uses printOrder for a draft guest check (not print_bill_copy)", async () => {
