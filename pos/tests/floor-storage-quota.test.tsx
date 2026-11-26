@@ -9,10 +9,11 @@ import OutboxPanel from '../src/components/OutboxPanel';
 import { cashierOutbox, clearCashierStorage } from '../src/offline/cashier';
 import { onOutboxMembershipChange, withOutboxLogin } from '../src/offline/outbox';
 import { useOutbox } from '../src/offline/use-outbox';
-import { clearFloorLogoutFailureMarker, confirmVerifiedLogin, currentFloorGeneration, floorSignOut, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+import { beginFloorLogin, clearFloorLogoutFailureMarker, confirmVerifiedLogin, currentFloorGeneration, floorSignOut, hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
 import * as logoutStore from '../src/lib/logout-store';
 import { readLogoutMarker, writeLogoutMarker } from '../src/lib/logout-store';
 import { isFloorSessionConfirmedForTab } from '../src/lib/floor-tab';
+import TillLogout from '../src/components/TillLogout';
 import FloorPinPad from '../src/components/FloorPinPad';
 import { testLocks } from './offline-locks';
 
@@ -462,7 +463,7 @@ it.each([
     await paused;
     window.name = '';
     sessionStorage.clear();
-    await confirmVerifiedLogin(cashierB, false);
+    await confirmVerifiedLogin(cashierB, false, await beginFloorLogin());
     generationB = await currentFloorGeneration();
     restoreB = saveTab();
     restoreA(); // The queued operation runs with A's private storage.
@@ -604,4 +605,63 @@ it.each(['', '0000000000000001:previous'])('permits stay-role logout at its unch
   const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
   await clearCashierStorage(true);
   expect(logout).toHaveBeenCalledOnce();
+});
+
+it('invalidates the prior generation before replacing the cookie even if login verification disconnects', async () => {
+  await passwordLogin(state.user.name);
+  const restoreA = saveTab();
+  const previous = await currentFloorGeneration();
+  window.name = '';
+  sessionStorage.clear();
+  const cashierB = 'replacement@example.test';
+  let cookieUser = state.user.name;
+  let generationAtRequest: string | undefined;
+  vi.spyOn(core.auth, 'loginWithUsernamePassword').mockImplementationOnce(async () => {
+    generationAtRequest = await currentFloorGeneration();
+    cookieUser = cashierB;
+    return { message: 'Logged In' } as never;
+  });
+  let disconnect!: (reason: Error) => void;
+  const verify = vi.spyOn(core.auth, 'getLoggedInUser').mockImplementationOnce(() =>
+    new Promise<string>((_, reject) => { disconnect = reject; }));
+  verify.mockClear();
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
+  render(<FloorPinPad usernameOnly />);
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: cashierB } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'test password' } });
+  fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
+  await waitFor(() => expect(verify).toHaveBeenCalledOnce());
+  expect(cookieUser).toBe(cashierB);
+  restoreA();
+  const queuedLogout = floorSignOut();
+  await act(async () => {
+    disconnect(new Error('Connection lost after Set-Cookie'));
+    await queuedLogout;
+  });
+  expect(logout).not.toHaveBeenCalled();
+  expect(generationAtRequest).not.toBe(previous);
+  expect(await currentFloorGeneration()).toBe(generationAtRequest);
+  expect(hasFloorSessionMarker(state.user.name)).toBe(false);
+});
+
+it('unmounts the stay-role workspace and keeps the tab locked when both storage quotas are full', async () => {
+  vi.stubGlobal('navigator', { onLine: true });
+  const mount = () => render(<AuthGuard><main>Stay-role workspace<TillLogout /></main></AuthGuard>);
+  const view = mount();
+  await screen.findByText('Stay-role workspace');
+  expect(sessionStorage.getItem('userAuth')).toBeNull();
+  const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
+  vi.mocked(Storage.prototype.setItem).mockImplementation(() => {
+    throw new DOMException('Full', 'QuotaExceededError');
+  });
+  fireEvent.click(screen.getByRole('button'));
+  await screen.findByLabelText('Password');
+  expect(screen.queryByText('Stay-role workspace')).toBeNull();
+  view.unmount();
+  // The storage quota can recover before navigation finishes and the guard boots again.
+  vi.mocked(Storage.prototype.setItem).mockRestore();
+  mount();
+  await screen.findByLabelText('Password');
+  expect(screen.queryByText('Stay-role workspace')).toBeNull();
+  expect(logout).not.toHaveBeenCalled();
 });

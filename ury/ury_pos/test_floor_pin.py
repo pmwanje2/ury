@@ -619,7 +619,7 @@ class TestFloorPin(unittest.TestCase):
 	def test_sign_in_returns_csrf_token_and_pops_pin_from_form_dict(self):
 		self.pair()
 		result = self.sign_in()
-		self.assertEqual(result, {"full_name": "Waiter", "csrf_token": "fresh-csrf"})
+		self.assertEqual(result, {"user": self.user, "full_name": "Waiter", "csrf_token": "fresh-csrf"})
 		self.assertNotIn("pin", self.frappe.form_dict)
 		self.assertNotIn("0527", str(result))
 		self.rate_limit.assert_called_once_with(limit=60, seconds=60)

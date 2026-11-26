@@ -222,7 +222,7 @@ it('locks identity switching on cold boot until the existing outbox drains', asy
   expect(container.querySelector('[data-client-order]')).toBeNull();
   expect(reprint).not.toHaveBeenCalled();
   expect(container.querySelector('[aria-label="4-digit PIN"]')).not.toBeNull();
-  const login = vi.spyOn(core.call, 'post').mockResolvedValue({ message: {} });
+  const login = vi.spyOn(core.call, 'post').mockResolvedValue({ message: { user: boundary.auth.user.name } });
   vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(boundary.auth.user.name);
   for (const digit of '1234') {
     const button = [...container.querySelectorAll('button')].find((el) => el.textContent === digit)!;

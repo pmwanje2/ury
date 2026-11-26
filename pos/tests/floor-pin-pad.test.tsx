@@ -132,7 +132,7 @@ describe('paired floor tablet sign-in', () => {
   });
 
   it('submits exactly once at the fourth digit and never persists the PIN', async () => {
-    boundary.callPost.mockResolvedValue({ message: { csrf_token: 'fresh-csrf' } });
+    boundary.callPost.mockResolvedValue({ message: { user: 'waiter@example.test', csrf_token: 'fresh-csrf' } });
     await render();
     await enterPin('0527');
     expect(boundary.callPost).toHaveBeenCalledExactlyOnceWith(
@@ -143,8 +143,35 @@ describe('paired floor tablet sign-in', () => {
     expect(reload).toHaveBeenCalledExactlyOnceWith();
   });
 
+  it.each(['PIN', 'unidentified PIN', 'password'])(
+    'refuses to confirm a sibling cookie on an unlocked %s sign-in', async method => {
+      vi.stubGlobal('navigator', { onLine: true });
+      await render();
+      // This request authenticated the first cashier. The session probe now sees the sibling's cookie.
+      const first = 'first@example.test';
+      if (method === 'password') {
+        boundary.login.mockResolvedValueOnce({ message: 'Logged In', full_name: 'Cashier' });
+        await openUsernameForm();
+        await act(async () => {
+          setInput(container.querySelector('input[name=user_id]')!, first);
+          setInput(container.querySelector('input[type=password]')!, 'secret');
+          container.querySelector('form')!.requestSubmit();
+        });
+        expect(boundary.login).toHaveBeenCalledOnce();
+      } else {
+        boundary.callPost.mockResolvedValueOnce({ message: method === 'PIN' ? { user: first } : { full_name: 'Cashier' } });
+        await enterPin('0527');
+        expect(boundary.callPost).toHaveBeenCalledOnce();
+      }
+      expect(hasFloorSessionMarker('waiter@example.test')).toBe(false);
+      expect(hasFloorSessionMarker(first)).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+      expect(container.querySelector('[role=alert]')).not.toBeNull();
+    },
+  );
+
   it('keeps a failed-logout guest on password sign-in until authenticated', async () => {
-    boundary.callPost.mockResolvedValue({ message: { csrf_token: 'fresh-csrf' } });
+    boundary.callPost.mockResolvedValue({ message: { user: 'waiter@example.test', csrf_token: 'fresh-csrf' } });
     localStorage.setItem('ury_floor_logout_failed', 'waiter@example.test');
     await render();
     expect(container.querySelector('input[type=password]')).not.toBeNull();
