@@ -1,6 +1,7 @@
 import { setImmediate as flushPromises } from 'node:timers/promises';
 import { createPinia, setActivePinia } from 'pinia';
 import { expect, it, vi } from 'vitest';
+import { useNotificationModal } from '../src/stores/NotificationModal.js';
 import { useTableStore } from '../src/stores/Table.js';
 import { usetoggleRecentOrder } from '../src/stores/recentOrder.js';
 import { useInvoiceDataStore } from '../src/stores/invoiceData.js';
@@ -89,4 +90,62 @@ it('keeps the latest split check when two floor table loads resolve out of order
   await flushPromises();
   expect(floor.menu.cart.map(row => row.name)).toEqual(rows.map(row => row.name));
   expect(floor.menu.comments).toBe('latest');
+});
+
+function pendingFloorInvoice() {
+  let resolve;
+  api.get.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  return (table, dish) => resolve({ message: {
+    name: 'Check-' + table, restaurant_table: table, waiter: 'captain', customer: 'Guest', no_of_pax: 1,
+    items: [{ name: table + '-row', item_code: dish, qty: 1, rate: 10 }],
+  } });
+}
+
+it.each([1, 2])('retains the pending menu addition in the cart and sync_order after %i same-table loads', async loads => {
+  setActivePinia(createPinia());
+  const floor = useTableStore();
+  vi.spyOn(floor.customers, 'fectchCustomerFavouriteItem').mockImplementation(() => {});
+  vi.spyOn(floor, 'fetchTable').mockImplementation(() => {});
+  const table = { name: 'T1', occupied: 1 };
+  const responses = [];
+  for (let i = 0; i < loads; i++) {
+    responses.push(pendingFloorInvoice());
+    floor.routeToMenu(table);
+  }
+  floor.menu.addToCart({ item: 'Pie', item_name: 'Pie', rate: 5 });
+  for (const respond of responses.reverse()) {
+    respond('T1', 'Soup');
+    await flushPromises();
+  }
+
+  const lines = [expect.objectContaining({ name: 'T1-row', item: 'Soup', qty: 1 }),
+    expect.objectContaining({ item: 'Pie', qty: 1, rate: 5 })];
+  expect.soft(floor.menu.cart).toEqual(lines);
+  api.post.mockResolvedValueOnce({ message: { name: 'Check-T1' } });
+  await useInvoiceDataStore().invoiceCreation();
+  expect(api.post).toHaveBeenLastCalledWith(expect.stringMatching(/\.sync_order$/),
+    expect.objectContaining({ table: 'T1', invoice: 'Check-T1', items: lines }));
+});
+
+it('discards the first table’s local and saved rows when the cashier confirms a switch mid-load', async () => {
+  setActivePinia(createPinia());
+  const floor = useTableStore();
+  vi.spyOn(floor.customers, 'fectchCustomerFavouriteItem').mockImplementation(() => {});
+  const first = pendingFloorInvoice();
+  const second = pendingFloorInvoice();
+  floor.routeToMenu({ name: 'T1', occupied: 1 });
+  floor.menu.addToCart({ item: 'Pie', rate: 5 });
+  floor.routeToMenu({ name: 'T2', occupied: 1 });
+  const modal = useNotificationModal();
+  expect(modal.isOpen).toBe(true);
+  modal.handleConfirm();
+  expect(floor.menu.cart).toEqual([]);
+  floor.menu.addToCart({ item: 'Tea', rate: 3 });
+  second('T2', 'Salad');
+  await flushPromises();
+  first('T1', 'Soup');
+  await flushPromises();
+
+  expect(floor.invoiceNo).toBe('Check-T2');
+  expect(floor.menu.cart.map(row => row.item)).toEqual(['Salad', 'Tea']);
 });
