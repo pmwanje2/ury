@@ -23,6 +23,7 @@ export const useTableStore = defineStore("table", {
     serviceRequestsRead: 0,
     serviceRequestsRoom: null,
     selectedTable: null,
+    tableLoadRequest: 0,
     previousOrderdItem: [],
     invoiceNo: "",
     takeAwayTable: 0,
@@ -509,6 +510,8 @@ export const useTableStore = defineStore("table", {
       this.confirmLeaveUnsent(() => this.loadSelectedTable(table));
     },
     async loadSelectedTable(table) {
+      const request = ++this.tableLoadRequest;
+      const isCurrent = () => request === this.tableLoadRequest && this.selectedTable === table.name;
       this.selectedTable = table.name;
       this.takeAwayTable = 0;
 
@@ -530,12 +533,13 @@ export const useTableStore = defineStore("table", {
       const getPreviousOrder = {
         table: this.selectedTable,
       };
-      this.call
+      return this.call
         .get(
           "ury.ury.doctype.ury_order.ury_order.get_order_invoice",
           getPreviousOrder
         )
         .then((result) => {
+          if (!isCurrent()) return;
           this.previousOrder = result.message;
           this.invoicePrinted = this.previousOrder.invoice_printed;
           this.menu.comments = this.previousOrder.custom_comments;
@@ -581,9 +585,10 @@ export const useTableStore = defineStore("table", {
             this.customers.newCustomerMobileNo = ""
           }
 
-          cart.push(...invoiceCartRows(this.previousOrderdItem, items));
+          this.menu.cart = invoiceCartRows(this.previousOrderdItem, items);
         })
         .catch((error) => {
+          if (!isCurrent()) return;
           const permissionRefused = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
           if (permissionRefused && !this.auth.hasAccess && !this.auth.cashier) {
             const fromFloor = table && typeof table.owner_name === "string" ? table.owner_name.trim() : "";

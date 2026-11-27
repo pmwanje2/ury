@@ -79,10 +79,16 @@ function CheckoutScreen({
   const [percent, setPercent] = useState<number | null>(0)
   const [custom, setCustom] = useState('')
   const amount = percent === null ? Number(custom) : cartTotal * percent / 100
-  const rounded = prompt ? amount.toLocaleString('en-US', {
+  const minorUnits = prompt && new Intl.NumberFormat('en-US', {
     useGrouping: false, minimumFractionDigits: prompt.precision, maximumFractionDigits: prompt.precision,
-  }) : undefined
-  const invalid = !Number.isFinite(amount) || amount < 0 || Number(rounded ?? amount) > cartTotal
+  })
+  const rounded = minorUnits?.format(amount)
+  const roundedSubtotal = Number(minorUnits?.format(cartTotal) ?? cartTotal)
+  // Correct floating-point noise in the cart sum, but keep the server's exact
+  // cap when a menu price genuinely carries a fraction of a minor unit.
+  const sumTolerance = cartItems.length * Number.EPSILON * Math.abs(cartTotal)
+  const tipCap = Math.min(roundedSubtotal, cartTotal + sumTolerance)
+  const invalid = !Number.isFinite(amount) || amount < 0 || Number(rounded ?? amount) > tipCap
   const tip = invalid ? undefined : rounded
   const total = prompt ? new Intl.NumberFormat(getActiveLanguage(), {
     style: 'currency', currency: prompt.currency,
@@ -122,7 +128,7 @@ function CheckoutScreen({
             ))}
           </div>
           <label className="mt-2 block">{t('tip.custom')} ({prompt.currency})
-            <input type="number" min="0" max={cartTotal} step={10 ** -prompt.precision}
+            <input type="number" min="0" max={tipCap} step={10 ** -prompt.precision}
               className="mt-1 w-full rounded border bg-background p-2"
               value={percent === null ? custom : ''} onChange={event => {
                 setCustom(event.target.value)
@@ -188,7 +194,7 @@ function CheckoutScreen({
           <button
             type="button"
             onClick={() => onPayOnline(tip)}
-            disabled={payingOnline || invalid}
+            disabled={submitting || payingOnline || invalid}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
           >
             {payingOnline ? t('payment.starting') : t('payment.pay_online')}
@@ -197,7 +203,7 @@ function CheckoutScreen({
           <button
             type="button"
             onClick={() => onSubmitCart(tip)}
-            disabled={invalid || submitting || cartItems.length === 0}
+            disabled={invalid || submitting || payingOnline || cartItems.length === 0}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
           >
             {submitting ? t('order.placing') : t('order.place')}
