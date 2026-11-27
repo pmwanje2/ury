@@ -127,3 +127,16 @@ describe("ScreenSizeProvider", () => {
     });
   });
 });
+
+it('opens the online register on a 390px handheld', () => {
+  vi.stubGlobal('innerWidth', 390);
+  const previous = window.location.pathname;
+  window.history.replaceState(null, '', '/pos/register');
+  try {
+    render(<ScreenSizeProvider><div>Handheld register</div></ScreenSizeProvider>);
+    expect(screen.getByText('Handheld register')).toBeVisible();
+  } finally {
+    window.history.replaceState(null, '', previous);
+    vi.unstubAllGlobals();
+  }
+});

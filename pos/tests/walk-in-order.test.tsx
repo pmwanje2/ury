@@ -147,3 +147,37 @@ it.each(['Take Away', 'Dine In'])('keeps the Orders edit customer on %s after Ch
     tableOrder: null, isUpdatingOrder: true, editCustomer: { invoice: 'INV-1', customer: 'ORIGINAL' } });
   await submit(); expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ invoice: 'INV-1', customer: 'ORIGINAL' }));
 });
+
+it.each(['Cashier', 'Floor Lead', 'Local till operator', 'URY Captain'])(
+  'retains the acknowledged round only for a billing operator (%s)', async role => {
+    Object.assign(state.user!, { roles: [role] });
+    const configured = { ...state.posProfile, role_allowed_for_billing: [{ role: 'Local till operator' }] };
+    const previous = state.posProfile;
+    state.posProfile = configured;
+    const check = vi.fn(), round = vi.fn();
+    try {
+      await act(async () => root.render(<OrderPanel onCashierCheck={check} onRoundSent={round} />));
+      await act(async () => submitButton().click());
+      if (role === 'URY Captain') {
+        expect(check).not.toHaveBeenCalled();
+        expect(round).not.toHaveBeenCalled();
+      } else {
+        expect(check).toHaveBeenCalledWith(invoice);
+        expect(round).toHaveBeenCalledWith(invoice.name, expect.arrayContaining([expect.objectContaining({ id: 'SOUP' })]));
+      }
+    } finally { state.posProfile = previous; }
+  },
+);
+
+it.each([['USD', '1.20'], ['KWD', '1.200'], ['UGX', '1']])(
+  'shows the full minor-unit precision in the %s check total', async (currency, amount) => {
+    const previous = state.posProfile, price = state.activeOrders[0].price;
+    state.posProfile = { ...previous, ...{currency} };
+    state.activeOrders[0].price = 1.2;
+    try {
+      await render();
+      const label = [...host.querySelectorAll('span')].find(el => el.textContent === 'Total');
+      expect(label?.parentElement?.nextElementSibling?.textContent).toBe(currency + ' ' + amount);
+    } finally { state.posProfile = previous; state.activeOrders[0].price = price; }
+  },
+);

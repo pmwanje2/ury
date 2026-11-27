@@ -332,6 +332,34 @@ describe("Orders guest label", () => {
     expect(screen.queryByText(/ · Walk In/)).not.toBeInTheDocument();
   });
 
+  it('returns to the menu from an offline embedded check', () => {
+    mockRootStoreState.ordersOffline = true;
+    const onRegister = vi.fn();
+    try {
+      render(<Orders onRegister={onRegister} />);
+      expect(screen.getByRole('status')).toHaveTextContent('offline.orders_unavailable');
+      fireEvent.click(screen.getByRole('button', {name: 'workstation.menu'}));
+      expect(onRegister).toHaveBeenCalledOnce();
+    } finally { mockRootStoreState.ordersOffline = false; }
+  });
+
+  it('restores the saved aggregator when reopening its check from Menu', async () => {
+    const check = {...order, invoice_printed: 0, order_type: 'Aggregators', custom_aggregator_id: 'Partner A'};
+    mockRootStoreState.selectedOrder = check;
+    Object.assign(mockPosStore, {
+      resetOrderState: vi.fn(), setSelectedOrderType: vi.fn(), setOrderForUpdate: vi.fn(),
+      setSelectedCustomer: vi.fn(), setGuestLabel: vi.fn(), setSelectedAggregator: vi.fn(), fetchAggregatorMenu: vi.fn(),
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ok: true, json: async () => ({message: {...check, items: []}})})));
+    try {
+      const onRegister = vi.fn();
+      render(<Orders onRegister={onRegister} />);
+      fireEvent.click(screen.getByRole('button', {name: 'workstation.menu'}));
+      await waitFor(() => expect(onRegister).toHaveBeenCalledOnce());
+      expect(mockPosStore.setSelectedAggregator).toHaveBeenCalledWith({customer: 'Partner A'});
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("editing the order loads its saved label into the cart", async () => {
     const setGuestLabel = vi.fn();
     Object.assign(mockPosStore, {

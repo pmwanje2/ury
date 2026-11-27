@@ -160,6 +160,18 @@ describe("Table View", () => {
     ]);
   });
 
+  it("refreshes a cached room without its section after upgrade", async () => {
+    const key = 'ury_rooms_Kozhikode';
+    sessionStorage.setItem(key, JSON.stringify([{name: 'Main Hall', branch: 'Kozhikode'}]));
+    getRoomsMock.mockResolvedValue([{name: 'Main Hall', branch: 'Kozhikode', room_type: 'Terrace'}]);
+    try {
+      render(<Table />);
+      await userEvent.click(await screen.findByText('tables.layout_view'));
+      expect(await screen.findByRole('button', {name: 'Terrace'})).toBeVisible();
+      expect(JSON.parse(sessionStorage.getItem(key)!)[0].room_type).toBe('Terrace');
+    } finally { sessionStorage.removeItem(key); }
+  });
+
   it("renders the table view page", async () => {
     render(<Table />);
 

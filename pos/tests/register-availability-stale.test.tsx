@@ -59,3 +59,13 @@ test('the register marks a remaining count it cannot confirm', async () => {
   expect(container.textContent).toContain('3 left');
   expect(container.textContent).toContain('3 left?');
 });
+
+test.each([[10, 1], [0, 0]])('repeat round respects manual price entry at price %i', async (price, expected) => {
+  const line = { ...usePOSStore.getState().menuItems[0], custom_allow_zero_price: 1, price, quantity: 1 };
+  usePOSStore.setState({orderId: 'Check A', menuItems: [line], activeOrders: []});
+  await act(async () => root.render(<POS lastRound={{invoice: 'Check A', lines: [line]}} />));
+  const key = [...container.querySelectorAll('button')].find(button => button.textContent === 'Repeat round');
+  expect(key).toBeDefined();
+  await act(async () => key!.click());
+  expect(usePOSStore.getState().activeOrders).toHaveLength(expected);
+});
