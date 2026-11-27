@@ -217,6 +217,53 @@ class TestOutletTransferStock(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("URY Table", source, "occupied"), 1)
         self.assertEqual(frappe.db.get_value("URY Table", destination, "occupied"), 0)
 
+    def test_disabled_source_cannot_strand_a_party_at_a_disabled_destination(self):
+        party, check, source, destination = self.seated_party_check()
+        for branch in (self.east.branch, self.west.branch):
+            frappe.db.set_value("Branch", branch, "custom_enable_reservation", 0)
+        def table_state(table):
+            return frappe.db.get_value("URY Table", table, ["occupied", "custom_table_state", "seating_checks"])
+
+        before = (check.reload().modified, party.reload().modified, table_state(source), table_state(destination))
+        with self.assertRaisesRegex(frappe.ValidationError, "(?i)reservation"):
+            ury_order.table_transfer(source, destination, check.name, target_pos_profile=self.west.name)
+
+        check.reload()
+        party.reload()
+        self.assertEqual((check.modified, party.modified, table_state(source), table_state(destination)), before)
+        self.assertEqual((check.branch, check.pos_profile, check.restaurant_table), (self.east.branch, self.east.name, source))
+        self.assertEqual((party.status, party.branch, party.reserved_table, party.pos_invoice),
+                         ("Seated", self.east.branch, source, check.name))
+
+    def test_disabled_source_carries_its_seated_party_to_an_enabled_destination(self):
+        party, check, source, destination = self.seated_party_check()
+        frappe.db.set_value("Branch", self.east.branch, "custom_enable_reservation", 0)
+
+        ury_order.table_transfer(source, destination, check.name, target_pos_profile=self.west.name)
+
+        check.reload()
+        party.reload()
+        self.assertEqual((check.branch, check.restaurant_table), (self.west.branch, destination))
+        self.assertEqual((party.status, party.branch, party.reserved_table, party.pos_invoice),
+                         ("Seated", self.west.branch, destination, check.name))
+        self.assertEqual(frappe.db.get_value("URY Table", source, "occupied"), 0)
+        self.assertEqual(frappe.db.get_value("URY Table", destination, "occupied"), 1)
+
+    def test_closing_bound_check_completes_party_after_branch_disables_reservations(self):
+        party, check, source, _ = self.seated_party_check()
+        frappe.set_user("Administrator")
+        self.fire(check)
+        frappe.db.set_value("Branch", self.east.branch, "custom_enable_reservation", 0)
+        with self.assertRaisesRegex(frappe.ValidationError, "(?i)reservation"):
+            party.save()
+
+        check.db_set("invoice_printed", 1)
+        check.payments[0].amount = check.grand_total
+        check.submit()
+
+        party.reload()
+        self.assertEqual((party.status, party.reserved_table, party.pos_invoice), ("Completed", source, check.name))
+
     def test_floor_lookup_matches_whole_merged_table_names(self):
         t1, t9, t10 = [self.prefix + suffix for suffix in (" T1", " T9", " T10")]
         for table in (t1, t9, t10):
