@@ -17,7 +17,12 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-from ury.ury_pos.approval_currency import company_approval_amount, verified_invoice_approval_currency
+from ury.ury_pos.approval_currency import (
+    THREE_DECIMAL_CURRENCIES,
+    ZERO_DECIMAL_CURRENCIES,
+    company_approval_amount,
+    verified_invoice_approval_currency,
+)
 from ury.ury_pos.auth_challenge import attach_auth_challenge
 
 from ury.brand import coded_message
@@ -83,9 +88,6 @@ def _date_str(value):
         return str(fn(value))
     return str(value)[:10]
 
-ZERO_DECIMAL_CURRENCIES = frozenset({"UGX", "JPY", "KRW", "RWF", "TZS", "XAF", "XOF", "BIF", "GNF", "MGA", "VND"})
-THREE_DECIMAL_CURRENCIES = frozenset({"KWD", "BHD", "OMR", "JOD", "TND", "IQD"})
-
 FALLBACK_POS_REASONS = (
     {"name": "Corporate rate", "code": "Corporate rate", "description": "Corporate rate", "applies_to": "POS", "requires_supervisor": 0, "requires_note": 0, "sort_order": 10, "disabled": 0},
     {"name": "Complaint", "code": "Complaint", "description": "Complaint", "applies_to": "Both", "requires_supervisor": 0, "requires_note": 0, "sort_order": 20, "disabled": 0},
@@ -120,16 +122,17 @@ def currency_precision(doc=None, currency=None):
 
 @contextmanager
 def _with_currency_precision(doc, prec=None):
-    """Ensure ISO 0-decimal (UGX) and 3-decimal (KWD) currencies calculate and save at
-    their true minor-unit precision even when Frappe System Settings currency_precision
-    defaults to 2."""
+    """Round invoice and company amounts in their respective currencies during native recalculation."""
     read = getattr(doc, "get", lambda field: getattr(doc, field, None))
-    code = read("currency") or ""
-    if code.strip().upper() not in (ZERO_DECIMAL_CURRENCIES | THREE_DECIMAL_CURRENCIES):
+    code = read("currency")
+    if not isinstance(code, str) or not code or not callable(getattr(doc, "precision", None)):
         yield
         return
+    company = read("company")
+    base_code = frappe.get_cached_value("Company", company, "default_currency") if company else None
+    base_precision = currency_precision(currency=base_code) if isinstance(base_code, str) and base_code else None
     if prec is None:
-        prec = currency_precision(doc, currency=code)
+        prec = currency_precision(currency=code)
 
     saved = []
 
@@ -142,10 +145,21 @@ def _with_currency_precision(doc, prec=None):
         had_cache = hasattr(obj, "_precision")
         orig_cache = getattr(obj, "_precision", None)
 
-        def _iso_precision(fieldname, parentfield=None, _orig=orig_fn, _prec=prec):
-            if fieldname in _CURRENCY_PRECISION_FIELDS:
-                return _prec
-            return _orig(fieldname, parentfield)
+        def _iso_precision(fieldname, parentfield=None):
+            meta = getattr(obj, "meta", None)
+            if meta and parentfield:
+                table = parentfield if isinstance(parentfield, str) else parentfield.get("parentfield")
+                child_type = getattr(meta.get_field(table), "options", None)
+                if child_type:
+                    meta = frappe.get_meta(child_type)
+            field = meta.get_field(fieldname) if meta else None
+            options = getattr(field, "options", None)
+            is_currency = getattr(field, "fieldtype", None) == "Currency" or fieldname in _CURRENCY_PRECISION_FIELDS
+            if (is_currency and fieldname.startswith("base_")) or options == "Company:company:default_currency":
+                return base_precision if base_precision is not None else orig_fn(fieldname, parentfield)
+            if fieldname in _CURRENCY_PRECISION_FIELDS or options == "currency":
+                return prec
+            return orig_fn(fieldname, parentfield)
 
         try:
             setattr(obj, "precision", _iso_precision)

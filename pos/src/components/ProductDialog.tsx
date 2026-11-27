@@ -5,6 +5,7 @@ import { formatCurrency, db } from '@ury/core';
 import { OrderItem, usePOSStore } from '../store/pos-store';
 import type { BundleOverride, ModifierGroup, SelectedModifier } from '../lib/menu-api';
 import { t } from '../i18n';
+import { prepChoice, pricedCondiment } from '../lib/condiment';
 import { buildComboChoice } from '../lib/combo-choice';
 
 interface ProductDialogProps {
@@ -362,37 +363,12 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
             bundleOverrides.push(override);
             if (fee) childRows.push({ ...fee, parentLineKey: parentKey });
           } else if (opt.price_mode === 'Menu Item Price') {
-            const modItemCode = opt.item || opt.option_code;
             childRows.push({
-              id: modItemCode,
-              item: modItemCode,
-              name: opt.label,
-              item_name: opt.label,
-              image: null,
-              price: Number(opt.unit_price || 0),
-              quantity: numericQuantity * (opt.qty || 1),
-              course: selectedItem.course || '',
-              special_dish: 0,
-              tax_rate: 0,
+              ...pricedCondiment(grp, opt, numericQuantity, selectedItem.course, sel.prefix),
               parentLineKey: parentKey,
-              isModifier: true,
-              lineRole: 'Modifier',
-              modifierGroup: grp.name,
-              modifierOption: opt.option_code,
-              modifierPrefix: sel.prefix || null,
-              inheritParentRouting: grp.inherit_parent_routing,
-              hideUnpricedOnReceipt: false,
             });
           } else {
-            // Unpriced Prep: stored on parent ONLY — ZERO extra invoice rows (EFRIS safe!)
-            unpricedMods.push({
-              group: grp.name,
-              option_code: opt.option_code,
-              label: opt.label,
-              prefix: sel.prefix || null,
-              price_mode: opt.price_mode,
-              hide_on_receipt: grp.hide_unpriced_on_receipt ? 1 : 0,
-            });
+            unpricedMods.push(prepChoice(grp, opt, sel.prefix));
           }
         }
       }
