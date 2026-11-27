@@ -5,7 +5,7 @@ import { formatCurrency, db } from '@ury/core';
 import { OrderItem, usePOSStore } from '../store/pos-store';
 import type { BundleOverride, ModifierGroup, SelectedModifier } from '../lib/menu-api';
 import { t } from '../i18n';
-import { prepChoice, pricedCondiment } from '../lib/condiment';
+import { prepChoice, pricedCondiment, validSelectionCount } from '../lib/condiment';
 import { buildComboChoice } from '../lib/combo-choice';
 
 interface ProductDialogProps {
@@ -214,9 +214,8 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
   const missingRequiredGroups = useMemo(() => {
     const missing: string[] = [];
     for (const grp of modifierGroups) {
-      const minReq = Math.max(grp.min_selections || 0, grp.required ? 1 : 0);
       const count = (selectedByGroup[grp.name] || []).length;
-      if (count < minReq) {
+      if (!validSelectionCount(grp, count)) {
         missing.push(grp.display_title || grp.name);
       }
     }

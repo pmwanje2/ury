@@ -15,7 +15,16 @@ import math
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import flt
+
+try:
+    from frappe.utils import cint
+except ImportError:
+    def cint(value):
+        try:
+            return int(flt(value))
+        except (TypeError, ValueError, OverflowError):
+            return 0
 
 from ury.ury_pos.approval_currency import (
     THREE_DECIMAL_CURRENCIES,
@@ -96,20 +105,26 @@ FALLBACK_POS_REASONS = (
 )
 
 
-from ury.ury_pos import override as _OVERRIDE_MODULE
-
-
 def _get_override_module():
     """Return B2a's manager override module."""
-    return _OVERRIDE_MODULE
+    from ury.ury_pos import override
+
+    return override
 
 
-def currency_precision(doc=None, currency=None):
-    code = (currency or (doc.get("currency") if doc is not None else None) or "").strip().upper()
+def _minor_unit_override(currency):
+    code = currency.strip().upper() if isinstance(currency, str) else None
     if code in ZERO_DECIMAL_CURRENCIES:
         return 0
     if code in THREE_DECIMAL_CURRENCIES:
         return 3
+    return None
+
+
+def currency_precision(doc=None, currency=None):
+    places = _minor_unit_override(currency or (doc.get("currency") if doc is not None else None))
+    if places is not None:
+        return places
     if doc is not None and callable(getattr(doc, "precision", None)):
         try:
             p = doc.precision("grand_total")
@@ -130,9 +145,13 @@ def _with_currency_precision(doc, prec=None):
         return
     company = read("company")
     base_code = frappe.get_cached_value("Company", company, "default_currency") if company else None
-    base_precision = currency_precision(currency=base_code) if isinstance(base_code, str) and base_code else None
-    if prec is None:
-        prec = currency_precision(currency=code)
+    base_precision = _minor_unit_override(base_code)
+    transaction_precision = _minor_unit_override(code)
+    if transaction_precision is not None and prec is not None:
+        transaction_precision = prec
+    if transaction_precision is None and base_precision is None:
+        yield
+        return
 
     saved = []
 
@@ -157,8 +176,8 @@ def _with_currency_precision(doc, prec=None):
             is_currency = getattr(field, "fieldtype", None) == "Currency" or fieldname in _CURRENCY_PRECISION_FIELDS
             if (is_currency and fieldname.startswith("base_")) or options == "Company:company:default_currency":
                 return base_precision if base_precision is not None else orig_fn(fieldname, parentfield)
-            if fieldname in _CURRENCY_PRECISION_FIELDS or options == "currency":
-                return prec
+            if transaction_precision is not None and (fieldname in _CURRENCY_PRECISION_FIELDS or options == "currency"):
+                return transaction_precision
             return orig_fn(fieldname, parentfield)
 
         try:

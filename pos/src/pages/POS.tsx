@@ -3,8 +3,7 @@ import { t } from '../i18n';
 import { Sparkles, Star, TrendingUp } from 'lucide-react';
 import { PLUKeypad } from '../components/PLUKeypad';
 import TillCashDialog from '../components/TillCashDialog';
-import { repeatCondiments } from '../lib/condiment';
-import { repeatComboChoices } from '../lib/combo-choice';
+import { repeatModifiers } from '../lib/condiment';
 import { workstation } from '../lib/workstation';
 import { isUnavailable } from '../lib/availability-api';
 import Sidebar from '../components/Sidebar';
@@ -198,18 +197,16 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
         return;
       }
       const linked = lastRound.lines.filter(line => line.parentLineKey && line.parentLineKey === row.reservationLineKey);
-      const combo = repeatComboChoices(row, item, linked.filter(line => line.lineRole === 'Combo Upcharge'));
-      const condiments = repeatCondiments(row, item, linked.filter(line => line.lineRole !== 'Combo Upcharge'));
-      if (!combo || !condiments) {
+      const modifiers = repeatModifiers(row, item, linked);
+      if (!modifiers) {
         setSelectedItem(item);
         setDialogQuantity(row.quantity);
         setIsDialogOpen(true);
         return;
       }
-      const children = [...combo.fees, ...condiments.children];
       const parent = repeatedLine(row, item.price, item);
-      parent.selectedModifiers = condiments.selectedModifiers;
-      parent.bundleOverrides = combo.overrides;
+      parent.selectedModifiers = modifiers.selectedModifiers;
+      parent.bundleOverrides = modifiers.bundleOverrides;
       parent.modifier_groups = item.modifier_groups;
       if (row.selectedVariant) {
         parent.selectedVariant = item.variants?.find(variant => variant.id === row.selectedVariant?.id);
@@ -225,7 +222,7 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
           return;
         }
       }
-      groups.push({parent, children});
+      groups.push({ parent, children: modifiers.children });
     }
     for (const {parent, children} of groups) void addConfiguredItems(parent, children);
   };

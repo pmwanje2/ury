@@ -773,14 +773,15 @@ const TableView = () => {
   };
 
   if (isLayoutView && selectedRoom && !heldReservation) {
+    const selectedArea = rooms.find(room => room.name === selectedRoom)?.room_type;
     return (
       <div className="flex h-full min-h-0 flex-col">
         <nav className="flex flex-wrap items-center gap-1 bg-background p-2">
           {[...new Set(rooms.map(room => room.room_type).filter(Boolean))].map(area =>
-            <Button key={area} variant="tab" data-selected={rooms.find(room => room.name === selectedRoom)?.room_type === area}
+            <Button key={area} variant="tab" data-selected={selectedArea === area}
               onClick={() => handleRoomChange(rooms.find(room => room.room_type === area)!.name)}>{area}</Button>)}
-          {rooms.filter(room => room.room_type === rooms.find(r => r.name === selectedRoom)?.room_type).map(room =>
-            <Button key={room.name} variant="outline" onClick={() => handleRoomChange(room.name)}>{room.name}</Button>)}
+          {rooms.filter(room => !room.room_type || room.room_type === selectedArea).map(room =>
+            <Button key={room.name} variant="outline" aria-pressed={room.name === selectedRoom} onClick={() => handleRoomChange(room.name)}>{room.name}</Button>)}
           <Button variant="outline" aria-pressed={overlay} onClick={() => setOverlay(!overlay)}>{t('workstation.overlay')}</Button>
         </nav>
       <LayoutView

@@ -1,3 +1,4 @@
+import { repeatComboChoices } from './combo-choice';
 import type { ModifierGroup, ModifierOption, SelectedModifier } from './menu-api';
 import type { MenuItem, OrderItem } from '../store/pos-store';
 
@@ -35,7 +36,16 @@ function currentCondiment(
   return { group, option, prefix: currentPrefix };
 }
 
-export function repeatCondiments(parent: OrderItem, item: MenuItem, pricedRows: OrderItem[]) {
+export function validSelectionCount(group: ModifierGroup, count: number) {
+  const minimum = Math.max(group.min_selections || 0, group.required ? 1 : 0);
+  const maximum = group.max_selections || 0;
+  return count >= minimum && (maximum <= 0 || count <= maximum);
+}
+
+export function repeatModifiers(parent: OrderItem, item: MenuItem, linked: OrderItem[]) {
+  const combo = repeatComboChoices(parent, item, linked.filter(row => row.lineRole === 'Combo Upcharge'));
+  if (!combo) return null;
+  const pricedRows = linked.filter(row => row.lineRole !== 'Combo Upcharge');
   const selectedModifiers: SelectedModifier[] = [];
   const children: OrderItem[] = [];
   for (const saved of parent.selectedModifiers || []) {
@@ -48,5 +58,13 @@ export function repeatCondiments(parent: OrderItem, item: MenuItem, pricedRows: 
     if (!match) return null;
     children.push(pricedCondiment(match.group, match.option, parent.quantity, item.course, match.prefix));
   }
-  return { selectedModifiers, children };
+  // Count each choice once, regardless of portion size, parent quantity or combo fee rows.
+  const selections = [
+    ...selectedModifiers.map(choice => choice.group),
+    ...children.map(child => child.modifierGroup),
+    ...combo.overrides.map(choice => choice.group),
+  ];
+  if (item.modifier_groups?.some(group =>
+    !validSelectionCount(group, selections.filter(name => name === group.name).length))) return null;
+  return { selectedModifiers, bundleOverrides: combo.overrides, children: [...combo.fees, ...children] };
 }
