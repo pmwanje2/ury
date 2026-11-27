@@ -172,7 +172,7 @@ const SplitGroupPanel = ({ invoiceName, currency, onOpenInvoice, onPrintInvoice,
                 </div>
               </div>
               <span className="ms-3 shrink-0 font-semibold text-gray-900 tabular-nums">
-                {formatCurrency(invoice.rounded_total, invoice.currency || currency)}
+                {formatCurrency(invoice.rounded_total, invoice.currency || currency, { fixedPrecision: true })}
               </span>
               {!isCurrent && onPrintInvoice && (
                 <Button

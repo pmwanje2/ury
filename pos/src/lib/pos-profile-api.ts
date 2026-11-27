@@ -146,6 +146,7 @@ export interface PosProfileFull extends CoversProfile {
   branch: string;
   currency: string;
   role_allowed_for_billing: RolePermission[];
+  assigned_billing_user?: string | null;
   role_restricted_for_table_order?: RolePermission[];
   /** Roles that must not see grand/net total and expected amounts (POS Profile config). */
   role_masked_for_amounts?: RolePermission[];

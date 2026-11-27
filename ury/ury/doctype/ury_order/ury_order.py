@@ -7219,11 +7219,12 @@ def make_invoice(
         due_total = flt(invoice.rounded_total or invoice.grand_total)
         paid_total = flt(invoice.paid_amount)
         if paid_total > due_total:
-            if callable(getattr(invoice, "calculate_change_amount", None)):
-                invoice.calculate_change_amount()
-            if flt(invoice.get("change_amount")) <= 0:
-                invoice.change_amount = flt(paid_total - due_total, invoice.precision("change_amount"))
-            ensure_local_change_payment_row(invoice, pos_profile=pos_prof)
+            with with_currency_precision(invoice):
+                if callable(getattr(invoice, "calculate_change_amount", None)):
+                    invoice.calculate_change_amount()
+                if flt(invoice.get("change_amount")) <= 0:
+                    invoice.change_amount = flt(paid_total - due_total, invoice.precision("change_amount"))
+                ensure_local_change_payment_row(invoice, pos_profile=pos_prof)
     if client_order_id:
         invoice.ury_client_order_id = client_order_id
         if round_id is not None:
@@ -7345,12 +7346,15 @@ def _submit_and_release_tables(
             previous = frappe.flags.in_bill_merge_sync
             frappe.flags.in_bill_merge_sync = True
             try:
-                credit_partner.submit()
-                invoice.submit()
+                with with_currency_precision(credit_partner):
+                    credit_partner.submit()
+                with with_currency_precision(invoice):
+                    invoice.submit()
             finally:
                 frappe.flags.in_bill_merge_sync = previous
         else:
-            invoice.submit()
+            with with_currency_precision(invoice):
+                invoice.submit()
         if fiscal_receipt_requested:
             from ury.ury_pos.api import _record_settlement_fiscal_intent
             _record_settlement_fiscal_intent(invoice)

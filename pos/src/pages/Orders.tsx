@@ -557,7 +557,7 @@ function OwnerOrders({ owner, onRegister }: { owner: string | null; onRegister?:
     setEditLoading(true);
     try {
       const res = await floorFetch(`/api/method/frappe.client.get?doctype=POS+Invoice&name=${selectedOrder.name}`);
-      if (!res.ok) throw new Error('Failed to fetch order details');
+      if (!res.ok) throw Object.assign(new Error(t('errors.failed_fetch_order')), { httpStatus: res.status });
       const data = await res.json();
       const order = data.message;
       if (order?.name !== selectedOrder.name || owner !== getSessionUser()) throw new Error(t('errors.failed_edit_order'));

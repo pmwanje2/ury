@@ -123,12 +123,13 @@ def _with_currency_precision(doc, prec=None):
     """Ensure ISO 0-decimal (UGX) and 3-decimal (KWD) currencies calculate and save at
     their true minor-unit precision even when Frappe System Settings currency_precision
     defaults to 2."""
-    code = (doc.get("currency") if doc is not None else None) or ""
+    read = getattr(doc, "get", lambda field: getattr(doc, field, None))
+    code = read("currency") or ""
     if code.strip().upper() not in (ZERO_DECIMAL_CURRENCIES | THREE_DECIMAL_CURRENCIES):
         yield
         return
     if prec is None:
-        prec = currency_precision(doc)
+        prec = currency_precision(doc, currency=code)
 
     saved = []
 
@@ -154,7 +155,7 @@ def _with_currency_precision(doc, prec=None):
 
     _patch_obj(doc)
     for child_field in ("items", "taxes", "payments"):
-        for row in doc.get(child_field) or []:
+        for row in read(child_field) or []:
             _patch_obj(row)
     try:
         yield

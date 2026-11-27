@@ -1443,6 +1443,13 @@ def _room_charge_modes(payment_mode_accounts, company):
     return modes
 
 
+def _assigned_billing_operator(profile, user):
+    if not user or not any(row.user == user for row in (getattr(profile, "applicable_for_users", None) or [])):
+        return False
+    billing_roles = {row.role for row in (profile.role_allowed_for_billing or [])}
+    return not billing_roles or bool(billing_roles.intersection(frappe.get_roles(user)))
+
+
 @frappe.whitelist()
 def getPosProfileFull(pos_profile):
     """Return the subset of POS Profile fields the POS frontend needs beyond
@@ -1474,6 +1481,7 @@ def getPosProfileFull(pos_profile):
             "shift_z_print_format_available": False,
         }
 
+    current_user = frappe.session.user if frappe.session else None
     raw_block_open = profile.get("custom_block_clock_out_with_open_work")
     block_clock_out_with_open_work = 1 if raw_block_open in (None, "") else cint(raw_block_open)
     from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
@@ -1501,6 +1509,7 @@ def getPosProfileFull(pos_profile):
         "currency": profile.currency,
         "paid_limit": profile.paid_limit,
         "role_allowed_for_billing": [row.as_dict() for row in profile.role_allowed_for_billing],
+        "assigned_billing_user": current_user if _assigned_billing_operator(profile, current_user) else None,
         "role_restricted_for_table_order": [row.as_dict() for row in profile.role_restricted_for_table_order],
         "transfer_role_permissions": [row.as_dict() for row in profile.transfer_role_permissions],
         "role_masked_for_amounts": [row.as_dict() for row in (profile.get("role_masked_for_amounts") or [])],
@@ -2552,9 +2561,7 @@ def _occupied_entry(pos_profile_name, allowed_profiles, multi_cashier, user):
     # An operator assigned to the profile, with a billing role when the
     # profile restricts billing, may continue on today's open till.
     profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
-    assigned = any(row.user == user for row in profile_doc.applicable_for_users or [])
-    billing_roles = {row.role for row in profile_doc.role_allowed_for_billing or []}
-    if assigned and (not billing_roles or billing_roles.intersection(frappe.get_roles(user))):
+    if _assigned_billing_operator(profile_doc, user):
         from ury.ury.api.ury_dashboard import _business_day_bounds
 
         start, end = _business_day_bounds(

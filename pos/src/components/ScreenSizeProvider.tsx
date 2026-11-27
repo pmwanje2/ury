@@ -17,8 +17,9 @@ const ScreenSizeProvider = ({ children, pathname = window.location.pathname }: S
     return () => window.removeEventListener('resize', resize);
   }, []);
 
-  const register = /^\/(?:pos\/)?register\/?$/.test(pathname);
-  if (!pathname.includes('/order') && width < (register || phoneTill ? 320 : 1024)) {
+  const route = pathname.replace(/^\/pos(?=\/|$)/, '').replace(/\/$/, '');
+  const handheldRoute = ['', '/register', '/tables', '/table'].includes(route);
+  if (!pathname.includes('/order') && width < (handheldRoute || phoneTill ? 320 : 1024)) {
     return <ScreenSizeDialog />;
   }
   return <>{children}</>;

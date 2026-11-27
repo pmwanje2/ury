@@ -10,7 +10,7 @@ import OrderPanel from '../components/OrderPanel';
 import ProductDialog from '../components/ProductDialog';
 import MenuList from '../components/MenuList';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
-import { usePOSStore, type OrderItem } from '../store/pos-store';
+import { usePOSStore, type MenuItem, type OrderItem } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import InitialLoader from '../components/InitialLoader';
@@ -28,6 +28,14 @@ const EMPTY_MENU: Array<{ item: string }> = [];
 function requiresManualPrice(item: { custom_is_open_priced?: number; custom_allow_zero_price?: number; price: number }) {
   return Number(item.custom_is_open_priced) === 1 ||
     (Number(item.custom_allow_zero_price) === 1 && Number(item.price) === 0);
+}
+
+function repeatedLine(row: OrderItem, price: number, catalog?: MenuItem): OrderItem {
+  return {
+    ...row, price, promo_rate: catalog?.promo_rate ?? null, promo_label: catalog?.promo_label ?? null,
+    uniqueId: undefined, invoiceItemName: undefined, reservationLineKey: undefined, parentLineKey: undefined,
+    fireAt: undefined, fireConfirmationPending: false,
+  };
 }
 
 export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetail }: React.ComponentProps<typeof OrderPanel> & { checkDetail?: React.ReactNode; lastRound?: { invoice: string; lines: OrderItem[] } }) {
@@ -179,20 +187,44 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
   const repeatRound = () => {
     if (!lastRound || lastRound.invoice !== orderId || isMenuInteractionDisabled() || isOrderInteractionDisabled()) return;
     const parents = lastRound.lines.filter(row => !row.isModifier && !row.parentLineKey);
-    if (parents.some(row => {
-      const item = menuItems.find(it => it.item === row.item);
-      return !item || item.unavailable_daypart || isUnavailable(availabilityMap?.[row.item]) ||
-        requiresManualPrice(item);
-    })) {
-      showToast.error(t('menu.unavailable'));
-      return;
-    }
-    const newLine = (row: OrderItem) => ({ ...row, uniqueId: undefined, invoiceItemName: undefined,
-      reservationLineKey: undefined, parentLineKey: undefined, fireAt: undefined, fireConfirmationPending: false });
+    const catalog = new Map(menuItems.map(item => [item.item, item]));
+    const groups: { parent: OrderItem; children: OrderItem[] }[] = [];
     for (const row of parents) {
-      const children = lastRound.lines.filter(child => child.parentLineKey && child.parentLineKey === row.reservationLineKey);
-      void addConfiguredItems(newLine(row), children.map(newLine));
+      const item = catalog.get(row.item);
+      if (!item || item.unavailable_daypart || isUnavailable(availabilityMap?.[row.item]) || requiresManualPrice(item)) {
+        showToast.error(t('menu.unavailable'));
+        return;
+      }
+      const children: OrderItem[] = [];
+      for (const child of lastRound.lines.filter(line => line.parentLineKey && line.parentLineKey === row.reservationLineKey)) {
+        const option = item.modifier_groups?.find(group => group.name === child.modifierGroup)
+          ?.options.find(option => option.option_code === child.modifierOption);
+        if (!option || option.available === false || option.price_mode === 'Unpriced Prep') {
+          showToast.error(t('menu.unavailable'));
+          return;
+        }
+        const price = Number(option.unit_price ?? option.upcharge_amount ?? 0);
+        children.push(repeatedLine(child, price));
+      }
+      const parent = repeatedLine(row, item.price, item);
+      parent.modifier_groups = item.modifier_groups;
+      if (row.selectedVariant) {
+        parent.selectedVariant = item.variants?.find(variant => variant.id === row.selectedVariant?.id);
+        if (!parent.selectedVariant) {
+          showToast.error(t('menu.unavailable'));
+          return;
+        }
+      }
+      if (row.selectedAddons?.length) {
+        parent.selectedAddons = item.addons?.filter(addon => row.selectedAddons?.some(chosen => chosen.id === addon.id));
+        if (parent.selectedAddons?.length !== row.selectedAddons.length) {
+          showToast.error(t('menu.unavailable'));
+          return;
+        }
+      }
+      groups.push({parent, children});
     }
+    for (const {parent, children} of groups) void addConfiguredItems(parent, children);
   };
 
   const QuickFilterButton = ({ filter, icon: Icon, label }: { 
@@ -201,7 +233,13 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
     label: string;
   }) => (
     <button
-      onClick={() => setQuickFilter(filter)}
+      onClick={() => {
+        setQuickFilter(filter);
+        if (filter === 'all') {
+          setSelectedCategory('');
+          setPage('');
+        }
+      }}
       className={cn(
         'flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors',
         quickFilter === filter
@@ -280,7 +318,7 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
               {(layout.pages.length ? layout.pages.map(p => ({ name: p.label, label: p.label })) : categories || []).map(p =>
                 <button key={p.name} className="min-h-11 shrink-0 rounded border px-2 aria-pressed:bg-muted"
                   aria-pressed={layout.pages.length ? page === p.name : selectedCategory === p.name}
-                  onClick={() => layout.pages.length ? setPage(page === p.name ? '' : p.name) : setSelectedCategory(p.name)}>{p.label}</button>)}
+                  onClick={() => layout.pages.length ? setPage(page === p.name ? '' : p.name) : setSelectedCategory(selectedCategory === p.name ? '' : p.name)}>{p.label}</button>)}
             </div>
           </div>
           <div className="max-w-screen-xl mx-auto space-y-3">
@@ -300,12 +338,13 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
                   type="button"
                   data-testid="register-open-item-btn"
                   disabled={isMenuInteractionDisabled()}
-                  onClick={() =>
+                  onClick={() => {
+                    setDialogQuantity(1);
                     setOpenItemDialog({
                       itemCode: openMenuItems[0].item,
                       itemName: openMenuItems[0].item_name,
-                    })
-                  }
+                    });
+                  }}
                   className={cn(
                     'flex min-h-11 shrink-0 items-center gap-2 rounded-full bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-800 border border-amber-200 transition-colors hover:bg-amber-100',
                     isMenuInteractionDisabled() && 'opacity-50 cursor-not-allowed pointer-events-none',

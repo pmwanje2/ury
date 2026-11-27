@@ -25,6 +25,8 @@ export function isNetworkFailure(error: unknown): boolean {
 
 // Transport failure or a gateway page (502/503/504/52x). 401/403/500 stay answers.
 export function isLinkDown(error: unknown): boolean {
+  // Native fetch rejects with browser-specific TypeErrors before an HTTP response exists.
+  if (error instanceof TypeError && /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i.test(error.message)) return true;
   return isNetworkFailure(error) || gatewayStatusOf(error) !== null;
 }
 
