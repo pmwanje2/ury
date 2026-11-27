@@ -11,9 +11,9 @@ import AuthGuard from '../src/components/AuthGuard';
 let pendingOwner: string | null = null;
 vi.mock('../src/offline/outbox', async (original) => ({
   ...await original<typeof import('../src/offline/outbox')>(),
-  withOutboxLogin: async (user: string | null, run: (pending: boolean) => Promise<void>) => {
+  withOutboxLogin: async (user: string | null, run: (owner: string | null) => Promise<void>) => {
     if (pendingOwner && user !== pendingOwner) throw new Error('Queued orders belong to another waiter');
-    await run(!!pendingOwner);
+    await run(pendingOwner);
   },
 }));
 

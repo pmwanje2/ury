@@ -397,7 +397,7 @@ test('serializes login with capture and allows pending orders only for their exa
     await expect(withOutboxLogin(other, login)).rejects.toThrow();
   }
   await withOutboxLogin(user.name, login);
-  expect(login.mock.calls).toEqual([[false], [true]]);
+  expect(login.mock.calls).toEqual([[null], [user.name]]);
 });
 
 test('lets the authenticated owner retry a reviewed order after correcting its cause', async () => {

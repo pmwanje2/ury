@@ -616,6 +616,25 @@ class TestFloorPin(unittest.TestCase):
 		api.sign_in("0527", expected_user=self.user)
 		self.assertEqual(self.frappe.local.login_manager.login_as.call_args.args, (self.user,))
 
+	def test_request_hook_refuses_displaced_cookie_before_dispatch(self):
+		from ury import hooks
+		from ury.ury.controllers import setup_redirect
+
+		guard = "ury.ury.controllers.setup_redirect.guard_floor_request_user"
+		self.assertIn(guard, hooks.before_request)
+		with patch.object(setup_redirect, "frappe", self.frappe):
+			for session_user in ("waiter.a@example.test", "Guest", self.user):
+				self.frappe.session.user = session_user
+				self.frappe.local.request.headers = {"X-URY-Floor-User": self.user}
+				if session_user == self.user:
+					setup_redirect.guard_floor_request_user()
+				else:
+					with self.assertRaisesRegex(Unauthenticated, "URY_FLOOR_SESSION_MISMATCH"):
+						setup_redirect.guard_floor_request_user()
+			self.frappe.local.request.headers = {}
+			self.frappe.session.user = "Guest"
+			setup_redirect.guard_floor_request_user()
+
 	def test_password_login_response_identifies_the_session_created_for_an_alias(self):
 		from ury.ury.controllers import setup_redirect
 

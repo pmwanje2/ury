@@ -4,6 +4,9 @@ import { IDBDatabase, IDBFactory } from 'fake-indexeddb';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as core from '@ury/core';
+import type { AxiosInstance } from 'axios';
+import { getTableOrder } from '../src/lib/order-api';
+import { getRealtimeSocket } from '../src/lib/realtime';
 import AuthGuard from '../src/components/AuthGuard';
 import OutboxPanel from '../src/components/OutboxPanel';
 import { cashierOutbox, clearCashierStorage } from '../src/offline/cashier';
@@ -728,4 +731,79 @@ it('locks the mounted replacement workspace when an earlier unlocked login respo
   await within(workspace.container).findByLabelText('Password');
   expect(screen.queryByRole('button', { name: 'Submit cashier order' })).toBeNull();
   expect(hasFloorSessionMarker(second)).toBe(false);
+});
+
+it.each(['order SDK', 'direct fetch'])('blocks the admitted %s request before the competing login body arrives', async transport => {
+  vi.stubGlobal('navigator', { onLine: true });
+  const owner = state.user.name;
+  const first = 'earlier@example.test';
+  let resolveLogin!: () => void;
+  const delayed = vi.spyOn(core.auth, 'loginWithUsernamePassword').mockImplementationOnce(() =>
+    new Promise(resolve => { resolveLogin = () => resolve({ message: 'Logged In' }); }));
+  vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(first);
+  const a = render(<FloorPinPad usernameOnly />);
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: first } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'test password' } });
+  fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
+  await waitFor(() => expect(delayed).toHaveBeenCalledOnce());
+  a.unmount();
+  sessionStorage.clear();
+  window.name = '';
+  document.cookie = 'user_id=' + encodeURIComponent(owner) + '; Path=/';
+  await confirmVerifiedLogin(owner, false, await beginFloorLogin());
+  const view = render(<AuthGuard><main>Cashier order screen</main></AuthGuard>);
+  await screen.findByText('Cashier order screen');
+  const axios = (core.auth as unknown as { axios: AxiosInstance }).axios;
+  const previous = axios.defaults.adapter;
+  const sent: Headers[] = [];
+  axios.defaults.adapter = async config => {
+    sent.push(new Headers(config.headers.toJSON() as Record<string, string>));
+    return { config, data: { message: null }, status: 200, statusText: 'OK', headers: {} };
+  };
+  vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+    sent.push(new Headers(init?.headers));
+    return new Response(JSON.stringify({ message: {} }));
+  }));
+  const request = () => transport === 'order SDK' ? getTableOrder('T1', true) : getRealtimeSocket();
+  try {
+    await Promise.allSettled([request()]);
+    const matched = sent.map(h => h.get('X-URY-Floor-User'));
+    sent.length = 0;
+    document.cookie = 'user_id=' + encodeURIComponent(first) + '; Path=/';
+    await act(async () => { await Promise.allSettled([request()]); });
+    expect(sent).toHaveLength(0);
+    expect(matched).toEqual([owner]);
+    await screen.findByLabelText('Password');
+    expect(screen.queryByText('Cashier order screen')).toBeNull();
+    expect(hasFloorSessionMarker(owner)).toBe(false);
+  } finally {
+    view.unmount();
+    document.cookie = 'user_id=; Max-Age=0; Path=/';
+    await act(async () => resolveLogin());
+  }
+});
+
+it.each([
+  ['floor-waiter', true], ['+256700001234', true], ['another-waiter', false],
+] as const)('checks the canonical owner of pending orders after alias %s authenticates', async (alias, matches) => {
+  const entry = await capture();
+  const canonical = matches ? state.user.name : 'other@example.test';
+  const login = vi.spyOn(core.auth, 'loginWithUsernamePassword').mockResolvedValue({
+    message: 'Logged In', authenticated_user: canonical,
+  } as never);
+  vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(canonical);
+  render(<FloorPinPad usernameOnly recoveryOwner={state.user.name} />);
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: alias } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'test password' } });
+  fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
+  await waitFor(() => expect(login).toHaveBeenCalledOnce());
+  if (matches) {
+    await waitFor(() => expect(isFloorSessionConfirmedForTab(state.user.name)).toBe(true));
+    expect(hasFloorSessionMarker(state.user.name)).toBe(false);
+  } else {
+    await screen.findByRole('alert');
+    expect(isFloorSessionConfirmedForTab(canonical)).toBe(false);
+    expect(sessionStorage.getItem('userAuth')).toBe('revoked');
+  }
+  expect((await cashierOutbox(state.posProfile, state.user).list()).map(row => row.client_order_id)).toEqual([entry.client_order_id]);
 });
