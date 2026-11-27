@@ -126,6 +126,24 @@ class TestOutletTransferStock(unittest.TestCase):
         }, fields=["item_code", "warehouse", "actual_qty"])
         self.assertCountEqual([(r.item_code, r.warehouse, r.actual_qty) for r in rows], expected)
 
+    def test_floor_lookup_matches_whole_merged_table_names(self):
+        t1, t9, t10 = [self.prefix + suffix for suffix in (" T1", " T9", " T10")]
+        for table in (t1, t9, t10):
+            frappe.get_doc({
+                "doctype": "URY Table", "restaurant": self.east.restaurant, "branch": self.east.branch,
+            }).insert(set_name=table, ignore_mandatory=True)
+        older = self.invoice()
+        newer = frappe.copy_doc(older).insert()
+        frappe.db.set_value("POS Invoice", older.name, {"restaurant_table": t9, "custom_merged_tables": t10})
+        frappe.db.set_value("POS Invoice", newer.name, "restaurant_table", t1)
+        self.assertLess(older.creation, newer.creation)
+        with patch.object(ury_order, "getBranch", return_value=self.east.branch):
+            self.assertEqual(ury_order.get_table_order_context(t10)["order"]["name"], older.name)
+            floor = ury_order.get_table_order_context(t1)["order"]["name"]
+            names = ury_order._open_invoice_names_for_table(t1)
+            opened = ury_order.get_order_invoice(table=t1).name
+            self.assertEqual((floor, opened, names), (newer.name, newer.name, {newer.name}))
+
     def test_held_line_reserves_and_fires_at_destination(self):
         doc = self.invoice()
         self.transfer(doc)
