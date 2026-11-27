@@ -28,6 +28,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
     currentPage: 1,
     paymentMethod: 0,
     editPrintedInvoice: 0,
+    editRequest: 0,
     selectedStatus: "Draft",
     posProfile: "",
     searchOrder: "",
@@ -260,6 +261,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
       this.showOrder = true;
     },
     async editOrder() {
+      const request = ++this.editRequest;
       this.payments = [];
       let previousOrderdNumberOfPax = "";
       this.pastOrderdItem = [];
@@ -279,9 +281,10 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
         doctype: "POS Invoice",
         name: this.draftInvoice,
       };
-      this.call
+      return this.call
         .get("frappe.client.get", getOrderInvoice)
         .then((result) => {
+          if (request !== this.editRequest || this.draftInvoice !== getOrderInvoice.name) return;
           let pastOrder = result.message;
           this.mobileNumber = pastOrder.mobile_number;
           this.restaurantTable = pastOrder.restaurant_table;

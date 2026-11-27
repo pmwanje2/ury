@@ -444,7 +444,7 @@ def _reconcile_line(order_ref, line_key, line, previous_qty, branch, company, ac
 				frappe.ValidationError,
 			)
 
-	for group in _active_groups(order_ref, item_code, reservation_line_key=line_key):
+	for group in _active_groups(order_ref, item_code, reservation_line_key=line.get("previous_stock_key", line_key)):
 		release_reservation(group, reason="Order acceptance line quantity reconciliation")
 
 	frozen_context = {
@@ -536,7 +536,51 @@ def release_order_reservations(order_ref, reason=None):
 	return released
 
 
-def reconcile_order_reservations(order_ref, previous_items, accepted_items, branch, company, actor=None):
+def _prior_unkeyed_reservation_keys(order_ref, previous, changes):
+	"""Find pre-upgrade allocations whose frozen key included a cart price or menu metadata."""
+	changed = {key for key, row, qty in changes if qty > 0 and not row.get("source_line_ref")}
+	if not changed:
+		return {}
+	codes = {previous[key]["item_code"] for key in changed}
+	rows = frappe.get_all(
+		RESERVATION_DOCTYPE, filters={"order_ref": order_ref, "status": RESERVED, "top_level_item": ["in", sorted(codes)]},
+		fields=["top_level_item", "audit_log"],
+	)
+	by_item = defaultdict(dict)
+	for row in rows:
+		frozen = _audit_frozen_context(row)
+		key = frozen.get("reservation_line_key") or ""
+		if key.startswith(("ctx:", "pos:")):
+			by_item[row.top_level_item][key] = frozen.get("source_context") or {}
+
+	def placement(context):
+		return (context.get("comment") or context.get("comments") or "",
+		        cint(context.get("custom_seat_no") or context.get("seat_no")))
+
+	bindings = {}
+	for code, frozen_keys in by_item.items():
+		# Reserve exact matches first. Other legacy buckets may differ only
+		# in price, or lack a course that was assigned during invoice pricing.
+		unmatched = {key: row["source_context"] for key, row in previous.items()
+		             if row["item_code"] == code and not row["source_line_ref"] and key not in frozen_keys}
+		for old_key, context in frozen_keys.items():
+			if old_key in previous:
+				continue
+			course = context.get("custom_course")
+			matches = [key for key, saved in unmatched.items()
+			           if placement(saved) == placement(context)
+			           and (not course or saved.get("custom_course") == course)]
+			if changed.isdisjoint(matches):
+				continue
+			if len(matches) != 1 or matches[0] in bindings:
+				frappe.throw(_("Cannot identify the original stock reservation for {0}.").format(code))
+			bindings[matches[0]] = old_key
+	return bindings
+
+
+def reconcile_order_reservations(
+	order_ref, previous_items, accepted_items, branch, company, actor=None, *, full_invoice_cart=False,
+):
 	"""Reconcile reservations to the accepted POS item delta.
 
 	Reservation groups are released and rebuilt only for the changed POS line
@@ -602,5 +646,8 @@ def reconcile_order_reservations(order_ref, previous_items, accepted_items, bran
 			)
 		frappe.throw(message, frappe.ValidationError)
 
+	previous_keys = _prior_unkeyed_reservation_keys(order_ref, previous, changed_lines) if full_invoice_cart else {}
 	for line_key, line, previous_qty in changed_lines:
+		if line_key in previous_keys:
+			line["previous_stock_key"] = previous_keys[line_key]
 		_reconcile_line(order_ref, line_key, line, previous_qty, branch, company, actor)

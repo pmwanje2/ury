@@ -3842,11 +3842,17 @@ def _restore_grouped_line_keys(items, saved_rows):
         if course:
             rows = [row for row in rows if row.get("custom_course") == course]
         if (item.get("name") or item.get("reservation_line_key") or requested[group] != 1
-                or not any(row.get("reservation_line_key") for row in rows)
+                or (len(rows) > 1 and not any(row.get("reservation_line_key") for row in rows))
                 or len({row.get("custom_course") for row in rows}) != 1
                 or not ordinary(item) or not all(ordinary(row) for row in rows)
                 or flt(item.get("qty")) <= 0):
             restored.append(item)
+            continue
+        if len(rows) == 1 and not rows[0].get("reservation_line_key"):
+            # A unique saved child identifies this line even on older checks.
+            # Let normal issued-quantity allocation handle any increase.
+            saved_positions.append((len(restored), rows[0].get("idx") or 0))
+            restored.append(dict(item, name=rows[0].get("name")))
             continue
         expanded_group |= len(rows) > 1
         remaining = Decimal(str(item["qty"]))
@@ -3854,11 +3860,11 @@ def _restore_grouped_line_keys(items, saved_rows):
             portion = min(remaining, Decimal(str(row.get("qty") or 0)))
             if portion <= 0:
                 continue
-            line = dict(item, qty=float(portion))
+            line = dict(item, name=row.get("name"), qty=float(portion))
             if row.get("custom_course"):
                 line["custom_course"] = row.get("custom_course")
             if row.get("reservation_line_key"):
-                line.update(name=row.get("name"), reservation_line_key=row.get("reservation_line_key"))
+                line["reservation_line_key"] = row.get("reservation_line_key")
             saved_positions.append((len(restored), row.get("idx") or 0))
             restored.append(line)
             remaining -= portion
@@ -5328,11 +5334,24 @@ def sync_order(
         _allocate_issued_quantities(items, priced_items, saved_rows, posprofile.get("warehouse"))
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
         anchored = {_line_ref(row) for row in past_item if row.get("custom_kitchen_anchor")}
-        accepted = past_item + items if append else items
+        # A child name locates the invoice row, but is not the reservation
+        # identity of a legacy unkeyed line. Compare those lines using the
+        # same persisted kitchen context on both sides, including on creation.
+        accepted = [
+            row if row.get("reservation_line_key") else {
+                "item_code": priced["item_code"], "qty": priced["qty"],
+                "comments": row.get("comment") or "", "custom_course": priced.get("custom_course"),
+                "custom_seat_no": cint(priced.get("custom_seat_no")),
+            }
+            for row, priced in zip(items, priced_items, strict=True)
+        ]
+        if append:
+            accepted = past_item + accepted
         reconcile_order_reservations(
             order_ref=_ensure_invoice_reservation_ref(invoice),
             previous_items=[row for row in past_item if _line_ref(row) not in anchored],
             accepted_items=[row for row in accepted if _line_ref(row) not in anchored],
+            full_invoice_cart=not append,
             branch=invoice.branch,
             company=_sync_order_company,
             actor=frappe.session.user,
