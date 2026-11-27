@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import AppLayout from './components/AppLayout';
 import Orders from './pages/Orders';
 import POS from './pages/POS';
@@ -59,6 +59,11 @@ function useAiSettings() {
   return aiEnabled;
 }
 
+
+function RoutedScreenSizeProvider({ children }: { children: React.ReactNode }) {
+  const { pathname } = useLocation();
+  return <ScreenSizeProvider pathname={pathname}>{children}</ScreenSizeProvider>;
+}
 
 function RegisterRoute() {
   const user = useRootStore(s => s.user?.name);
@@ -129,9 +134,9 @@ function App() {
     <PrinterWatchProvider>
       <ToastProvider />
       <KotAlertListener />
-      <ScreenSizeProvider>
-        <AuthGuard>
-          <Router basename="/pos">
+      <Router basename="/pos">
+        <RoutedScreenSizeProvider>
+          <AuthGuard>
             <POSOpeningProvider>
               {/*
                 PLAN.md item 4: ActiveReportProvider + the floating ChatWidget
@@ -190,9 +195,9 @@ function App() {
                 </AiEnabledProvider>
               </ActiveReportProvider>
             </POSOpeningProvider>
-          </Router>
-        </AuthGuard>
-      </ScreenSizeProvider>
+          </AuthGuard>
+        </RoutedScreenSizeProvider>
+      </Router>
     </PrinterWatchProvider>
   );
 }

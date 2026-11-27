@@ -1,3 +1,4 @@
+import { hasTillRole } from '../lib/home-route';
 import { coversLimit } from '@ury/core/covers';
 import { useEffect, useMemo, useState } from 'react';
 import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
@@ -85,6 +86,7 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
     lastModifiedTime
   } = usePOSStore();
   const activeCurrency = posProfile?.currency || storeCurrency;
+  const checkMoney = (amount: number) => formatCurrency(amount, activeCurrency, { fixedPrecision: true });
   const [extraSeatLimit, setExtraSeatLimit] = useState(0);
   const seatLimit = Math.max(noOfPax || 0, 4, activeSeat, extraSeatLimit, ...activeOrders.map((line) => line.seatNo || 0));
   const seats = Array.from({ length: Math.min(99, seatLimit) + 1 }, (_, index) => index);
@@ -368,7 +370,7 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
             ? t('success.order_updated')
             : t('success.order_created'),
       );
-      if (result?.message && 'name' in result.message && user.roles?.includes('URY Cashier')) {
+      if (result?.message && 'name' in result.message && hasTillRole(user, posProfile)) {
         const previous = new Map(originalSentItems.map(row => [row.reservation_line_key, row.qty]));
         const round = activeOrders.map(line => ({
           ...line, quantity: line.quantity - (previous.get(line.reservationLineKey || '') || 0),
@@ -713,14 +715,14 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                         {item.name}
                       </p>
                       <p className="text-gray-500">
-                        {item.quantity} × {formatCurrency(item.price, activeCurrency)}
+                        {item.quantity} × {checkMoney(item.price)}
                       </p>
                     </div>
                     <span className="ms-2 shrink-0 flex items-center gap-1 font-medium text-gray-700 tabular-nums">
-                      <span>{formatCurrency(lineTotal, activeCurrency)}</span>
+                      <span>{checkMoney(lineTotal)}</span>
                       {lineTotal < baseLineTotal && (
                         <span className="text-[11px] text-gray-400 line-through">
-                          {formatCurrency(baseLineTotal, activeCurrency)}
+                          {checkMoney(baseLineTotal)}
                         </span>
                       )}
                     </span>
@@ -805,10 +807,10 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                         </div>
                       )}
                       <p className="flex items-center gap-1.5 text-gray-600 text-sm tabular-nums">
-                        <span>{formatCurrency(lineTotal, activeCurrency)}</span>
+                        <span>{checkMoney(lineTotal)}</span>
                         {lineTotal < baseLineTotal && (
                           <span className="text-xs text-gray-400 line-through">
-                            {formatCurrency(baseLineTotal, activeCurrency)}
+                            {checkMoney(baseLineTotal)}
                           </span>
                         )}
                       </p>
@@ -927,13 +929,13 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs text-gray-600">
-                    {t(hasServerPreview ? 'payment.subtotal' : 'privileged_actions.sc_summary_net')}: {formatCurrency(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total, activeCurrency)}
+                    {t(hasServerPreview ? 'payment.subtotal' : 'privileged_actions.sc_summary_net')}: {checkMoney(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total)}
                     {hasServerPreview
                       ? serverServiceChargeTotal > 0
-                        ? ` · ${serverServiceChargeRows[0]?.description || t('privileged_actions.service_charge')}: ${formatCurrency(serverServiceChargeTotal, activeCurrency)}`
+                        ? ` · ${serverServiceChargeRows[0]?.description || t('privileged_actions.service_charge')}: ${checkMoney(serverServiceChargeTotal)}`
                         : ''
                       : activeServiceChargeRule && estimatedServiceCharge > 0
-                        ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${formatCurrency(estimatedServiceCharge, activeCurrency)}`
+                        ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${checkMoney(estimatedServiceCharge)}`
                         : ''}
                   </div>
                   <div className="text-xs font-medium text-blue-700">
@@ -941,7 +943,7 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5 font-semibold text-gray-900 tabular-nums">
-                  <span>{formatCurrency(displayTotal, activeCurrency)}</span>
+                  <span>{checkMoney(displayTotal)}</span>
                   {mobileSummaryOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </div>
               </button>
@@ -949,12 +951,12 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                 <div className="mt-2 rounded-md border border-gray-200 bg-white p-3 space-y-1.5 text-sm">
                   <div className="flex items-center justify-between text-gray-600">
                     <span>{t(hasServerPreview ? 'payment.subtotal' : 'privileged_actions.sc_summary_net')}</span>
-                    <span className="tabular-nums">{formatCurrency(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total, activeCurrency)}</span>
+                    <span className="tabular-nums">{checkMoney(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total)}</span>
                   </div>
                   {hasServerPreview && orderPreview && (
                     <div className="flex items-center justify-between text-emerald-700 tabular-nums">
                       <span>{t('cart.discount')}</span>
-                      <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
+                      <span>-{checkMoney(orderPreview.discount_amount)}</span>
                     </div>
                   )}
                   {showClientServiceChargeEstimate && activeServiceChargeRule && (
@@ -964,14 +966,14 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                         {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
                       </span>
                       <span className="shrink-0 tabular-nums font-medium">
-                        {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                        {checkMoney(estimatedServiceCharge)}
                       </span>
                     </div>
                   )}
                   {hasServerPreview && orderPreview && !serverServiceChargeRows.length && <div className="flex justify-between text-sm">
-                    <span>{t('privileged_actions.service_charge')}</span><span>{formatCurrency(0, activeCurrency)}</span></div>}
+                    <span>{t('privileged_actions.service_charge')}</span><span>{checkMoney(0)}</span></div>}
                   {hasServerPreview && orderPreview && !orderPreview.tax_rows.some(row => !isServiceChargePreviewRow(row)) && <div className="flex justify-between text-sm">
-                    <span>{t('cart.tax')}</span><span>{formatCurrency(0, activeCurrency)}</span></div>}
+                    <span>{t('cart.tax')}</span><span>{checkMoney(0)}</span></div>}
                   {hasServerPreview && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => (
                     <div
                       key={`${taxRow.description}-${idx}`}
@@ -980,12 +982,12 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                       <span className="min-w-0 truncate">
                         {formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'))}
                       </span>
-                      <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
+                      <span className="shrink-0">{checkMoney(taxRow.tax_amount)}</span>
                     </div>
                   ))}
                   <div className="flex items-center justify-between border-t border-gray-100 pt-1.5 font-semibold text-gray-900">
                     <span>{t('cart.total')}</span>
-                    <span className="tabular-nums">{formatCurrency(displayTotal, activeCurrency)}</span>
+                    <span className="tabular-nums">{checkMoney(displayTotal)}</span>
                   </div>
                 </div>
               )}
@@ -997,12 +999,12 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                 <>
                   <div className="flex items-center justify-between text-xs text-gray-600 tabular-nums">
                     <span>{hasServerPreview ? t('payment.subtotal') : t('privileged_actions.sc_summary_net')}</span>
-                    <span>{formatCurrency(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total, activeCurrency)}</span>
+                    <span>{checkMoney(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total)}</span>
                   </div>
                   {hasServerPreview && orderPreview && (
                     <div className="flex items-center justify-between text-xs text-emerald-700 tabular-nums">
                       <span>{t('cart.discount')}</span>
-                      <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
+                      <span>-{checkMoney(orderPreview.discount_amount)}</span>
                     </div>
                   )}
                   {showClientServiceChargeEstimate && activeServiceChargeRule && (
@@ -1026,14 +1028,14 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                         </span>
                       )}
                       <span className="shrink-0 tabular-nums font-medium">
-                        {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                        {checkMoney(estimatedServiceCharge)}
                       </span>
                     </div>
                   )}
                   {hasServerPreview && orderPreview && !serverServiceChargeRows.length && <div className="flex justify-between text-sm">
-                    <span>{t('privileged_actions.service_charge')}</span><span>{formatCurrency(0, activeCurrency)}</span></div>}
+                    <span>{t('privileged_actions.service_charge')}</span><span>{checkMoney(0)}</span></div>}
                   {hasServerPreview && orderPreview && !orderPreview.tax_rows.some(row => !isServiceChargePreviewRow(row)) && <div className="flex justify-between text-sm">
-                    <span>{t('cart.tax')}</span><span>{formatCurrency(0, activeCurrency)}</span></div>}
+                    <span>{t('cart.tax')}</span><span>{checkMoney(0)}</span></div>}
                   {hasServerPreview && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => {
                     const isScRow = isServiceChargePreviewRow(taxRow);
                     const rowLabel = formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'));
@@ -1054,7 +1056,7 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                         ) : (
                           <span className="truncate pe-2">{rowLabel}</span>
                         )}
-                        <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
+                        <span className="shrink-0">{checkMoney(taxRow.tax_amount)}</span>
                       </div>
                     );
                   })}
@@ -1098,7 +1100,7 @@ const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availability
                 </Button>
                 <span className="text-lg font-semibold">{t('cart.total')}</span>
               </div>
-              <span className="text-lg font-semibold tabular-nums">{formatCurrency(displayTotal, activeCurrency)}</span>
+              <span className="text-lg font-semibold tabular-nums">{checkMoney(displayTotal)}</span>
             </div>
             <Button
               onClick={handleSubmit}

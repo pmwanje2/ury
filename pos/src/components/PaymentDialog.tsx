@@ -598,8 +598,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     if (metaType) return metaType === 'Cash';
     return /^cash$/i.test(mode) || (Boolean(getFxCurrency(mode)) && /\bcash\b/i.test(mode));
   };
+  const minorTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(currencyCode));
   const rawExcess = rawTotalTendered - amountDue;
-  const hasExcess = rawExcess > 0.005;
+  const hasExcess = rawExcess > minorTolerance;
   const cashTendered = combinedPayments.reduce(
     (sum, p) => (isCashMode(p.mode_of_payment) ? sum + p.amount : sum),
     0,
@@ -609,11 +610,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     .map((p) => p.mode_of_payment);
   const nonCashExcess = hasExcess ? roundToCurrency(Math.max(0, rawExcess - cashTendered), currencyCode) : 0;
   const cashChangeDue =
-    hasExcess && nonCashExcess <= 0.005
+    hasExcess && nonCashExcess <= minorTolerance
       ? roundToCurrency(Math.max(0, Math.min(rawExcess, cashTendered)), currencyCode)
       : 0;
   const nonCashAllowsTip =
-    nonCashExcess > 0.005 &&
+    nonCashExcess > minorTolerance &&
     nonCashModes.length > 0 &&
     nonCashModes.every((mode) => modeMeta[mode]?.overtender_rule === 'Post to Charged Tip');
 
@@ -659,7 +660,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         ...(roomApproval ? { room_charge_approval: roomApproval.token, room_charge_reason: roomApproval.reason } : {}),
       }
     : {};
-  const minorTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(currencyCode));
   const rawShortfall = amountDue - rawTotalTendered;
   const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
   const isShort = rawShortfall > minorTolerance;
@@ -1550,7 +1550,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                   : t('payment.change_due', { amount: formatMoney(cashChangeDue) })}
               </p>
             )}
-            {nonCashExcess > 0.005 && (
+            {nonCashExcess > minorTolerance && (
               <p className={`${nonCashAllowsTip ? 'text-blue-700' : 'text-red-700'} text-sm font-medium`}>
                 {t(nonCashAllowsTip ? 'payment.overtender_to_tip' : 'payment.non_cash_overtender', {
                   amount: formatMoney(nonCashExcess),

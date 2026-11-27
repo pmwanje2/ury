@@ -202,6 +202,7 @@ const TableView = () => {
   }, [branch]);
 
   useEffect(() => {
+    let current = true;
     async function fetchRooms() {
       if (!branch) return;
       setLoadingRooms(true);
@@ -209,27 +210,35 @@ const TableView = () => {
 
       try {
         const sessionKey = `ury_rooms_${branch}`;
-        const cachedRooms = sessionStorage.getItem(sessionKey);
-
-        if (cachedRooms) {
-          const parsedRooms = JSON.parse(cachedRooms) as Room[];
-          setRooms(parsedRooms);
-          setSelectedRoom((prev) => prev ?? (parsedRooms[0]?.name ?? null));
-        } else {
-          const fetchedRooms = await getRooms(branch);
-          setRooms(fetchedRooms);
-          setSelectedRoom((prev) => prev ?? (fetchedRooms[0]?.name ?? null));
-          sessionStorage.setItem(sessionKey, JSON.stringify(fetchedRooms));
+        const cached = sessionStorage.getItem(sessionKey);
+        let rooms: Room[] | undefined;
+        if (cached) {
+          try {
+            const rows = JSON.parse(cached);
+            if (Array.isArray(rows) && rows.every(row => row && Object.prototype.hasOwnProperty.call(row, 'room_type'))) rooms = rows;
+          } catch {
+            // Rebuild an unreadable cache from the outlet.
+          }
+        }
+        if (!rooms) {
+          rooms = (await getRooms(branch)).map(room => ({ ...room, room_type: room.room_type ?? '' }));
+          sessionStorage.setItem(sessionKey, JSON.stringify(rooms));
+        }
+        if (current) {
+          setRooms(rooms);
+          const availableRooms = rooms;
+          setSelectedRoom(prev => availableRooms.some(room => room.name === prev) ? prev : availableRooms[0]?.name ?? null);
         }
       } catch (e) {
         console.error(e);
-        setError(t('tables.failed_to_load_rooms'));
+        if (current) setError(t('tables.failed_to_load_rooms'));
       } finally {
-        setLoadingRooms(false);
+        if (current) setLoadingRooms(false);
       }
     }
 
     fetchRooms();
+    return () => { current = false; };
   }, [branch]);
 
   useEffect(() => {

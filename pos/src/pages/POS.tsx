@@ -25,6 +25,11 @@ import { showToast } from '@ury/ui';
 
 const EMPTY_MENU: Array<{ item: string }> = [];
 
+function requiresManualPrice(item: { custom_is_open_priced?: number; custom_allow_zero_price?: number; price: number }) {
+  return Number(item.custom_is_open_priced) === 1 ||
+    (Number(item.custom_allow_zero_price) === 1 && Number(item.price) === 0);
+}
+
 export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetail }: React.ComponentProps<typeof OrderPanel> & { checkDetail?: React.ReactNode; lastRound?: { invoice: string; lines: OrderItem[] } }) {
   const {
     categories, selectedCategory, setSelectedCategory, isOrderInteractionDisabled,
@@ -122,10 +127,7 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
 
     setQuantity(1);
     setDialogQuantity(count);
-    if (
-      Number(item?.custom_is_open_priced || 0) === 1 ||
-      (Number(item?.custom_allow_zero_price || 0) === 1 && Number(item?.price || 0) === 0)
-    ) {
+    if (requiresManualPrice(item)) {
       if (clickTimerRef.current) {
         clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
@@ -180,7 +182,7 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
     if (parents.some(row => {
       const item = menuItems.find(it => it.item === row.item);
       return !item || item.unavailable_daypart || isUnavailable(availabilityMap?.[row.item]) ||
-        item.custom_is_open_priced || item.custom_allow_zero_price;
+        requiresManualPrice(item);
     })) {
       showToast.error(t('menu.unavailable'));
       return;

@@ -7,6 +7,7 @@ import {
   canCaptureOfflineOrder,
   canSettleOffline,
   openTableRow,
+  offlineTolerance,
   exceedsOfflineTenderLimit,
   resolveOfflineModeConfig,
   withEmptyOutbox,
@@ -132,17 +133,15 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
   const queue = cashierOutbox(profile, user);
   queue.assertSessionAllowed();
   const kind = resolveOfflineTender(profile, modeOfPayment, amount, reference);
-  // A short named-account settlement (#44) leaves a balance owed. It is not a
-  // cash settlement and stays online-only, so the tender must cover the bill.
-  const paidInFull = Number.isFinite(due) && amount >= due - 0.005;
   // Discounts, tips, and over-HALO tenders stay online: the outbox replays none of them.
   const haloLimit = Number(
     (profile as { payment_mode_meta?: Record<string, { halo_max_amount?: number }> })
       .payment_mode_meta?.[modeOfPayment]?.halo_max_amount,
   ) || 0;
   const exceedsHalo = haloLimit > 0 && amount > haloLimit + 1e-6;
-  const queueable = !!kind && paidInFull && canSettleOffline(profile, user) && !(discount && discount > 0)
-    && !(tip && tip > 0) && !exceedsHalo;
+  // A short named-account settlement leaves a balance owed and stays online-only.
+  const queueable = !!kind && canSettleOffline(profile, user) && !(discount && discount > 0)
+    && !(tip && tip > 0) && !exceedsHalo && Number.isFinite(due) && amount >= due - offlineTolerance(profile.currency);
   if (!queueable) return { offline: false as const, response: await onlineSettle() };
   const existing = clientOrderId
     ? (await queue.list()).find((row) => row.client_order_id === clientOrderId && row.state === 'pending')
