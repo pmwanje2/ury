@@ -3499,7 +3499,11 @@ def get_table_order_context(table):
     can_reduce_items = can_modify and may_remove_sent
     can_remove_items = can_modify and may_remove_sent
 
-    can_transfer_table = can_modify and has_elevated_access
+    # An active privilege policy can authorize this move through a manager PIN.
+    can_transfer_table = can_modify and (has_elevated_access or bool(
+        invoice and _pa_is_company_policy_active(invoice.get("company"))
+        and frappe.has_permission("POS Invoice", "write", doc=invoice)
+    ))
 
     can_transfer_captain = bool(order) and has_elevated_access and bool(
         frappe.has_permission("POS Invoice", "write", doc=invoice)
@@ -5512,7 +5516,7 @@ def pos_opening_check():
 @frappe.whitelist()
 def table_transfer(table, newTable, invoice, approval_token=None, reason=None, reason_note=None,
                    join_roster=0, target_pos_profile=None):
-    from ury.ury_pos.floor_actions import assert_table_free_for_transfer
+    from ury.ury_pos.floor_actions import assert_table_free_for_transfer, validate_table_restaurant
     from ury.ury.api.table_lifecycle import assert_table_seatable, update_tables_after_transfer
     from ury.ury.api.table_reservation import lock_reservation_tables
 
@@ -5530,14 +5534,17 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
     lock_reservation_tables([table, *destination_group])
     for member in destination_group if roster else ():
         current_links = frappe.db.get_value("URY Table", member, "merged_with", for_update=True)
-        if set(_parse_merged_with(current_links)) != set(_parse_merged_with(snapshot[member].merged_with)):
+        links = set(_parse_merged_with(current_links))
+        if not links.issubset(destination_group):
+            frappe.throw(_("The merged tables must belong to the same room."))
+        if links != set(_parse_merged_with(snapshot[member].merged_with)):
             frappe.throw(_("The table group changed. Refresh the floor and try again."))
     if table in destination_group:
         frappe.throw(_("Choose a different table group."))
     pos_invoice = frappe.get_doc("POS Invoice", invoice, for_update=True)
     locked_tables = {
         t: frappe.get_doc("URY Table", t, for_update=True)
-        for t in sorted({t for t in (table, newTable) if t})
+        for t in sorted({t for t in (table, *destination_group) if t})
     }
     current_table = locked_tables.get(table)
     new_table = locked_tables[newTable]
@@ -5582,7 +5589,8 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         frappe.throw(_("Not permitted to transfer checks to this branch."), frappe.PermissionError)
 
     target_profile = None
-    if target_pos_profile or not current_table or current_table.branch != new_table.branch:
+    if (target_pos_profile or not current_table or current_table.branch != new_table.branch
+            or (roster and current_table.get("restaurant") != new_table.get("restaurant"))):
         if not (roster or target_pos_profile):
             frappe.throw(_("Table transfer between different branches is restricted."))
         from ury.ury_pos.floor_actions import validate_outlet_transfer
@@ -5591,14 +5599,14 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
             from ury.ury_pos.outlet_context import get_authorized_outlets
             from ury.ury_pos.floor_actions import check_currency, destination_profiles
             currency = check_currency(pos_invoice)
-            profiles = destination_profiles(get_authorized_outlets(), new_table.branch, pos_invoice.company, currency)
+            profiles = destination_profiles(get_authorized_outlets(), new_table.branch, pos_invoice.company, currency, new_table.get("restaurant"))
             if not profiles:
                 frappe.throw(_("No authorized destination profile uses the check currency."), frappe.PermissionError)
             target_name = profiles[0]
         else:
             target_name = target_pos_profile
         target_profile = frappe.get_doc("POS Profile", target_name)
-        validate_outlet_transfer(pos_invoice, target_profile)
+        validate_outlet_transfer(pos_invoice, target_profile, table_branch=new_table.branch)
         if not target_profile.branch:
             from ury.ury_pos.outlet_context import get_authorized_outlets
             allowed_branch = new_table.branch and any(
@@ -5610,7 +5618,13 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         if not allowed_branch or cint(target_profile.get("disabled")):
             frappe.throw(_("Target table does not belong to an enabled destination outlet."))
 
+    # Tables inherit company via branch/restaurant. Validate that scope once,
+    # then require every locked member to have the identical pair of links.
+    validate_table_restaurant(new_table, target_profile or pos_profile_doc, pos_invoice.get("company"))
     for member in destination_group:
+        partner = locked_tables[member]
+        if partner.branch != new_table.branch or partner.get("restaurant") != new_table.get("restaurant"):
+            frappe.throw(_("A merged table group must belong to one branch and restaurant."))
         assert_table_seatable(member, new_table.branch)
     if not roster:
         assert_table_free_for_transfer(new_table, exclude_invoice=pos_invoice.name)
@@ -5675,10 +5689,7 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         existing = open_checks_on(destination_group, for_update=True)
         primary = next((row.restaurant_table for row in sorted(existing, key=lambda r: str(r.creation))
                         if row.restaurant_table in destination_group), new_table.name)
-        primary_table = frappe.get_doc("URY Table", primary, for_update=True)
-        if primary_table.branch != new_table.branch:
-            frappe.throw(_("A merged table group must belong to one branch."))
-        new_table = primary_table
+        new_table = locked_tables[primary]
     if roster:
         pos_invoice.custom_merged_tables = ",".join(sorted(set(destination_group) - {new_table.name})) or None
     pos_invoice.restaurant_table = new_table.name

@@ -335,7 +335,10 @@ def _tip_prompt(profile):
     from ury.ury.api.guest_tip import tip_presets
     from ury.ury_pos.approval_currency import currency_precision
 
-    if not cint(getattr(profile, "enable_guest_tips", 0)):
+    if getattr(profile, "enable_guest_tips", 0) not in (1, "1"):
+        return None
+    from ury.ury.hooks.ury_pos_tender import profile_accepts_guest_tips
+    if not profile_accepts_guest_tips(profile.pos_profile):
         return None
     currency = frappe.db.get_value("POS Profile", profile.pos_profile, "currency")
     if not currency:
@@ -789,10 +792,11 @@ def add_customer_items(session, items, tip=None):
             from ury.ury.api.guest_tip import guest_tip_amount
             from ury.ury_pos.approval_currency import currency_precision
 
-            if not cint(profile.enable_guest_tips):
+            prompt = _tip_prompt(profile)
+            if not prompt:
                 frappe.throw(_("Guest tipping is disabled."), frappe.ValidationError)
             subtotal = sum(Decimal(str(row["rate"])) * Decimal(str(row["qty"])) for row in priced_items)
-            precision = currency_precision(invoice.currency or _tip_prompt(profile)["currency"], frappe.db)
+            precision = currency_precision(invoice.currency or prompt["currency"], frappe.db)
             try:
                 addition = guest_tip_amount(tip, subtotal, precision)
             except ValueError:

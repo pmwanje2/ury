@@ -79,10 +79,11 @@ function CheckoutScreen({
   const [percent, setPercent] = useState<number | null>(0)
   const [custom, setCustom] = useState('')
   const amount = percent === null ? Number(custom) : cartTotal * percent / 100
-  const invalid = !Number.isFinite(amount) || amount < 0 || amount > cartTotal
-  const tip = prompt && !invalid ? amount.toLocaleString('en-US', {
+  const rounded = prompt ? amount.toLocaleString('en-US', {
     useGrouping: false, minimumFractionDigits: prompt.precision, maximumFractionDigits: prompt.precision,
   }) : undefined
+  const invalid = !Number.isFinite(amount) || amount < 0 || Number(rounded ?? amount) > cartTotal
+  const tip = invalid ? undefined : rounded
   const total = prompt ? new Intl.NumberFormat(getActiveLanguage(), {
     style: 'currency', currency: prompt.currency,
     minimumFractionDigits: prompt.precision, maximumFractionDigits: prompt.precision,

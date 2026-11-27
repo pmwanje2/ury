@@ -10,6 +10,10 @@ class URYSelfOrderingProfile(Document):
         if self.enable_guest_tips:
             from ury.ury.api.guest_tip import tip_presets
 
+            from ury.ury.hooks.ury_pos_tender import profile_accepts_guest_tips
+
+            if not profile_accepts_guest_tips(self.pos_profile):
+                frappe.throw(frappe._("Configure an enabled Tips Payable liability account for this POS Profile before enabling guest tips."))
             try:
                 tip_presets(self.guest_tip_presets)
             except ValueError:

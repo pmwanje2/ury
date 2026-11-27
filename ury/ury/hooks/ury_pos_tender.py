@@ -330,13 +330,23 @@ def _tips_account(doc):
 	return frappe.db.get_value("POS Profile", doc.pos_profile, "custom_tips_payable_account")
 
 
-def _check_tips_account(doc, account):
+def usable_tips_account(company, account):
 	ledger = (
 		frappe.db.get_value("Account", account, ["company", "root_type", "is_group", "disabled"], as_dict=True)
 		if account
 		else None
 	)
-	if not ledger or ledger.company != doc.company or ledger.root_type != "Liability" or ledger.is_group or ledger.disabled:
+	return bool(company and ledger and ledger.company == company and ledger.root_type == "Liability"
+		and not ledger.is_group and not ledger.disabled)
+
+
+def profile_accepts_guest_tips(pos_profile):
+	till = frappe.db.get_value("POS Profile", pos_profile, ["company", "custom_tips_payable_account"], as_dict=True)
+	return bool(till and usable_tips_account(till.company, till.custom_tips_payable_account))
+
+
+def _check_tips_account(doc, account):
+	if not usable_tips_account(doc.company, account):
 		frappe.throw(
 			coded_message(
 				"TIP-ACCOUNT",

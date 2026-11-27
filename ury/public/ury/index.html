@@ -1,0 +1,27 @@
+<!doctype html>
+{% set user_lang = frappe.lang or 'en' %}
+{% set is_rtl = user_lang in ['ar', 'he', 'fa', 'ur', 'ku'] %}
+<html lang="{{ user_lang }}" dir="{{ 'rtl' if is_rtl else 'ltr' }}">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="{{ (brand.favicon if brand and brand.favicon else '/assets/ury/Images/maximus-mark.svg') | e }}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <title>{{ (brand.name if brand and brand.name else 'Maximus') | e }}</title>
+    <script type="module" crossorigin src="/assets/ury/ury/assets/index-Dp5mAREE.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/ury/ury/assets/index-8yv7cZXJ.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <footer class="py-2 text-center text-xs text-muted-foreground">
+      {{ (brand.name if brand and brand.name else 'Maximus') | e }} · AGPL-3.0 · <a href="{{ brand_source_url | e }}" class="underline">Source</a>
+    </footer>
+    <script>
+      window.csrf_token = "{{ csrf_token }}";
+      window.dev_server = {{ dev_server or 0 }};
+      if (!window.frappe) window.frappe = {};
+      window.app_name = {{ app_name | default('') | tojson }};
+      frappe.boot = JSON.parse({{ boot | safe }});
+    </script>
+  </body>
+</html>
