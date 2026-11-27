@@ -44,3 +44,25 @@ it.each(['table', 'recent order'])('reopens and submits every issued row from th
   expect(api.post).toHaveBeenLastCalledWith(expect.stringMatching(/\.sync_order$/),
     expect.objectContaining({ invoice: 'Check', items: expected }));
 });
+
+it('keeps only the latest recent-order load when responses overlap', async () => {
+  setActivePinia(createPinia());
+  const recent = usetoggleRecentOrder();
+  recent.invoiceNumber = 'Check';
+  let finishFirst;
+  let finishLast;
+  api.get.mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishLast = resolve; }));
+  const first = recent.editOrder();
+  const last = recent.editOrder();
+  const response = comment => ({ message: { name: 'Check', custom_comments: comment,
+    items: [{ name: 'pie-row', item_code: 'Pie', qty: 1, rate: 10 }] } });
+  finishLast(response('latest'));
+  await last;
+  await flushPromises();
+  finishFirst(response('stale'));
+  await first;
+  await flushPromises();
+  expect(recent.menu.cart.map(row => row.name)).toEqual(['pie-row']);
+  expect(recent.menu.comments).toBe('latest');
+});

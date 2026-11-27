@@ -387,3 +387,25 @@ describe('View order asks before leaving unsent items', () => {
     expect(invoiceFetches).toBe(0);
   });
 });
+
+it('shows the total on the menu and retains both issuing rows when editing split portions', async () => {
+  invoice.name = 'Split';
+  invoice.waiter = 'waiter-test';
+  invoice.items = ['east', 'west'].map(key => ({
+    name: key, reservation_line_key: key, item_code: 'Water 500ml', item_name: 'Water 500ml',
+    qty: 1, rate: 1500, comment: 'No ice',
+  }));
+  await openTable('T-05');
+  const quantity = host.querySelector('input[aria-label="Quantity and details for Water 500ml"]');
+  expect(quantity.value).toBe('2');
+  host.querySelector('[aria-label="Increase Water 500ml quantity"]').click();
+  await nextTick();
+  expect(quantity.value).toBe('3');
+  expect(menu.cart.map(row => [row.name, row.qty, row.comment])).toEqual([
+    ['east', 1, 'No ice'], ['west', 2, 'No ice'],
+  ]);
+  host.querySelector('[aria-label="Decrease Water 500ml quantity"]').click();
+  await nextTick();
+  expect(quantity.value).toBe('2');
+  expect(menu.cart.map(row => [row.name, row.qty])).toEqual([['east', 1], ['west', 1]]);
+});

@@ -278,3 +278,58 @@ class TestOutletTransferStock(unittest.TestCase):
             (self.dish, 1, self.east.warehouse), (self.dish, 1, self.west.warehouse),
             (self.extra, 1, self.west.warehouse),
         ])
+
+    def sync_cart(self, doc, items):
+        ury_order.sync_order(
+            items=items, cashier=doc.cashier, owner=doc.owner, mode_of_payment="Cash",
+            customer=doc.customer, no_of_pax=1, last_invoice=doc.name, waiter=doc.waiter,
+            pos_profile=doc.pos_profile, last_modified_time=doc.modified,
+            invoice=doc.name, order_type=doc.order_type,
+        )
+        doc.reload()
+
+    def split_check_with_unkeyed_pie(self):
+        doc = self.transferred_captain_check()
+        self.sync_cart(doc, [{"item": self.dish, "qty": 2, "name": doc.items[0].name,
+                              "reservation_line_key": doc.items[0].reservation_line_key},
+                             {"item": self.extra, "qty": 1}])
+        self.assertEqual([(r.item_code, r.warehouse) for r in doc.items],
+                         [(self.dish, self.east.warehouse), (self.extra, self.west.warehouse),
+                          (self.dish, self.west.warehouse)])
+        self.assertFalse(doc.items[1].reservation_line_key)
+        return doc
+
+    def test_vue_resave_keeps_last_reserved_unkeyed_portion(self):
+        from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
+
+        make_stock_entry(item_code=self.extra, source=self.west.warehouse, qty=4, company=self.company)
+        doc = self.split_check_with_unkeyed_pie()
+
+        def reservations():
+            return frappe.get_all("URY Stock Reservation", filters={"order_ref": doc.name},
+                                  fields=["name", "reservation_group", "status", "qty"], order_by="name")
+
+        before = reservations()
+        self.assertEqual(len(before), 3)
+        rows = [{"name": row.name, "item": row.item_code, "item_name": row.item_name,
+                 "qty": row.qty, "rate": row.rate, "comment": row.comment or "",
+                 "custom_course": row.custom_course, "reservation_line_key": row.reservation_line_key}
+                for row in doc.items]
+        self.sync_cart(doc, rows)
+        self.assertEqual(reservations(), before)
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": doc.name}), 2)
+        rows[1]["qty"] = 2
+        with self.assertRaisesRegex(frappe.ValidationError, "FG_OUT_OF_STOCK|Insufficient capacity"):
+            self.sync_cart(doc, rows)
+        self.assertEqual(reservations(), before)
+
+    def test_grouped_resave_keeps_unkeyed_child_in_invoice_order(self):
+        doc = self.split_check_with_unkeyed_pie()
+        def identities():
+            return [(r.name, r.item_code, r.warehouse, r.reservation_line_key, r.qty) for r in doc.items]
+
+        before = identities()
+        self.save_grouped_cart(doc, 2)
+        doc.reload()
+        self.assertEqual(identities(), before)
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": doc.name}), 2)
