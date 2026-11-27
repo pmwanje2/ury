@@ -101,11 +101,12 @@ export function createOfflineWorker({ origin }: OfflineWorkerOptions) {
     cachedResponseWillBeUsed: async ({ request, cachedResponse, state }) => {
       const expected = request.headers.get("X-URY-Floor-User");
       const owner = cachedResponse?.headers.get(OWNER_HEADER);
-      if (expected !== null && (!usableUser(expected) || await signedInUser() !== expected || (cachedResponse && owner !== expected))) {
+      const live = await signedInUser();
+      if (expected !== null && (!usableUser(expected) || live !== expected || (cachedResponse && owner !== expected))) {
         const code = "URY_FLOOR_SESSION_MISMATCH";
         return Response.json({ floor_error: code }, { status: 409, headers: { "X-URY-Floor-Error": code } });
       }
-      return state?.user && state.generation === session.generation && owner === state.user ? cachedResponse : null;
+      return state?.user && state.generation === session.generation && owner === state.user && owner === live ? cachedResponse : null;
     },
     cacheWillUpdate: async ({ response, state }) => (
       response.status === 200 && state?.store && state.generation === session.generation
