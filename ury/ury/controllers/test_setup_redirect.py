@@ -356,7 +356,7 @@ class TestFloorSessionHTTP(FrappeTestCase):
 			for line in response.headers.getlist("Set-Cookie"):
 				for key in SimpleCookie(line):
 					self.assertNotIn(key, ("sid", "user_id"), f"mismatch rewrote {key}")
-			self.assertIn(response.status_code, (403, 409))
+			self.assertEqual(response.status_code, 403)
 			self.assertEqual(response.headers.get("X-URY-Floor-Error"), "URY_FLOOR_SESSION_MISMATCH")
 			self.assertEqual(response.json.get("floor_error"), "URY_FLOOR_SESSION_MISMATCH")
 

@@ -2,7 +2,7 @@
 // Real workbox-strategies 7.4.1 NetworkFirst through the worker's routes.
 import { beforeEach, expect, test, vi } from 'vitest';
 import { lazyModule } from './helpers/lazy';
-import { installWorkerGlobals, ORIGIN, setCookieUser, ownedResponse, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
+import { deferred, installWorkerGlobals, ORIGIN, setCookieUser, ownedResponse, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
 
 let storage: MemoryCacheStorage;
 const PROFILE = ORIGIN + '/api/method/ury.ury_pos.api.getPosProfile';
@@ -100,6 +100,24 @@ test('a gateway 502 for the POS shell falls back to the cached shell', async () 
   const response = await get(ORIGIN + '/pos');
   expect(response.status).toBe(200);
   expect(await response.text()).toBe('cached shell');
+});
+
+test.each(['bob@ury.com', 'Guest', null])('withholds the headerless POS shell if the live user becomes %s during fetch', async nextUser => {
+  const { get } = await worker();
+  const url = ORIGIN + '/pos';
+  await (await storage.open('ury-pos-shell')).put(url, ownedResponse('Alice cached shell', 'alice@ury.com'));
+  const dispatched = deferred<Request>();
+  const network = deferred<Response>();
+  vi.stubGlobal('fetch', (request: Request) => {
+    dispatched.resolve(request);
+    return network.promise;
+  });
+
+  const navigation = get(url);
+  expect((await dispatched.promise).headers.has('X-URY-Floor-User')).toBe(false);
+  setCookieUser(nextUser);
+  network.reject(new TypeError('Offline'));
+  await expect(navigation).rejects.toThrow();
 });
 
 test.each([400, 401, 403, 404, 500])('HTTP %i is returned and is never the cached read', async (code) => {
