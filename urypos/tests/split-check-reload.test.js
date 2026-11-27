@@ -292,6 +292,9 @@ it.each([
   ['blank item code', { item_code: '  ', qty: 1 }],
   ['missing quantity', { item_code: 'Pie' }],
   ['nonnumeric quantity', { item_code: 'Pie', qty: 'invalid' }],
+  ['NaN quantity', { item_code: 'Pie', qty: NaN }],
+  ['zero quantity', { item_code: 'Pie', qty: 0 }],
+  ['negative quantity', { item_code: 'Pie', qty: -1 }],
 ])('blocks Send when any saved invoice child is malformed (%s)', async (_, row) => {
   setActivePinia(createPinia());
   const floor = useTableStore();

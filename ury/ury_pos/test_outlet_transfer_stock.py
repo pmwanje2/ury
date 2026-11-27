@@ -127,7 +127,7 @@ class TestOutletTransferStock(unittest.TestCase):
         }, fields=["item_code", "warehouse", "actual_qty"])
         self.assertCountEqual([(r.item_code, r.warehouse, r.actual_qty) for r in rows], expected)
 
-    def test_seated_reservation_moves_with_its_check_across_branches(self):
+    def seated_party_check(self, *, waitlist=False):
         from ury.tests.till_money_fixtures import assign_branch_user
 
         captain = frappe.db.get_value("POS Opening Entry", {"pos_profile": self.east.name}, "user")
@@ -146,12 +146,21 @@ class TestOutletTransferStock(unittest.TestCase):
             }).insert(set_name=outlet.name + " Table", ignore_mandatory=True)
             tables.append(table.name)
         source, destination = tables
-        party = frappe.get_doc({
-            "doctype": "URY Table Reservation", "customer": self.customer, "customer_phone": "0700000000",
-            "no_of_pax": 3, "branch": self.east.branch, "reserved_table": source,
-        }).insert()
-        party.status = "Seated"
-        party.save()
+        if waitlist:
+            from ury.ury.api.table_reservation import add_walkin_waitlist, seat_waitlist_party
+
+            requested_room = frappe.db.get_value("URY Table", source, "restaurant_room")
+            entry = add_walkin_waitlist(self.east.branch, "Walk-in", "0700000000", 3,
+                                        requested_room=requested_room, quoted_wait_minutes=0)
+            seat_waitlist_party(entry["name"], source)
+            party = frappe.get_doc("URY Table Reservation", entry["name"])
+        else:
+            party = frappe.get_doc({
+                "doctype": "URY Table Reservation", "customer": self.customer, "customer_phone": "0700000000",
+                "no_of_pax": 3, "branch": self.east.branch, "reserved_table": source,
+            }).insert()
+            party.status = "Seated"
+            party.save()
         check = self.invoice(table=source)
         self.assertEqual(party.reload().pos_invoice, check.name)
 
@@ -162,6 +171,10 @@ class TestOutletTransferStock(unittest.TestCase):
         check.db_set("waiter", captain)
         frappe.set_user(captain)
         self.addCleanup(frappe.set_user, "Administrator")
+        return party, check, source, destination
+
+    def test_seated_reservation_moves_with_its_check_across_branches(self):
+        party, check, source, destination = self.seated_party_check()
         ury_order.table_transfer(source, destination, check.name, target_pos_profile=self.west.name)
 
         check.reload()
@@ -169,6 +182,40 @@ class TestOutletTransferStock(unittest.TestCase):
         party.reload()
         self.assertEqual((party.branch, party.reserved_table, party.pos_invoice, party.status),
                          (self.west.branch, destination, check.name, "Seated"))
+
+    def test_waitlist_party_completes_when_its_transferred_check_closes(self):
+        party, check, source, destination = self.seated_party_check(waitlist=True)
+        west_room = frappe.db.get_value("URY Table", destination, "restaurant_room")
+        self.assertTrue(west_room)
+        self.assertNotEqual(party.requested_room, west_room)
+
+        ury_order.table_transfer(source, destination, check.name, target_pos_profile=self.west.name)
+        frappe.set_user("Administrator")
+        check.reload()
+        self.fire(check)
+        check.db_set("invoice_printed", 1)
+        check.payments[0].amount = check.grand_total
+        check.submit()
+
+        party.reload()
+        self.assertEqual((party.status, party.branch, party.reserved_table, party.requested_room, party.pos_invoice),
+                         ("Completed", self.west.branch, destination, west_room, check.name))
+
+    def test_disabled_destination_refuses_seated_party_before_moving_check(self):
+        party, check, source, destination = self.seated_party_check()
+        frappe.db.set_value("Branch", self.west.branch, "custom_enable_reservation", 0)
+
+        with self.assertRaisesRegex(frappe.ValidationError, "(?i)reservation"):
+            ury_order.table_transfer(source, destination, check.name, target_pos_profile=self.west.name)
+
+        check.reload()
+        party.reload()
+        self.assertEqual((check.branch, check.pos_profile, check.restaurant_table),
+                         (self.east.branch, self.east.name, source))
+        self.assertEqual((party.status, party.branch, party.reserved_table, party.pos_invoice),
+                         ("Seated", self.east.branch, source, check.name))
+        self.assertEqual(frappe.db.get_value("URY Table", source, "occupied"), 1)
+        self.assertEqual(frappe.db.get_value("URY Table", destination, "occupied"), 0)
 
     def test_floor_lookup_matches_whole_merged_table_names(self):
         t1, t9, t10 = [self.prefix + suffix for suffix in (" T1", " T9", " T10")]
