@@ -170,3 +170,28 @@ test.each(['unavailable', 'removed', 'available'])('repeat checks every saved pr
     expect(await screen.findByRole('dialog')).toBeVisible();
   }
 });
+
+test.each([
+  { required: true, min: 0, max: 0, count: 0, valid: false },
+  { required: false, min: 2, max: 0, count: 1, valid: false },
+  { required: false, min: 0, max: 1, count: 2, valid: false },
+  { required: true, min: 2, max: 2, count: 2, valid: true },
+])('repeat enforces current prep group bounds ($required/$min/$max) for $count choices',
+  async ({ required, min, max, count, valid }) => {
+    const tea = usePOSStore.getState().menuItems[0];
+    const options = ['Hot', 'Milk'].map(label => ({
+      option_code: label, label, price_mode: 'Unpriced Prep' as const,
+      available: true, item: null, unit_price: 0, upcharge_amount: 0,
+    }));
+    const group = { name: 'Prep', display_title: 'Preparation', group_type: 'Condiment' as const,
+      required, min_selections: min, max_selections: max, prompt_on_add: false, allow_prefixes: false,
+      allowed_prefixes: [], inherit_parent_routing: true, hide_unpriced_on_receipt: false, options };
+    const parent = { ...tea, quantity: 3, selectedModifiers: options.slice(0, count).map(option => ({
+      group: group.name, option_code: option.option_code, label: option.label,
+    })) };
+    usePOSStore.setState({ orderId: 'A', menuItems: [{ ...tea, modifier_groups: [group] }] });
+    await act(async () => root.render(<POS lastRound={{ invoice: 'A', lines: [parent] }} />));
+    await act(async () => screen.getByRole('button', { name: 'Repeat round' }).click());
+    expect(usePOSStore.getState().activeOrders).toHaveLength(valid ? 1 : 0);
+    if (!valid) expect(await screen.findByRole('dialog')).toBeVisible();
+  });

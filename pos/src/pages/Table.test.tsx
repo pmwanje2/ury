@@ -129,7 +129,7 @@ vi.mock("../components/TableCard", () => ({
 }));
 
 vi.mock("../components/LayoutView", () => ({
-  default: () => <div data-testid="layout-view" />,
+  default: ({ selectedRoom }: { selectedRoom: string }) => <div data-testid="layout-view">{selectedRoom}</div>,
 }));
 
 vi.mock("../components/MergeLinkConnector", () => ({
@@ -169,6 +169,23 @@ describe("Table View", () => {
       await userEvent.click(await screen.findByText('tables.layout_view'));
       expect(await screen.findByRole('button', {name: 'Terrace'})).toBeVisible();
       expect(JSON.parse(sessionStorage.getItem(key)!)[0].room_type).toBe('Terrace');
+    } finally { sessionStorage.removeItem(key); }
+  });
+
+  it("can return to a room without a type from a typed floor section", async () => {
+    const key = 'ury_rooms_Kozhikode';
+    sessionStorage.removeItem(key);
+    getRoomsMock.mockResolvedValue([
+      { name: 'Main Hall', branch: 'Kozhikode', room_type: '' },
+      { name: 'Patio', branch: 'Kozhikode', room_type: 'Terrace' },
+    ]);
+    try {
+      render(<Table />);
+      await userEvent.click(await screen.findByText('tables.layout_view'));
+      await userEvent.click(await screen.findByRole('button', { name: 'Terrace' }));
+      expect(screen.getByTestId('layout-view')).toHaveTextContent('Patio');
+      await userEvent.click(screen.getByRole('button', { name: 'Main Hall' }));
+      expect(screen.getByTestId('layout-view')).toHaveTextContent('Main Hall');
     } finally { sessionStorage.removeItem(key); }
   });
 

@@ -6,7 +6,7 @@ import unittest
 
 import frappe
 from frappe.core.doctype.system_settings.system_settings import clear_system_settings_cache
-from frappe.utils import getdate, now_datetime, random_string
+from frappe.utils import get_currency_precision, getdate, now_datetime, random_string
 
 from ury.ury.doctype.ury_order.ury_order import make_invoice
 from ury.ury_pos.discount import with_currency_precision
@@ -82,14 +82,14 @@ class TestWorkstationChangePersistence(unittest.TestCase):
                period_start_date=now_datetime(), posting_date=getdate(), branch=self.branch, restaurant=self.restaurant,
                balance_details=[{"mode_of_payment": self.cash, "opening_amount": 0}]).submit()
 
-    def draft(self, rate, conversion_rate=1):
+    def draft(self, rate, conversion_rate=1, qty=1):
         return insert(
             "POS Invoice", company=self.company.name, pos_profile=self.profile.name, restaurant=self.restaurant,
             branch=self.branch, customer=self.customer, currency=self.profile.currency, conversion_rate=conversion_rate, is_pos=1,
             cashier="Administrator", waiter="Administrator", invoice_printed=1, order_type="Take Away",
             selling_price_list=self.profile.selling_price_list, disable_rounded_total=1,
             account_for_change_amount=self.company.default_cash_account,
-            items=[{"item_code": self.prices[rate], "qty": 1, "rate": rate, "price_list_rate": rate}],
+            items=[{"item_code": self.prices[rate], "qty": qty, "rate": rate, "price_list_rate": rate}],
             payments=[{"mode_of_payment": self.cash, "amount": 0}],
         ).name
 
@@ -166,3 +166,23 @@ class TestWorkstationChangePersistence(unittest.TestCase):
             self.assertEqual(doc.items[0].precision("incoming_rate"), 3)
             self.assertEqual(doc.precision("incoming_rate", "items"), 3)
         self.assertEqual((doc.grand_total, doc.base_grand_total), (1, 0.307))
+
+    def test_usd_unit_rate_uses_native_three_decimal_site_precision(self):
+        settings = frappe.get_doc("System Settings")
+        settings.language = settings.language or "en"
+        settings.time_zone = settings.time_zone or "UTC"
+        settings.currency_precision = "3"
+        settings.save()
+        frappe.local.system_settings = None
+        self.assertEqual(get_currency_precision(), 3)
+        self.open_till("USD", [0.125])
+        name = self.draft(0.125, qty=1000)
+
+        for stage in (0, 1):
+            if stage:
+                make_invoice(customer=self.customer, payments=[{"mode_of_payment": self.cash, "amount": 125}],
+                             cashier="Administrator", pos_profile=self.profile.name, owner="Administrator",
+                             invoice=name, submit_invoice=1)
+            doc = frappe.get_doc("POS Invoice", name)
+            self.assertEqual((doc.docstatus, doc.grand_total, doc.base_grand_total), (stage, 125, 125))
+            self.assertEqual((doc.items[0].rate, doc.items[0].base_rate), (0.125, 0.125))
