@@ -686,6 +686,7 @@ class FloorHarness:
 
         db.get_value = get_value
         f.get_value = get_value
+        f.get_cached_value = get_value
 
         def set_value(doctype, name, field, val=None, **kwargs):
             target = None
