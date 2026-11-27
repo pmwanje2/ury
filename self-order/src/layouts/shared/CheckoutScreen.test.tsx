@@ -36,6 +36,17 @@ describe("CheckoutScreen", () => {
     onRequestBill: vi.fn(),
   }
 
+  it("passes the selected preset through place order", async () => {
+    const onSubmitCart = vi.fn()
+    render(<CheckoutScreen {...baseProps} onSubmitCart={onSubmitCart} capabilities={{
+      ...baseProps.capabilities,
+      tip_prompt: { currency: "KWD", precision: 3, presets: [5, 10, 15] },
+    }} />)
+    await userEvent.click(screen.getByRole("button", { name: "10%" }))
+    await userEvent.click(screen.getByRole("button", { name: "Place Order" }))
+    expect(onSubmitCart).toHaveBeenCalledWith("20.000")
+  })
+
   it("renders order summary with cart items", () => {
     render(<CheckoutScreen {...baseProps} />)
 

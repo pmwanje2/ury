@@ -821,6 +821,7 @@ class TestFloorPrivilegedActions(unittest.TestCase):
             "ury.ury.printing": ModuleType("ury.ury.printing"),
             "ury.ury.printing.file_store": SimpleNamespace(save_job=MagicMock(return_value=True)),
             "ury.ury.printing.service": SimpleNamespace(submit_and_monitor_print_job=self.mock_submit_print),
+            "ury.ury_pos.outlet_context": SimpleNamespace(assert_outlet_access=MagicMock()),
             "ury.ury.api.ury_bom_compiler": MagicMock(),
             "ury.ury.api.ury_production_context": SimpleNamespace(resolve_production_context=MagicMock(return_value=None)),
             "ury.ury.api.ury_inventory_projection": MagicMock(),
@@ -967,6 +968,16 @@ class TestFloorPrivilegedActions(unittest.TestCase):
             self.order.table_transfer("T1", "T2", "INV-1", approval_token=token)
         self.assertEqual(inv.restaurant_table, "T1")
 
+    def test_explicit_roster_transfer_preserves_destination_check(self):
+        incoming = self.h.add_invoice("INV-1", restaurant_table="T1")
+        resident = self.h.add_invoice("INV-2", restaurant_table="T2")
+        self.h.tables["T2"].occupied = 1
+        self.h.frappe.session.user = "manager@example.com"
+        self.order.table_transfer("T1", "T2", incoming.name, join_roster=1)
+        self.assertEqual(incoming.restaurant_table, "T2")
+        self.assertEqual(resident.restaurant_table, "T2")
+        self.assertEqual(resident.docstatus, 0)
+
     # 4. Adversarial: two waiters transferring the same check at once
     def test_adversarial_two_waiters_transferring_same_check_at_once(self):
         inv = self.h.add_invoice("INV-1", restaurant_table="T1", waiter="captain_a@example.com")
@@ -1040,6 +1051,16 @@ class TestFloorPrivilegedActions(unittest.TestCase):
         self.assertEqual(self.h.tables["T1"].occupied, 0)
         self.assertEqual(self.h.tables["RT-1"].occupied, 1)
         self.assertEqual(len(self.h.logs), 1)
+
+    def test_outlet_access_checked_before_transfer(self):
+        inv = self.h.add_invoice("INV-1", restaurant_table="T1", pos_profile="Main Till", branch=self.h.branch)
+        self.h.frappe.session.user = "manager@example.com"
+        access = sys.modules["ury.ury_pos.outlet_context"].assert_outlet_access
+        access.side_effect = [None, PermissionError_("outlet access")]
+        with self.assertRaisesRegex(PermissionError_, "outlet access"):
+            self.floor.transfer_check_outlet(inv.name, "Rooftop Till", target_table="RT-1")
+        self.assertEqual(inv.pos_profile, "Main Till")
+        self.assertEqual([call.args[0] for call in access.call_args_list], ["Main Till", "Rooftop Till"])
 
     # 7. Pick up another server's check keeps waiter sticky + sync_order escalation
     def test_pickup_other_check_requires_privilege_or_pin_and_keeps_waiter_sticky(self):
