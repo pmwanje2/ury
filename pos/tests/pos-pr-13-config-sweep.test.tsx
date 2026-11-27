@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
+import { beginFloorLogin, currentFloorGeneration } from '../src/lib/floor-session';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
 import FloorPinPad from '../src/components/FloorPinPad';
 import TimeclockButton from '../src/components/TimeclockButton';
@@ -12,18 +14,32 @@ vi.mock('@ury/core', async (importOriginal) => ({
 vi.mock('../src/i18n', () => ({ t: (value: string) => value }));
 
 describe('POS outlet configuration', () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubGlobal('indexedDB', new IDBFactory());
+  });
+  afterEach(() => vi.unstubAllGlobals());
 
   it('lets staff finish a variable-length floor PIN explicitly', async () => {
     Object.defineProperty(window, 'floor_pad', {
       configurable: true, value: { paired: true, till_open: true, min_length: 5, max_length: 6 },
     });
-    vi.mocked(call.post).mockRejectedValue(new Error('Refused'));
+    let siblingGeneration = '';
+    vi.mocked(call.post).mockImplementationOnce(async () => {
+      // Another tab signs in while this variable-length PIN request is outstanding.
+      const start = await currentFloorGeneration();
+      expect(start).toBeTruthy();
+      siblingGeneration = await beginFloorLogin();
+      throw new Error('Refused');
+    });
     render(<FloorPinPad />);
     for (const digit of ['0', '1', '2', '3', '4']) fireEvent.click(screen.getByRole('button', { name: digit }));
     expect(call.post).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'floor_pin.sign_in' }));
     await waitFor(() => expect(call.post).toHaveBeenCalledWith('ury.ury_pos.floor_pin.sign_in', { pin: '01234' }));
+    await screen.findByRole('alert');
+    expect(siblingGeneration).toBeTruthy();
+    expect(await currentFloorGeneration()).not.toBe(siblingGeneration);
     delete window.floor_pad;
   });
 

@@ -1,7 +1,7 @@
 /** @vitest-environment-options {"url":"https://register.test/pos/order/table/T1"} */
 import { BroadcastChannel as NodeChannel } from 'node:worker_threads';
 import { IDBDatabase, IDBFactory } from 'fake-indexeddb';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as core from '@ury/core';
 import AuthGuard from '../src/components/AuthGuard';
@@ -664,4 +664,68 @@ it('unmounts the stay-role workspace and keeps the tab locked when both storage 
   await screen.findByLabelText('Password');
   expect(screen.queryByText('Stay-role workspace')).toBeNull();
   expect(logout).not.toHaveBeenCalled();
+});
+
+it('locks the mounted replacement workspace when an earlier unlocked login response displaces its cookie', async () => {
+  vi.stubGlobal('navigator', { onLine: true });
+  let cookieUser = 'Guest';
+  const first = 'first@example.test';
+  const second = state.user.name;
+  let finishFirst!: () => void;
+  vi.spyOn(core.auth, 'getLoggedInUser').mockImplementation(async () => cookieUser);
+  const login = vi.spyOn(core.auth, 'loginWithUsernamePassword')
+    .mockImplementationOnce(() => new Promise(resolve => {
+      finishFirst = () => {
+        cookieUser = first;
+        resolve({ message: 'Logged In', full_name: 'First' });
+      };
+    })).mockImplementationOnce(async () => {
+      cookieUser = second;
+      return { message: 'Logged In', full_name: 'Second' };
+    });
+  function start(user: string) {
+    const view = render(<FloorPinPad usernameOnly />);
+    const form = view.container.querySelector('form')!;
+    fireEvent.change(form.querySelector('input[name=user_id]')!, { target: { value: user } });
+    fireEvent.change(form.querySelector('input[type=password]')!, { target: { value: 'test password' } });
+    fireEvent.submit(form);
+    return view;
+  }
+  const a = start(first);
+  await waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+  const restoreA = saveTab();
+  window.name = '';
+  sessionStorage.clear();
+  const b = start(second);
+  await waitFor(() => expect(hasFloorSessionMarker(second)).toBe(true));
+  b.unmount();
+  const restoreB = saveTab();
+  const secondGeneration = await currentFloorGeneration();
+
+  // Queue messages until the test switches the jsdom browsing context back to B.
+  const messages: unknown[] = [];
+  let listener: ((event: MessageEvent) => void) | undefined;
+  class Channel {
+    onmessage?: (event: MessageEvent) => void;
+    constructor(readonly name: string) {
+      if (name === 'ury-floor-logout') listener ??= event => this.onmessage?.(event);
+    }
+    postMessage(data: unknown) { if (this.name === 'ury-floor-logout') messages.push(data); }
+    close() {}
+  }
+  vi.stubGlobal('BroadcastChannel', Channel);
+  const workspace = render(<AuthGuard><button>Submit cashier order</button></AuthGuard>);
+  await within(workspace.container).findByRole('button', { name: 'Submit cashier order' });
+  restoreA();
+  await act(async () => finishFirst());
+  await within(a.container).findByRole('alert');
+  expect(cookieUser).toBe(first);
+  expect(hasFloorSessionMarker(first)).toBe(false);
+  a.unmount();
+  restoreB();
+  act(() => { for (const data of messages) listener!(new MessageEvent('message', { data })); });
+  expect(await currentFloorGeneration()).not.toBe(secondGeneration);
+  await within(workspace.container).findByLabelText('Password');
+  expect(screen.queryByRole('button', { name: 'Submit cashier order' })).toBeNull();
+  expect(hasFloorSessionMarker(second)).toBe(false);
 });

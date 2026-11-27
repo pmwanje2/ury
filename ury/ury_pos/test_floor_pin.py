@@ -616,6 +616,16 @@ class TestFloorPin(unittest.TestCase):
 		api.sign_in("0527", expected_user=self.user)
 		self.assertEqual(self.frappe.local.login_manager.login_as.call_args.args, (self.user,))
 
+	def test_password_login_response_identifies_the_session_created_for_an_alias(self):
+		from ury.ury.controllers import setup_redirect
+
+		self.frappe.local.request.path = "/api/method/login"
+		self.frappe.local.response = {}
+		self.frappe.form_dict = {"usr": "floor-waiter"}
+		with patch.object(setup_redirect, "frappe", self.frappe), patch.object(setup_redirect, "is_ury_setup_complete", return_value=True):
+			setup_redirect.on_session_creation(login_manager=SimpleNamespace(user=self.user))
+		self.assertEqual(self.frappe.local.response.get("authenticated_user"), self.user)
+
 	def test_sign_in_returns_csrf_token_and_pops_pin_from_form_dict(self):
 		self.pair()
 		result = self.sign_in()

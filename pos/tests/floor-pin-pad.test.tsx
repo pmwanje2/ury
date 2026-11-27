@@ -286,6 +286,32 @@ describe('paired floor tablet sign-in', () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['floor-waiter', false, true], ['+256700001234', true, true],
+    ['floor-waiter', false, false], ['+256700001234', true, false],
+  ] as const)('binds alias %s (OTP %s, matching cookie %s) to its own login response', async (alias, otp, matches) => {
+    vi.stubGlobal('navigator', { onLine: true });
+    const canonical = matches ? 'waiter@example.test' : 'another@example.test';
+    if (otp) boundary.login.mockResolvedValueOnce({ tmp_id: 'challenge', verification: { method: 'Email' } });
+    boundary.login.mockResolvedValueOnce({ message: 'Logged In', authenticated_user: canonical, full_name: 'Cashier' });
+    await render();
+    await openUsernameForm();
+    await act(async () => {
+      setInput(container.querySelector('input[name=user_id]')!, alias);
+      setInput(container.querySelector('input[type=password]')!, 'secret');
+      container.querySelector('form')!.requestSubmit();
+    });
+    if (otp) {
+      expect(reload).not.toHaveBeenCalled();
+      await act(async () => {
+        setInput(container.querySelector('input[autocomplete=one-time-code]')!, '000002');
+        container.querySelector('form')!.requestSubmit();
+      });
+    }
+    expect(hasFloorSessionMarker('waiter@example.test')).toBe(matches);
+    expect(reload).toHaveBeenCalledTimes(matches ? 1 : 0);
+  });
+
   it('replaces a failed logout with confirmed password authentication', async () => {
     boundary.login.mockResolvedValue({ message: 'Logged In' });
     localStorage.setItem('ury_floor_logout_failed', 'waiter@example.test');
