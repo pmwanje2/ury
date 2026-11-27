@@ -236,3 +236,45 @@ class TestOutletTransferStock(unittest.TestCase):
             (self.dish, 1, self.east.warehouse), (self.dish, 1, self.west.warehouse),
             (self.extra, 1, self.west.warehouse),
         ])
+
+    def save_grouped_cart(self, doc, soup_qty):
+        ury_order.sync_order(
+            items=[{"item": self.dish, "qty": soup_qty}, {"item": self.extra, "qty": 1}],
+            cashier=doc.cashier, owner=doc.owner, mode_of_payment="Cash", customer=doc.customer,
+            no_of_pax=1, last_invoice=doc.name, waiter=doc.waiter, pos_profile=self.west.name,
+            last_modified_time=doc.modified, invoice=doc.name, order_type=doc.order_type,
+        )
+
+    def test_grouped_resave_preserves_split_stock_and_tickets(self):
+        doc = self.transferred_captain_check()
+        self.edit_soup_quantity(doc, 2)
+
+        def issued_rows():
+            return [(r.name, r.reservation_line_key, r.item_code, r.qty, r.warehouse) for r in doc.items]
+
+        def tickets():
+            return frappe.get_all("URY KOT", filters={"invoice": doc.name}, pluck="name", order_by="name")
+
+        def reservations():
+            return frappe.get_all("URY Stock Reservation", filters={"order_ref": doc.name},
+                                  fields=["name", "status", "warehouse", "qty"], order_by="name")
+
+        original = issued_rows(), tickets(), reservations()
+        self.assertEqual(len(original[0]), 3)
+        self.assertEqual(len(original[1]), 2)
+        self.save_grouped_cart(doc, 2)
+        doc.reload()
+        self.assertEqual((issued_rows(), tickets(), reservations()), original)
+        frappe.set_user("Administrator")
+        self.close(doc, [(self.dish, self.east.warehouse, -1), (self.dish, self.west.warehouse, -1),
+                         (self.extra, self.west.warehouse, -1)])
+
+    def test_grouped_reduction_still_requires_sent_void_reason(self):
+        doc = self.transferred_captain_check()
+        self.edit_soup_quantity(doc, 2)
+        with self.assertRaisesRegex(frappe.ValidationError, "POS-AUTH-REASON"):
+            self.save_grouped_cart(doc, 1)
+        self.assertCountEqual([(r.item_code, r.qty, r.warehouse) for r in doc.reload().items], [
+            (self.dish, 1, self.east.warehouse), (self.dish, 1, self.west.warehouse),
+            (self.extra, 1, self.west.warehouse),
+        ])
