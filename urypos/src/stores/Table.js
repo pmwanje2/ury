@@ -12,6 +12,17 @@ import { usetoggleRecentOrder } from "./recentOrder.js";
 import { useNotificationModal } from "./NotificationModal.js";
 
 
+function isTableInvoice(check, occupied) {
+  if (!Array.isArray(check?.items)) return false;
+  if (check.doctype != null && check.doctype !== "POS Invoice") return false;
+  if (check.name != null) return typeof check.name === "string" && check.name.trim() !== "";
+
+  // Seating a reservation occupies the table before its first check is saved.
+  if (check.items.length !== 0) return false;
+  if (check.__islocal != null) return check.__islocal === 1;
+  return !occupied || check.doctype === "POS Invoice";
+}
+
 export const useTableStore = defineStore("table", {
   state: () => ({
     tables: [],
@@ -547,7 +558,7 @@ export const useTableStore = defineStore("table", {
         .then((result) => {
           if (!isCurrent()) return;
           const saved = result.message;
-          if (!saved || (saved.name && !Array.isArray(saved.items)) || (!saved.name && Number(table.occupied) === 1)) {
+          if (!isTableInvoice(saved, Number(table.occupied) === 1)) {
             this.notification.createNotification("Reopen the table to load its check.");
             return;
           }
