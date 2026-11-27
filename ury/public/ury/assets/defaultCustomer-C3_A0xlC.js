@@ -1,0 +1,1 @@
+const r="Aggregators";function s(u){return{id:u.customer,name:u.customer_name||u.customer,phone:u.mobile_number||""}}function m(u,e){var o;if(!e||!u||u===r)return null;const t=((o=e.order_type_customer_map)==null?void 0:o[u])??e.default_customer??null;return t!=null&&t.customer?s(t):null}function n(u){return!u||!("order_type_customer_map"in u)}export{n as p,m as r};

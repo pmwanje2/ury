@@ -90,7 +90,6 @@
             class="block min-h-[44px] w-full min-w-0 border border-gray-200 text-center text-base shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
             :aria-label="`Quantity and details for ${item.item_name}`"
             :value="item.qty"
-            @input="item.qty = $event.target.value"
             readonly
             @click="this.menu.showModal(item)"
           />

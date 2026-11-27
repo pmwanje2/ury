@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import re
+from contextvars import ContextVar
 
 import frappe
 from frappe import _
@@ -34,6 +35,8 @@ RESERVATION_TIMING_FIELDS = {
 }
 # custom_unset_grace_policy's option that stops a branch without a grace period switching reservations on.
 REFUSE_TO_ENABLE = "Refuse to Enable"
+
+_closing_bound_party = ContextVar("closing_bound_party", default=None)
 
 ANOTHER_BOOKING_SAVED = "Another reservation for table {0} was saved at the same moment. Check the reservations and try again."
 
@@ -79,8 +82,7 @@ def _reservation_columns_exist():
 def reservations_enabled(branch):
     """Reservations are opt-in per Branch (custom_enable_reservation, default 0).
 
-    A branch that has not enabled them sees no reservation reads or writes on
-    its till, order, floor and closing paths.
+    Switching off new bookings does not remove parties already seated.
 
     Before migrate adds the Branch columns (new code already served), the
     branch reads as disabled instead of failing POS Invoice validate, or
@@ -190,9 +192,18 @@ def validate_branch_reservation_settings(doc, method=None):
 
 
 def ensure_reservations_enabled(branch):
-    """Refuse a reservation write on a branch that has not switched reservations on."""
-    if not reservations_enabled(branch):
-        frappe.throw(_("Table reservations are switched off for this branch."))
+    """Require opt-in for writes other than bill close of a previously bound party."""
+    if reservations_enabled(branch):
+        return
+    # Bill close may finish its own bound party through the normal controller save.
+    party = _closing_bound_party.get()
+    if (party is not None and party.branch == branch
+            and frappe.flags.currently_saving[-1:] == [(party.doctype, party.name)]):
+        before = party.get_doc_before_save()
+        if before and before.status == "Seated" and before.pos_invoice == party.pos_invoice and before.branch == branch:
+            _closing_bound_party.set(None)
+            return
+    frappe.throw(_("Table reservations are switched off for this branch."))
 
 
 def reservations_enabled_for_table(table):
@@ -1048,7 +1059,7 @@ def _doc_field(doc, key, default=None):
 def _seated_reservations_moving_with_check(from_table, pos_invoice):
     """Seated reservation(s) that belong to pos_invoice and should follow it on table_transfer."""
     branch = _doc_field(pos_invoice, "branch") or frappe.db.get_value("URY Table", from_table, "branch")
-    if not branch or not reservations_enabled(branch):
+    if not branch:
         return []
     inv_name = _doc_field(pos_invoice, "name")
     is_dine_in_sale = (
@@ -1061,16 +1072,19 @@ def _seated_reservations_moving_with_check(from_table, pos_invoice):
         for res in frappe.db.get_all(
             "URY Table Reservation",
             filters={"branch": branch, "status": "Seated", "pos_invoice": inv_name},
-            fields=["name", "reserved_table", "pos_invoice"],
+            fields=["name", "reserved_table", "pos_invoice", "requested_room"],
         ):
             candidates[res.name] = res
     if from_table:
         for res in frappe.db.get_all(
             "URY Table Reservation",
             filters={"branch": branch, "status": "Seated", "reserved_table": from_table},
-            fields=["name", "reserved_table", "pos_invoice"],
+            fields=["name", "reserved_table", "pos_invoice", "requested_room"],
         ):
             candidates.setdefault(res.name, res)
+
+    if not candidates:
+        return []
 
     remaining_open_on_old = [
         c for c in open_checks_on([from_table]) if c.name != inv_name
@@ -1096,10 +1110,11 @@ def _seated_reservations_moving_with_check(from_table, pos_invoice):
 
 
 def validate_seated_reservation_transfer(from_table, to_table, pos_invoice):
-    """Refuse transferring a Seated party onto a table (or merged cluster) that already seats another party."""
+    """Check that the destination accepts reservations and has room for this seated party."""
     moving = _seated_reservations_moving_with_check(from_table, pos_invoice)
     if not moving:
         return []
+    ensure_reservations_enabled(frappe.db.get_value("URY Table", to_table, "branch"))
     moving_names = {res.name for res in moving}
     target_tables = _table_with_merged_partners(to_table)
     existing_on_target = frappe.db.get_all(
@@ -1113,14 +1128,20 @@ def validate_seated_reservation_transfer(from_table, to_table, pos_invoice):
     return moving
 
 
-def transfer_seated_reservation(from_table, to_table, pos_invoice):
+def transfer_seated_reservation(from_table, to_table, pos_invoice, *, moving=None):
     """Move any Seated reservation belonging to pos_invoice onto to_table (Simphony: reservation follows its check)."""
-    moving = validate_seated_reservation_transfer(from_table, to_table, pos_invoice)
+    if moving is None:
+        moving = validate_seated_reservation_transfer(from_table, to_table, pos_invoice)
+    if not moving:
+        return []
+    destination_branch, destination_room = frappe.db.get_value("URY Table", to_table, ["branch", "restaurant_room"])
     inv_name = _doc_field(pos_invoice, "name")
     moved_names = []
     for res in moving:
         old_table = res.get("reserved_table")
-        updates = {"reserved_table": to_table}
+        updates = {"reserved_table": to_table, "branch": destination_branch}
+        if res.get("requested_room"):
+            updates["requested_room"] = destination_room or None
         if not res.get("pos_invoice") or _is_discarded_or_cancelled_check(res.get("pos_invoice")):
             if inv_name:
                 updates["pos_invoice"] = inv_name
@@ -1566,9 +1587,11 @@ def complete_seated_reservation_on_submit(doc, method=None):
     if cint(doc.get("is_return")) or (doc.get("order_type") or "Dine In") != "Dine In":
         return
     branch = doc.get("branch")
-    if not reservations_enabled(branch):
+    if not branch:
         return
-    tables = _invoice_tables(doc)
+    enabled = reservations_enabled(branch)
+    # With bookings off, close only a party already bound to this bill or its split family.
+    tables = _invoice_tables(doc) if enabled else []
     try:
         family_checks = _split_family_check_names(doc)
         if not tables and not family_checks:
@@ -1607,6 +1630,8 @@ def complete_seated_reservation_on_submit(doc, method=None):
             if _has_other_open_split_check(doc, bound_name=bound):
                 continue  # another part of this split bill is still open
         else:
+            if not enabled:
+                continue
             if unbound_blocked is None:
                 unbound_blocked = _party_has_another_open_check(doc, tables)
             if unbound_blocked:
@@ -1618,7 +1643,11 @@ def complete_seated_reservation_on_submit(doc, method=None):
             reservation.status = "Completed"
             reservation.pos_invoice = bound or doc.name
             reservation.flags.system_transition = ("Seated", "Completed")
-            reservation.save(ignore_permissions=True)
+            token = _closing_bound_party.set(reservation if not enabled else None)
+            try:
+                reservation.save(ignore_permissions=True)
+            finally:
+                _closing_bound_party.reset(token)
         except Exception:
             frappe.log_error(frappe.get_traceback(), "Reservation completion on bill close")
 

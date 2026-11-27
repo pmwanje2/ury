@@ -11,6 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const src = join(here, '..')
 
 const en = {
+  "tip": {"title": "Tip", "none": "No Tip", "custom": "Custom tip"},
   "language": {
     "chooser": "Language"
   },
@@ -179,6 +180,7 @@ const en = {
 }
 
 const sw = {
+  "tip": {"title": "Bakshishi", "none": "Bila bakshishi", "custom": "Kiasi cha bakshishi"},
   "language": {
     "chooser": "Lugha"
   },
@@ -347,6 +349,7 @@ const sw = {
 }
 
 const lg = {
+  "tip": {"title": "Akasiimo", "none": "Tewali kasiimo", "custom": "Omuwendo gw’akasiimo"},
   "language": {
     "chooser": "Olulimi"
   },
@@ -607,10 +610,10 @@ describe('guest ordering languages', () => {
     expect(resolver.resolveGuestLanguage({ stored: null, browserLanguages: ['sw_KE'], bootLang: 'en' })).toBe('sw')
     expect(resolver.resolveGuestLanguage({ stored: 'SW', browserLanguages: ['en-GB'], bootLang: 'lg' })).toBe('sw')
     expect(resolver.resolveGuestLanguage({ stored: null, browserLanguages: ['en-GB'], bootLang: 'sw' })).toBe('en')
-    expect(resolver.resolveGuestLanguage({ stored: 'fr', browserLanguages: ['fr-FR', 'de'], bootLang: 'sw' })).toBe('sw')
-    expect(resolver.resolveGuestLanguage({ stored: null, browserLanguages: ['fr-FR'], bootLang: null })).toBe('en')
+    expect(resolver.resolveGuestLanguage({ stored: 'fr', browserLanguages: ['fr-FR', 'de'], bootLang: 'sw' })).toBe('fr')
+    expect(resolver.resolveGuestLanguage({ stored: null, browserLanguages: ['fr-FR'], bootLang: null })).toBe('fr')
     expect(resolver.GUEST_LANGUAGES.map((language: { code: string; label: string }) => [language.code, language.label]))
-      .toEqual([['en', 'EN'], ['sw', 'Kiswahili'], ['lg', 'Luganda']])
+      .toEqual([['en', 'EN'], ['fr', 'Français'], ['es', 'Español'], ['ar', 'العربية'], ['sw', 'Kiswahili'], ['lg', 'Luganda']])
   })
 
   it('switcher choice is stored and mirrored to the Frappe guest cookie', async () => {
@@ -624,7 +627,7 @@ describe('guest ordering languages', () => {
     expect(selected).toBe('lg')
     expect(stored.get(resolver.GUEST_LANGUAGE_STORAGE_KEY)).toBe('lg')
     expect(cookies[0]).toBe('preferred_language=lg; Path=/; Max-Age=31536000; SameSite=Lax')
-    expect(() => resolver.selectGuestLanguage('ar', { storage: { setItem() {} }, setCookie() {} })).toThrow()
+    expect(() => resolver.selectGuestLanguage('de', { storage: { setItem() {} }, setCookie() {} })).toThrow()
   })
 
   it('sw and lg catalogs cover every guest string and keep dish names out', async () => {

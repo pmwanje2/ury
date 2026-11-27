@@ -1,3 +1,4 @@
+import { invoiceCartRows } from "../utils/invoice-cart.js";
 import { defineStore } from "pinia";
 import router from "../router";
 import { useMenuStore } from "./Menu.js";
@@ -11,6 +12,21 @@ import { usetoggleRecentOrder } from "./recentOrder.js";
 import { useNotificationModal } from "./NotificationModal.js";
 
 
+function isTableInvoice(check, occupied) {
+  if (!Array.isArray(check?.items)) return false;
+  if (check.doctype != null && check.doctype !== "POS Invoice") return false;
+  if (check.name != null) {
+    return typeof check.name === "string" && check.name.trim() !== "" && check.items.every(row =>
+      typeof row?.item_code === "string" && row.item_code.trim() !== "" && Number.isFinite(row.qty) && row.qty > 0
+    );
+  }
+
+  // Seating a reservation occupies the table before its first check is saved.
+  if (check.items.length !== 0) return false;
+  if (check.__islocal != null) return check.__islocal === 1;
+  return !occupied || check.doctype === "POS Invoice";
+}
+
 export const useTableStore = defineStore("table", {
   state: () => ({
     tables: [],
@@ -22,6 +38,8 @@ export const useTableStore = defineStore("table", {
     serviceRequestsRead: 0,
     serviceRequestsRoom: null,
     selectedTable: null,
+    tableLoadRequest: 0,
+    tableAwaitingInvoice: null,
     previousOrderdItem: [],
     invoiceNo: "",
     takeAwayTable: 0,
@@ -508,15 +526,22 @@ export const useTableStore = defineStore("table", {
       this.confirmLeaveUnsent(() => this.loadSelectedTable(table));
     },
     async loadSelectedTable(table) {
+      const request = ++this.tableLoadRequest;
+      const isCurrent = () => request === this.tableLoadRequest && this.selectedTable === table.name;
+      this.tableAwaitingInvoice = table.name;
       this.selectedTable = table.name;
+      // null means untouched during this load. An explicit empty note is an edit.
+      this.menu.comments = null;
+      this.customers.numberOfPax = null;
       this.takeAwayTable = 0;
 
       if (table.is_take_away === 1) {
         this.isTakeAway = "Take Away";
         this.takeAwayTable = 1;
       }
-      let previousOrderdNumberOfPax = "";
       this.previousOrderdItem = [];
+      this.recentOrders.draftInvoice = "";
+      this.invoiceData.invoiceNumber = "";
       this.recentOrders.modifiedTime = ""
       this.recentOrders.pastOrderdItem = []
       this.invoiceNo = "";
@@ -529,15 +554,21 @@ export const useTableStore = defineStore("table", {
       const getPreviousOrder = {
         table: this.selectedTable,
       };
-      this.call
+      return this.call
         .get(
           "ury.ury.doctype.ury_order.ury_order.get_order_invoice",
           getPreviousOrder
         )
         .then((result) => {
-          this.previousOrder = result.message;
+          if (!isCurrent()) return;
+          const saved = result.message;
+          if (!isTableInvoice(saved, Number(table.occupied) === 1)) {
+            this.notification.createNotification("Reopen the table to load its check.");
+            return;
+          }
+          this.previousOrder = saved;
           this.invoicePrinted = this.previousOrder.invoice_printed;
-          this.menu.comments = this.previousOrder.custom_comments;
+          this.menu.comments ??= this.previousOrder.custom_comments ?? "";
           this.modifiedTime = this.previousOrder.modified;
           this.grandTotal = this.previousOrder.grand_total;
           this.mobileNumber = this.previousOrder.mobile_number;
@@ -560,61 +591,32 @@ export const useTableStore = defineStore("table", {
                     window.location.reload();
                   });
                 });
-            } else {
-              this.notification.createNotification("Past Order Fetched");
+              return;
             }
+            this.notification.createNotification("Past Order Fetched");
           } else {
             router.push("/Menu");
           }
           this.previousOrderdItem = this.previousOrder.items;
           this.previousOrderdCustomer = this.previousOrder.customer;
-          previousOrderdNumberOfPax = this.previousOrder.no_of_pax;
+          this.customers.numberOfPax ??= saved.no_of_pax ?? "";
           if (this.previousOrderdCustomer) {
             this.customers.search = this.previousOrderdCustomer;
-            this.customers.numberOfPax = previousOrderdNumberOfPax;
             this.customers.fectchCustomerFavouriteItem();
           } else {
             this.customers.search = "";
-            this.customers.numberOfPax = "";
             this.customers.customerFavouriteItems = "";
             this.customers.newCustomerMobileNo = ""
           }
 
-          items.forEach((item) => {
-            const previousItem =
-              this.previousOrderdItem &&
-              this.previousOrderdItem.find(
-                (previousItem) => previousItem.item_code === item.item
-              );
-            if (previousItem && !item.qty) {
-              const itemIndex = cart.findIndex((obj) => obj.item === item.item);
-              const itemIndexExists = itemIndex !== -1;
-              if (!itemIndexExists) {
-                item.qty = previousItem.qty;
-                item.comment = previousItem.comment;
-                cart.push(item);
-              }
-            }
-          });
-          if (this.previousOrderdItem && this.previousOrderdItem.length > 0) {
-            this.previousOrderdItem.forEach((previousItem) => {
-              const existsInMenu = items.some(item => item.item === previousItem.item_code);
-              const existsInCart = cart.some(item => item.item === previousItem.item_code);
-
-              if (!existsInMenu && !existsInCart) {
-                // Item no longer in menu but was in previous order - add it to cart
-                cart.push({
-                  item: previousItem.item_code,
-                  item_name: previousItem.item_name,
-                  rate: previousItem.rate,
-                  qty: previousItem.qty,
-                  comment: previousItem.comment
-                });
-              }
-            });
-          }
+          // The cart was cleared at load start. Keep rows added from the menu
+          // while this table's invoice was on its way.
+          const unsentItems = this.menu.cart.filter(row => !row.name);
+          this.menu.cart = [...invoiceCartRows(this.previousOrderdItem, items), ...unsentItems];
+          this.tableAwaitingInvoice = null;
         })
         .catch((error) => {
+          if (!isCurrent()) return;
           const permissionRefused = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
           if (permissionRefused && !this.auth.hasAccess && !this.auth.cashier) {
             const fromFloor = table && typeof table.owner_name === "string" ? table.owner_name.trim() : "";

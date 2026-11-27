@@ -96,10 +96,8 @@ describe("TableSelectionDialog", () => {
     render(<TableSelectionDialog onClose={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Room-1")).toBeInTheDocument();
+      expect(getTablesMock).toHaveBeenCalledWith("Room-1");
     });
-
-    expect(getTablesMock).toHaveBeenCalled();
   });
 
   it("displays tables in a grid", async () => {

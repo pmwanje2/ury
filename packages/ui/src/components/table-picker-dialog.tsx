@@ -15,6 +15,7 @@ import { cn } from '../lib/cn'
 export interface PickerTableOption {
   name: string
   room: string
+  profiles?: string[]
   seatsLabel?: string
   shape?: string
 }
@@ -22,6 +23,7 @@ export interface PickerTableOption {
 export interface TablePickerDialogLabels {
   title: string
   description: string
+  profileLabel?: string
   currentLabel: string
   searchPlaceholder: string
   empty: string
@@ -39,7 +41,7 @@ export interface TablePickerDialogProps {
   options: PickerTableOption[]
   loading?: boolean
   error?: string | null
-  onConfirm: (name: string) => Promise<void> | void
+  onConfirm: (name: string, profile?: string) => Promise<void> | void
   labels: TablePickerDialogLabels
   renderIcon?: (shape?: string) => React.ReactNode
 }
@@ -56,6 +58,7 @@ export function TablePickerDialog({
   renderIcon,
 }: TablePickerDialogProps) {
   const [selected, setSelected] = useState<string | null>(null)
+  const [profile, setProfile] = useState('')
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -64,6 +67,7 @@ export function TablePickerDialog({
   useEffect(() => {
     if (!open) return
     setSelected(null)
+    setProfile('')
     setSearch('')
     setLocalError(null)
     setIsSubmitting(false)
@@ -90,12 +94,16 @@ export function TablePickerDialog({
     return groups
   }, [filtered])
 
+  const profiles = options.find(option => option.name === selected)?.profiles
+  const destinationProfile = profiles?.includes(profile) ? profile : profiles?.[0]
+
   const handleConfirm = async () => {
     if (!selected) return
     setIsSubmitting(true)
     setLocalError(null)
     try {
-      await onConfirm(selected)
+      if (destinationProfile) await onConfirm(selected, destinationProfile)
+      else await onConfirm(selected)
       onOpenChange(false)
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : errorFallback)
@@ -151,7 +159,7 @@ export function TablePickerDialog({
                           key={table.name}
                           type="button"
                           disabled={isSubmitting}
-                          onClick={() => setSelected(table.name)}
+                          onClick={() => { setSelected(table.name); setProfile('') }}
                           variant="ghost"
                           className={cn(
                             'flex h-auto w-full items-center gap-3 rounded-lg border p-3 text-start',
@@ -174,6 +182,15 @@ export function TablePickerDialog({
             </div>
           )}
         </div>
+
+        {destinationProfile && (
+          <label className="mx-6 mb-2 text-sm">{labels.profileLabel}
+            <select className="block w-full rounded border bg-background p-2" disabled={isSubmitting}
+              value={destinationProfile} onChange={event => setProfile(event.target.value)}>
+              {profiles?.map(name => <option key={name}>{name}</option>)}
+            </select>
+          </label>
+        )}
 
         {(error || localError) && (
           <p className="px-6 pb-2 text-sm text-red-600">{error || localError}</p>

@@ -263,6 +263,7 @@
     "unmerge_success": "Tables unmerged successfully",
     "unmerge_failed": "Failed to unmerge tables",
     "not_merged": "This table is not merged",
+    "transfer_profile": "POS Profile",
     "transfer_table": "Transfer table",
     "transfer_captain": "Transfer captain",
     "select_destination_table": "Move order from {{table}} to any vacant table in this branch",

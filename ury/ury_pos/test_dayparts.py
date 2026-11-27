@@ -418,6 +418,14 @@ class TestOpenCheckRateStability(unittest.TestCase):
                 "Open Breakfast check was silently re-priced to Lunch when period boundary passed",
             )
 
+            from ury.ury_pos.transfer_context import outlet_transfer_save
+            doc.selling_price_list = "Destination Prices"
+            doc.custom_serving_period = "Dinner"
+            with outlet_transfer_save(doc):
+                hooks.validate_price_list(doc, "validate")
+            self.assertEqual(doc.selling_price_list, "Destination Prices")
+            self.assertEqual(doc.custom_serving_period, "Dinner")
+
 
 class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
     """R2 B1: Direct POS Invoice REST POST/PUT must never trust client-supplied time, daypart, or price list."""

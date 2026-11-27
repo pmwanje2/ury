@@ -159,6 +159,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
         <div className="flex-1 overflow-y-auto pb-4">
           <CheckoutScreen
             capabilities={{
+              tip_prompt: context?.capabilities.tip_prompt,
               customer_payment_enabled: context?.capabilities.customer_payment_enabled ?? false,
               pay_at_counter_enabled: context?.capabilities.pay_at_counter_enabled ?? false,
               request_bill_enabled: context?.capabilities.request_bill_enabled ?? false,
@@ -170,13 +171,13 @@ function TabletLayout({ initialContext }: LayoutProps) {
             payingOnline={payingOnline}
             billRequested={billRequested}
             paymentRequest={paymentRequest}
-            onSubmitCart={() => {
-              submitCart().then((success) => {
+            onSubmitCart={(tip) => {
+              submitCart(tip).then((success) => {
                 if (success) goToStatus()
               })
             }}
-            onPayOnline={async () => {
-              if (cartItems.length > 0 && !(await submitCart())) return
+            onPayOnline={async (tip) => {
+              if (cartItems.length > 0 && !(await submitCart(tip))) return
               payOnline()
             }}
             onRequestBill={handleRequestBill}

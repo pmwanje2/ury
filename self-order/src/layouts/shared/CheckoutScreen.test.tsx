@@ -9,6 +9,9 @@ describe("CheckoutScreen", () => {
     item: "TEST-001",
     item_name: "Test Item",
     rate: 100,
+    item_image: null,
+    course: null,
+    course_label: null,
     special_dish: 0,
     disabled: 0,
   }
@@ -35,6 +38,48 @@ describe("CheckoutScreen", () => {
     onPayOnline: vi.fn(),
     onRequestBill: vi.fn(),
   }
+
+  it("passes the selected preset through place order", async () => {
+    const onSubmitCart = vi.fn()
+    render(<CheckoutScreen {...baseProps} onSubmitCart={onSubmitCart} capabilities={{
+      ...baseProps.capabilities,
+      tip_prompt: { currency: "KWD", precision: 3, presets: [5, 10, 15] },
+    }} />)
+    await userEvent.click(screen.getByRole("button", { name: "10%" }))
+    await userEvent.click(screen.getByRole("button", { name: "Place Order" }))
+    expect(onSubmitCart).toHaveBeenCalledWith("20.000")
+  })
+
+  it("accepts a 12.30 tip for three 4.10 dishes and refuses 12.31 for either payment method", async () => {
+    const entry = { item: { ...mockItem, rate: 4.10 }, qty: 3 }
+    render(<CheckoutScreen {...baseProps} cartItems={[entry]} cartCount={entry.qty}
+      cartTotal={entry.qty * entry.item.rate} capabilities={{ ...baseProps.capabilities,
+        customer_payment_enabled: true, pay_at_counter_enabled: true,
+        tip_prompt: { currency: "USD", precision: 2, presets: [100] },
+      }} />)
+    await userEvent.click(screen.getByRole("button", { name: "100%" }))
+    expect.soft(screen.getByRole("status")).toHaveTextContent("12.30 USD")
+    expect.soft(screen.getByRole("button", { name: "Place Order" })).toBeEnabled()
+    await userEvent.click(screen.getByRole("button", { name: "Pay Online" }))
+    const pay = screen.getAllByRole("button", { name: "Pay Online" })[1]
+    expect.soft(pay).toBeEnabled()
+    await userEvent.type(screen.getByRole("spinbutton"), "12.31")
+    expect(pay).toBeDisabled()
+    await userEvent.click(screen.getByRole("button", { name: "Pay at Counter" }))
+    expect(screen.getByRole("button", { name: "Place Order" })).toBeDisabled()
+  })
+
+  it.each([["UGX", 0, 1.5], ["USD", 2, 1.555], ["KWD", 3, 1.5555]] as const)(
+    "blocks a rounded %s preset above the cart subtotal", async (currency, precision, subtotal) => {
+      render(<CheckoutScreen {...baseProps} cartTotal={subtotal} capabilities={{
+        ...baseProps.capabilities, tip_prompt: { currency, precision, presets: [100] },
+      }} />)
+      await userEvent.click(screen.getByRole("button", { name: "100%" }))
+      expect(screen.getByRole("button", { name: "Place Order" })).toBeDisabled()
+      await userEvent.click(screen.getByRole("button", { name: "No Tip" }))
+      expect(screen.getByRole("button", { name: "Place Order" })).toBeEnabled()
+    },
+  )
 
   it("renders order summary with cart items", () => {
     render(<CheckoutScreen {...baseProps} />)

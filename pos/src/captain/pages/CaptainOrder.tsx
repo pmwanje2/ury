@@ -1,3 +1,5 @@
+import ManagerApproval, { type ManagerApprovalProps, type ManagerApprovalResult } from '../../components/ManagerApproval';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../../lib/override-api';
 import { coversLimit } from '@ury/core/covers';
 import { qtyReductionMessage } from '../../lib/qty-reduction-message';
 import { useEffect, useMemo, useState } from 'react';
@@ -133,6 +135,7 @@ export default function CaptainOrder() {
   const [isReprintingKot, setIsReprintingKot] = useState(false);
   const [isPrintingBill, setIsPrintingBill] = useState(false);
   const [isTransferTableOpen, setIsTransferTableOpen] = useState(false);
+  const [transferApproval, setTransferApproval] = useState<ManagerApprovalProps | null>(null);
   const [transferDestinations, setTransferDestinations] = useState<Table[]>([]);
   const [isTransferDestinationsLoading, setIsTransferDestinationsLoading] = useState(false);
   const [isTransferCaptainOpen, setIsTransferCaptainOpen] = useState(false);
@@ -571,7 +574,7 @@ export default function CaptainOrder() {
     setIsTransferDestinationsLoading(true);
     setIsTransferTableOpen(true);
     try {
-      const destinations = await getVacantTablesForBranch(branch, table);
+      const destinations = await getVacantTablesForBranch(branch, table, invoiceId);
       setTransferDestinations(destinations);
     } catch (error) {
       setIsTransferTableOpen(false);
@@ -581,9 +584,37 @@ export default function CaptainOrder() {
     }
   };
 
-  const handleTableTransferConfirm = async (newTable: string) => {
+  const handleTableTransferConfirm = async (newTable: string, targetProfile?: string, approval?: ManagerApprovalResult) => {
     if (!table || !invoiceId) return;
-    await tableTransfer(table, newTable, invoiceId);
+    const sourceProfile = context?.order?.pos_profile || posProfile?.name;
+    try {
+      if (targetProfile || approval) {
+        const auth = approval && { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note };
+        await tableTransfer(table, newTable, invoiceId, auth, targetProfile);
+      } else {
+        await tableTransfer(table, newTable, invoiceId);
+      }
+    } catch (error) {
+      if (approval || !sourceProfile || !isAuthRequiredError(error)) throw error;
+      setTransferApproval({
+        open: true,
+        posProfile: sourceProfile,
+        privilege: 'transfer_check',
+        title: t('privileged_actions.transfer_check'),
+        summaryLines: [`${table} → ${newTable}`, `${t('privileged_actions.check_ref')}: ${invoiceId}`],
+        reference: { doctype: 'POS Invoice', name: invoiceId },
+        claim: targetProfile
+          ? { action: 'transfer_check_outlet', from_profile: sourceProfile, to_profile: targetProfile, to_table: newTable, invoice: invoiceId }
+          : { action: 'table_transfer', from_table: table, to_table: newTable, invoice: invoiceId },
+        onCancel: () => setTransferApproval(null),
+        onApproved: result => {
+          setTransferApproval(null);
+          void handleTableTransferConfirm(newTable, targetProfile, result)
+            .catch(err => showToast.error(overrideActionErrorMessage(err, 'tables.transfer_failed')));
+        },
+      });
+      return;
+    }
     clearTableOrder();
     showToast.success(t('captain.table_transferred'));
     navigate('/order');
@@ -1134,6 +1165,8 @@ export default function CaptainOrder() {
         loading={isTransferDestinationsLoading}
         onConfirm={handleTableTransferConfirm}
       />
+
+      {transferApproval && <ManagerApproval {...transferApproval} />}
 
       <CaptainTransferDialog
         open={isTransferCaptainOpen}

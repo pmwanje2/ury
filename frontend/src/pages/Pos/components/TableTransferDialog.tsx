@@ -20,7 +20,7 @@ interface TableTransferDialogProps {
   sourceTable: Table | null;
   destinationTables: Table[];
   loading?: boolean;
-  onConfirm: (destinationTable: string) => Promise<void>;
+  onConfirm: (destinationTable: string, profile?: string) => Promise<void>;
 }
 
 const TableTransferDialog = ({
@@ -32,6 +32,7 @@ const TableTransferDialog = ({
   onConfirm,
 }: TableTransferDialogProps) => {
   const [selected, setSelected] = useState<string | null>(null);
+  const [profile, setProfile] = useState('');
   const [search, setSearch] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,12 +82,15 @@ const TableTransferDialog = ({
     onOpenChange(next);
   };
 
+  const profiles = destinationTables.find(table => table.name === selected)?.transfer_profiles;
+  const destinationProfile = profiles?.includes(profile) ? profile : profiles?.[0];
   const handleConfirm = async () => {
     if (!selected || !sourceTable) return;
     setIsSubmitting(true);
     setError(null);
     try {
-      await onConfirm(selected);
+      if (destinationProfile) await onConfirm(selected, destinationProfile);
+      else await onConfirm(selected);
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('tables.transfer_failed'));
@@ -153,7 +157,7 @@ const TableTransferDialog = ({
                           key={table.name}
                           type="button"
                           disabled={isSubmitting}
-                          onClick={() => setSelected(table.name)}
+                          onClick={() => { setSelected(table.name); setProfile(''); }}
                           variant="ghost"
                           className={cn(
                             'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors h-auto',
@@ -164,9 +168,9 @@ const TableTransferDialog = ({
                         >
                           <TableShapeIcon shape={table.table_shape || 'Rectangle'} />
                           <div className="min-w-0">
-                            <p className="font-medium text-foreground">{table.name}</p>
+                            <p className="font-medium text-foreground">{table.name} {table.occupied ? t('tables.occupied') : ''}</p>
                             <p className="text-xs text-text-tertiary">
-                              {typeof table.no_of_seats === 'number'
+                              {table.branch} {typeof table.no_of_seats === 'number'
                                 ? `${table.no_of_seats} ${t('tables.seats')}`
                                 : ''}
                             </p>
@@ -181,6 +185,14 @@ const TableTransferDialog = ({
           )}
         </div>
 
+        {destinationProfile && (
+          <label className="mx-6 mb-2 text-sm">{t('tables.transfer_profile')}
+            <select className="block w-full rounded border bg-background p-2" disabled={isSubmitting}
+              value={destinationProfile} onChange={event => setProfile(event.target.value)}>
+              {profiles?.map(name => <option key={name}>{name}</option>)}
+            </select>
+          </label>
+        )}
         {error && <p className="px-6 pb-2 text-sm text-destructive">{error}</p>}
 
         <DialogFooter>

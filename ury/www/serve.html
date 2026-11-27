@@ -1,0 +1,34 @@
+<!doctype html>
+{% set user_lang = frappe.lang or 'en' %}
+{% set is_rtl = user_lang in ['ar', 'he', 'fa', 'ur', 'ku'] %}
+<html lang="{{ user_lang }}" dir="{{ 'rtl' if is_rtl else 'ltr' }}">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="{{ (brand.favicon if brand and brand.favicon else '/assets/ury/Images/maximus-mark.svg') | e }}" sizes="any" />
+    <link rel="apple-touch-icon" href="{{ (brand.favicon if brand and brand.favicon else '/assets/ury/serve/icons/apple-touch-icon.png') | e }}" />
+    <link rel="manifest" href="/assets/ury/serve/manifest.webmanifest" />
+    <!-- Matches the app's white header, so the status bar does not band against it. -->
+    <meta name="theme-color" content="#ffffff" />
+    <!-- iOS ignores the manifest for home-screen installs and reads these. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="{{ (brand.name if brand and brand.name else 'Maximus Serve') | e }}" />
+    <title>{{ (brand.name if brand and brand.name else 'Maximus Serve') | e }}</title>
+    <script type="module" crossorigin src="/assets/ury/serve/assets/index-6_tMH20e.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/ury/serve/assets/index-CLNxeVj7.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <footer class="py-2 text-center text-xs text-muted-foreground">
+      {{ (brand.name if brand and brand.name else 'Maximus Serve') | e }} · AGPL-3.0 · <a href="{{ brand_source_url | e }}" class="underline">Source</a>
+    </footer>
+    <script>
+      window.csrf_token = "{{ csrf_token }}";
+      if (!window.frappe) window.frappe = {};
+      window.app_name = {{ app_name | default('') | tojson }};
+      frappe.boot = JSON.parse({{ boot | safe }});
+    </script>
+  </body>
+</html>

@@ -1,4 +1,6 @@
 {
+  "tip": {"title": "Tip", "none": "No Tip", "custom": "Custom tip"},
+
   "language": {
     "chooser": "Language"
   },

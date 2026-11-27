@@ -90,6 +90,15 @@ it('settles without a tip as before', async () => {
   expect(settlement(post)?.tip ?? 0).toBe(0);
 });
 
+it('sends an explicit zero when the till clears a guest tip', async () => {
+  const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { status: 'Submitted' } });
+  show({ grandTotal: 120, roundedTotal: 120, chargedTip: 20 });
+  fireEvent.change(screen.getByRole('textbox', { name: /^tip$/i }), { target: { value: '0' } });
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '100' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Pay / }));
+  await waitFor(() => expect(settlement(post)?.tip).toBe(0));
+});
+
 it('refuses a negative tip', () => {
   show();
   fireEvent.change(screen.getByRole('textbox', { name: /^tip$/i }), { target: { value: '-5' } });

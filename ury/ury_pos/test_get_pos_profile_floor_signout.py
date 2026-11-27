@@ -56,7 +56,7 @@ class TestFloorSignoutProfile(unittest.TestCase):
     def test_payment_mode_accounts_use_the_profile_company(self):
         self.profile.payments = [frappe._dict(mode_of_payment="Cash"), frappe._dict(mode_of_payment="Card")]
         accounts = {"Cash": "Cash - TC", "Card": "Card Clearing - TC"}
-        self.framework.db.get_value.side_effect = lambda doctype, filters, field: (
+        self.framework.db.get_value.side_effect = lambda doctype, filters, field, *, as_dict=False: (
             accounts[filters["parent"]]
             if doctype == "Mode of Payment Account" and filters.get("company") == self.profile.company
             and field == "default_account" else None

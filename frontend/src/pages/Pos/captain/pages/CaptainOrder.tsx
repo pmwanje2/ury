@@ -377,7 +377,7 @@ export default function CaptainOrder() {
     setIsTransferDestinationsLoading(true);
     setIsTransferTableOpen(true);
     try {
-      const destinations = await getVacantTablesForBranch(branch, table);
+      const destinations = await getVacantTablesForBranch(branch, table, invoiceId);
       setTransferDestinations(destinations);
     } catch (error) {
       setIsTransferTableOpen(false);
@@ -387,9 +387,10 @@ export default function CaptainOrder() {
     }
   };
 
-  const handleTableTransferConfirm = async (newTable: string) => {
+  const handleTableTransferConfirm = async (newTable: string, targetProfile?: string) => {
     if (!table || !invoiceId) return;
-    await tableTransfer(table, newTable, invoiceId);
+    if (targetProfile) await tableTransfer(table, newTable, invoiceId, targetProfile);
+    else await tableTransfer(table, newTable, invoiceId);
     clearTableOrder();
     showToast.success('Table transferred.');
     navigate('/pos/order');

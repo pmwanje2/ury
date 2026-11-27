@@ -225,6 +225,7 @@
     "unmerge_success": "Tables séparées avec succès",
     "unmerge_failed": "Échec de la séparation des tables",
     "not_merged": "Cette table n'est pas fusionnée",
+    "transfer_profile": "Profil de caisse",
     "transfer_table": "Transférer la table",
     "transfer_captain": "Transférer le capitaine",
     "select_destination_table": "Déplacer la commande de {{table}} vers toute table libre de l'établissement",

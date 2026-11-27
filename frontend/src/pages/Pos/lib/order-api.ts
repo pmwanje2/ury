@@ -128,9 +128,12 @@ export async function splitBill(
 export async function tableTransfer(
   table: string,
   newTable: string,
-  invoice: string
+  invoice: string,
+  targetProfile?: string
 ): Promise<void> {
   await call.post('ury.ury.doctype.ury_order.ury_order.table_transfer', {
+    join_roster: 1,
+    ...(targetProfile ? { target_pos_profile: targetProfile } : {}),
     table,
     newTable,
     invoice,

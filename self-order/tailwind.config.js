@@ -7,6 +7,7 @@ export default {
     "./src/**/*.{js,ts,jsx,tsx}",
     "../packages/ui/src/**/*.{ts,tsx}",
   ],
+  safelist: ['dark'],
   presets: [preset],
   theme: {
     extend: {},

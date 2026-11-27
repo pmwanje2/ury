@@ -28,6 +28,7 @@ import functools
 import hashlib
 import hmac
 import json
+import math
 from datetime import timedelta
 from functools import wraps
 from uuid import uuid4
@@ -330,6 +331,23 @@ def _guest_retry():
 # Bootstrap
 # ---------------------------------------------------------------------------
 
+def _tip_prompt(profile):
+    from ury.ury.api.guest_tip import tip_presets
+    from ury.ury_pos.approval_currency import currency_precision
+
+    if getattr(profile, "enable_guest_tips", 0) not in (1, "1"):
+        return None
+    from ury.ury.hooks.ury_pos_tender import profile_accepts_guest_tips
+    if not profile_accepts_guest_tips(profile.pos_profile):
+        return None
+    currency = frappe.db.get_value("POS Profile", profile.pos_profile, "currency")
+    if not currency:
+        company = frappe.db.get_value("Branch", profile.branch, "company")
+        currency = frappe.db.get_value("Company", company, "default_currency")
+    return {"currency": currency, "precision": currency_precision(currency, frappe.db),
+            "presets": tip_presets(profile.guest_tip_presets)}
+
+
 def _ordering_context_response(raw_session_token, source, profile, table, layout):
     """Shared response shape for every bootstrap-style entry point
     (get_ordering_context, assign_device_table) — never raw branch/table
@@ -350,6 +368,7 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
         # selector uses this, never a client-guessed value.
         "layout": layout,
         "capabilities": {
+            **({"tip_prompt": prompt} if (prompt := _tip_prompt(profile)) else {}),
             "product_detail_enabled": bool(profile.enable_product_detail_page),
             "show_item_images": bool(profile.show_item_images),
             "show_item_descriptions": bool(profile.show_item_descriptions),
@@ -607,7 +626,7 @@ def get_customer_order(session):
 
 
 @frappe.whitelist(allow_guest=True)
-def add_customer_items(session, items):
+def add_customer_items(session, items, tip=None):
     """Append-only customer order mutation. `items` is a list of
     {"item": <item_code>, "qty": <number>, "comment": <optional str>} —
     same shape sync_order()/price_items_for_invoice() already expect.
@@ -679,7 +698,7 @@ def add_customer_items(session, items):
             qty = float(qty)
         except (TypeError, ValueError):
             qty = 0
-        if qty <= 0:
+        if not math.isfinite(qty) or qty <= 0:
             frappe.throw(_("Invalid quantity for item {0}").format(item_code), frappe.ValidationError)
 
         # The check line, KOT and guest view name the dish as staff lines do; never the client's text.
@@ -768,6 +787,22 @@ def add_customer_items(session, items):
             clean_items, invoice.selling_price_list, profile.pos_profile, invoice.branch, menu,
             posting_date=invoice_pricing_date(invoice), customer=invoice.customer,
         )
+        if tip is not None:
+            from decimal import Decimal
+            from ury.ury.api.guest_tip import guest_tip_amount
+            from ury.ury_pos.approval_currency import currency_precision
+
+            prompt = _tip_prompt(profile)
+            if not prompt:
+                frappe.throw(_("Guest tipping is disabled."), frappe.ValidationError)
+            subtotal = sum(Decimal(str(row["rate"])) * Decimal(str(row["qty"])) for row in priced_items)
+            precision = currency_precision(invoice.currency or prompt["currency"], frappe.db)
+            try:
+                addition = guest_tip_amount(tip, subtotal, precision)
+            except ValueError:
+                frappe.throw(_("Enter a tip between zero and the order subtotal."), frappe.ValidationError)
+            invoice.custom_charged_tip = float(Decimal(str(invoice.get("custom_charged_tip") or 0)) + addition)
+
         for item_dict in priced_items:
             invoice.append("items", item_dict)
 

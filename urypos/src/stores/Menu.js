@@ -90,7 +90,13 @@ export const useMenuStore = defineStore("menu", {
     paginatedItems() {
       const startIndex = (this.currentPage - 1) * this.perPage;
       const endIndex = startIndex + this.perPage;
-      return this.filteredItems.slice(startIndex, endIndex);
+      const totals = new Map();
+      for (const line of this.cart) {
+        totals.set(line.item, (totals.get(line.item) || 0) + Number(line.qty || 0));
+      }
+      return this.filteredItems.slice(startIndex, endIndex).map(item => ({
+        ...item, qty: totals.get(item.item) || 0,
+      }));
     },
     pageNumbers() {
       const pageNumbers = [];
@@ -322,6 +328,13 @@ export const useMenuStore = defineStore("menu", {
       this.showAll = false;
     },
     showModal(item) {
+      if (!this.cart.includes(item)) {
+        const lines = this.cart.filter(line => line.item === item.item);
+        // The menu shows a dish total. Edit notes and quantities on individual cart lines.
+        if (lines.length > 1) return router.push("/Cart");
+        if (!lines.length) return;
+        item = lines[0];
+      }
       this.showDialog = true;
       this.quantity = item.qty;
       this.item = item;
@@ -361,44 +374,23 @@ export const useMenuStore = defineStore("menu", {
       }
     },
     incrementItemQuantity(item) {
-      const itemIndex = this.cart.findIndex((obj) => obj.item === item.item);
-      const itemIndexExists = itemIndex !== -1;
-      const posProfile = this.invoiceData.posProfile;
-      let previousOrderItem = this.table.previousOrderdItem;
-      // Check if item exists in previous orders
-      const previousItem = previousOrderItem.find(
-        (previous_item) => previous_item.item_code === item.item
-      );
-
-      let item_qty = itemIndexExists
-        ? (parseFloat(this.cart[itemIndex].qty) || 0) + 1
-        : 1;
-      // If item exists in previous orders, adjust quantity
-      if (previousItem) {
-        item_qty -= previousItem.qty;
-      }
-      if (itemIndexExists) {
-        item.comment = "";
-        this.cart[itemIndex].qty = (parseFloat(this.cart[itemIndex].qty) || 0) + 1;
-        let message = `${item.item}'s Qty updated to ${item.qty} in Cart`;
-        this.notification.createNotification(message);
-      } else {
-        item.comment = "";
-        this.cart.push({ item: item.item, qty: 1 });
-      }
+      const index = this.cart.map(row => row.item).lastIndexOf(item.item);
+      if (index < 0) return this.addToCart(item);
+      const total = Number(item.qty) + 1;
+      this.cart[index].qty = Number(this.cart[index].qty) + 1;
+      this.notification.createNotification(`${item.item}'s Qty updated to ${total} in Cart`);
     },
     decrementItemQuantity(item) {
-      const itemIndex = this.cart.findIndex((obj) => obj.item === item.item);
-      const itemIndexExists = itemIndex !== -1;
-      if (itemIndexExists) {
-        this.cart[itemIndex].qty = (parseFloat(this.cart[itemIndex].qty) || 0) - 1;
-        this.cart = this.cart.filter((obj) => obj.qty > 0);
-        let message =
-          item.qty > 0
-            ? `${item.item}'s Qty Reduced from Cart Total Qty=${item.qty}`
-            : `${item.item} has been removed from Cart`;
-        this.notification.createNotification(message);
-      }
+      const index = this.cart.map(row => row.item).lastIndexOf(item.item);
+      if (index < 0) return;
+      const line = this.cart[index];
+      const removed = Math.min(1, Number(line.qty));
+      const remaining = item.qty - removed;
+      line.qty -= removed;
+      if (!line.qty) this.cart.splice(index, 1);
+      this.notification.createNotification(remaining
+        ? `${item.item}'s Qty Reduced from Cart Total Qty=${remaining}`
+        : `${item.item} has been removed from Cart`);
     },
     removeItemFromCart(index) {
       // Get the item that corresponds to the index

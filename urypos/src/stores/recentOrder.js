@@ -1,3 +1,4 @@
+import { invoiceCartRows } from "../utils/invoice-cart.js";
 import { defineStore } from "pinia";
 import router from "../router";
 import moment from "moment";
@@ -27,6 +28,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
     currentPage: 1,
     paymentMethod: 0,
     editPrintedInvoice: 0,
+    editRequest: 0,
     selectedStatus: "Draft",
     posProfile: "",
     searchOrder: "",
@@ -259,6 +261,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
       this.showOrder = true;
     },
     async editOrder() {
+      const request = ++this.editRequest;
       this.payments = [];
       let previousOrderdNumberOfPax = "";
       this.pastOrderdItem = [];
@@ -278,9 +281,10 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
         doctype: "POS Invoice",
         name: this.draftInvoice,
       };
-      this.call
+      return this.call
         .get("frappe.client.get", getOrderInvoice)
         .then((result) => {
+          if (request !== this.editRequest || this.draftInvoice !== getOrderInvoice.name) return;
           let pastOrder = result.message;
           this.mobileNumber = pastOrder.mobile_number;
           this.restaurantTable = pastOrder.restaurant_table;
@@ -309,39 +313,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
             this.customers.customerFavouriteItems = "";
           }
 
-          items.forEach((item) => {
-            const previousItem =
-              this.pastOrderdItem &&
-              this.pastOrderdItem.find(
-                (previousItem) => previousItem.item_code === item.item
-              );
-            if (previousItem && !item.qty) {
-              const itemIndex = cart.findIndex((obj) => obj.item === item.item);
-              const itemIndexExists = itemIndex !== -1;
-              if (!itemIndexExists) {
-                item.qty = previousItem.qty;
-                item.comment = previousItem.comment;
-                cart.push(item);
-              }
-            }
-          });
-          if (this.pastOrderdItem && this.pastOrderdItem.length > 0) {
-            this.pastOrderdItem.forEach((previousItem) => {
-              const existsInMenu = items.some(item => item.item === previousItem.item_code);
-              const existsInCart = cart.some(item => item.item === previousItem.item_code);
-              
-              if (!existsInMenu && !existsInCart) {
-                // Item no longer in menu but was in previous order - add it to cart
-                cart.push({
-                  item: previousItem.item_code,
-                  item_name: previousItem.item_name,
-                  rate: previousItem.rate,
-                  qty: previousItem.qty,
-                  comment: previousItem.comment
-                });
-              }
-            });
-          }
+          cart.push(...invoiceCartRows(this.pastOrderdItem, items));
         })
         .catch((error) => console.error(error));
     },

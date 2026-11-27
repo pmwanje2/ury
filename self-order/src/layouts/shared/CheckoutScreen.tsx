@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { CartEntry } from '../../hooks/useOrderingSession'
 import type { OrderingCapabilities, PaymentRequestResult } from '../../lib/api'
-import { t } from '../../i18n'
+import { getActiveLanguage, t } from '../../i18n'
 import { paymentNoticeFor } from '../../lib/payment-outcome'
 
 // Local, UI-only concept — `pay_at_counter_enabled` has no backend action of
@@ -15,7 +15,7 @@ export interface CheckoutScreenProps {
   /** Capability flags gating which payment options are offered. */
   capabilities: Pick<
     OrderingCapabilities,
-    'customer_payment_enabled' | 'pay_at_counter_enabled' | 'request_bill_enabled'
+    'customer_payment_enabled' | 'pay_at_counter_enabled' | 'request_bill_enabled' | 'tip_prompt'
   >
   /** Cart line items to summarize. */
   cartItems: CartEntry[]
@@ -32,9 +32,9 @@ export interface CheckoutScreenProps {
   /** Result of a created payment request, if any (paymentRequest). */
   paymentRequest: PaymentRequestResult | null
   /** Places the order — mirrors useOrderingSession's submitCart. */
-  onSubmitCart: () => void
+  onSubmitCart: (tip?: string) => void
   /** Starts online payment — mirrors useOrderingSession's payOnline. */
-  onPayOnline: () => void
+  onPayOnline: (tip?: string) => void
   /** Requests the bill — mirrors useOrderingSession's handleRequestBill. */
   onRequestBill: () => void
 }
@@ -75,6 +75,26 @@ function CheckoutScreen({
     showPayAtCounter ? 'counter' : null,
   )
 
+  const prompt = capabilities.tip_prompt
+  const [percent, setPercent] = useState<number | null>(0)
+  const [custom, setCustom] = useState('')
+  const amount = percent === null ? Number(custom) : cartTotal * percent / 100
+  const minorUnits = prompt && new Intl.NumberFormat('en-US', {
+    useGrouping: false, minimumFractionDigits: prompt.precision, maximumFractionDigits: prompt.precision,
+  })
+  const rounded = minorUnits?.format(amount)
+  const roundedSubtotal = Number(minorUnits?.format(cartTotal) ?? cartTotal)
+  // Correct floating-point noise in the cart sum, but keep the server's exact
+  // cap when a menu price genuinely carries a fraction of a minor unit.
+  const sumTolerance = cartItems.length * Number.EPSILON * Math.abs(cartTotal)
+  const tipCap = Math.min(roundedSubtotal, cartTotal + sumTolerance)
+  const invalid = !Number.isFinite(amount) || amount < 0 || Number(rounded ?? amount) > tipCap
+  const tip = invalid ? undefined : rounded
+  const total = prompt ? new Intl.NumberFormat(getActiveLanguage(), {
+    style: 'currency', currency: prompt.currency,
+    minimumFractionDigits: prompt.precision, maximumFractionDigits: prompt.precision,
+  }).format(cartTotal + Number(tip || 0)) : cartTotal
+
   return (
     <div className="mx-4 mt-4">
       <section className="rounded-lg border p-3">
@@ -91,9 +111,33 @@ function CheckoutScreen({
         </ul>
         <div className="mt-2 flex justify-between border-t pt-2 text-sm font-semibold">
           <span>{t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount })}</span>
-          <span>{cartTotal}</span>
+          <span>{total}</span>
         </div>
       </section>
+
+      {prompt && (
+        <fieldset className="mt-4 min-w-0 rounded-lg border p-3">
+          <legend>{t('tip.title')}</legend>
+          <div className="flex flex-wrap gap-2">
+            {[0, ...prompt.presets].map(value => (
+              <button key={value} type="button" aria-pressed={percent === value}
+                className="rounded border px-3 py-2 aria-pressed:border-primary"
+                onClick={() => setPercent(value)}>
+                {value ? `${value}%` : t('tip.none')}
+              </button>
+            ))}
+          </div>
+          <label className="mt-2 block">{t('tip.custom')} ({prompt.currency})
+            <input type="number" min="0" max={tipCap} step={10 ** -prompt.precision}
+              className="mt-1 w-full rounded border bg-background p-2"
+              value={percent === null ? custom : ''} onChange={event => {
+                setCustom(event.target.value)
+                setPercent(null)
+              }} />
+          </label>
+          <output>{tip} {prompt.currency}</output>
+        </fieldset>
+      )}
 
       {hasAnyPaymentOption && (
         <section className="mt-4 rounded-lg border p-3">
@@ -149,8 +193,8 @@ function CheckoutScreen({
         {showPayOnline && selectedMethod === 'online' ? (
           <button
             type="button"
-            onClick={onPayOnline}
-            disabled={payingOnline}
+            onClick={() => onPayOnline(tip)}
+            disabled={submitting || payingOnline || invalid}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
           >
             {payingOnline ? t('payment.starting') : t('payment.pay_online')}
@@ -158,8 +202,8 @@ function CheckoutScreen({
         ) : (
           <button
             type="button"
-            onClick={onSubmitCart}
-            disabled={submitting || cartItems.length === 0}
+            onClick={() => onSubmitCart(tip)}
+            disabled={invalid || submitting || payingOnline || cartItems.length === 0}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
           >
             {submitting ? t('order.placing') : t('order.place')}

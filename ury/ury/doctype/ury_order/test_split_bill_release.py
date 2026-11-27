@@ -303,7 +303,7 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
             table if doctype == "URY Table" else invoice if doctype == "POS Invoice" else profile
         )
         self.framework.get_all.side_effect = (
-            lambda doctype, **kwargs: [Row(name=invoice.name)] if doctype == "POS Invoice" and invoice else []
+            lambda doctype, **kwargs: [Row(name=invoice.name, restaurant_table=invoice.restaurant_table)] if doctype == "POS Invoice" and invoice else []
         )
         self.framework.db.exists.return_value = "POS Profile"
         self.order.getBranch.return_value = "Branch A"
@@ -341,9 +341,9 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
             table if doctype == "URY Table" else profile if doctype == "POS Profile" else invoices[name]
         )
         self.framework.get_all.side_effect = lambda doctype, **kwargs: (
-            [Row(name="POS-INV-1"), Row(name="POS-INV-2")]
+            [Row(name="POS-INV-1", restaurant_table="T1"), Row(name="POS-INV-2", restaurant_table="T1")]
             if doctype == "POS Invoice" and kwargs.get("order_by") == "creation asc"
-            else [Row(name="POS-INV-2"), Row(name="POS-INV-1")]
+            else [Row(name="POS-INV-2", restaurant_table="T1"), Row(name="POS-INV-1", restaurant_table="T1")]
             if doctype == "POS Invoice"
             else []
         )
@@ -381,7 +381,7 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
                 return []
             seen.append(kwargs)
             # Frappe's POS Invoice default sort is creation DESC (newest first).
-            newest_first = [Row(name="POS-INV-2"), Row(name="POS-INV-1")]
+            newest_first = [Row(name="POS-INV-2", restaurant_table="T1"), Row(name="POS-INV-1", restaurant_table="T1")]
             bound = (kwargs.get("filters") or {}).get("name")
             if bound:
                 newest_first = [row for row in newest_first if row.name == bound]

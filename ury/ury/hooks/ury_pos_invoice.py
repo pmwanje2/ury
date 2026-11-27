@@ -454,6 +454,8 @@ def _line_identity(item):
 
 
 def validate_invoice(doc, method):
+    from ury.ury_pos.transfer_context import is_outlet_transfer
+
     if doc.waiter == None or doc.waiter == "":
         doc.waiter = doc.modified_by
     if getattr(frappe.flags, "ury_bill_split", False):
@@ -546,8 +548,10 @@ def validate_invoice(doc, method):
                 header_tampered = (
                     int(doc.get("is_return") or 0) == 1
                     or (doc.get("company") or "") != orig_company
-                    or (doc.get("pos_profile") or "") != orig_pos_profile
-                    or (orig_branch and (doc.get("branch") or "") != orig_branch)
+                    or (not is_outlet_transfer(doc) and (
+                        (doc.get("pos_profile") or "") != orig_pos_profile
+                        or (orig_branch and (doc.get("branch") or "") != orig_branch)
+                    ))
                 )
 
                 has_full_void = False
@@ -1391,6 +1395,8 @@ def enforce_authoritative_outlet_time(doc, method=None):
 
     flags = getattr(doc, "flags", None)
     trusted_offline = bool(getattr(flags, "ury_trusted_offline_capture", False))
+    from ury.ury_pos.transfer_context import is_outlet_transfer
+
     server_ot_change = bool(getattr(flags, "ury_server_order_type_change", False))
     trusted_pricing = bool(getattr(flags, "ury_trusted_server_pricing", False))
     privileged_verified = bool(getattr(flags, "ury_privileged_action_verified", False))
@@ -1540,11 +1546,14 @@ def enforce_authoritative_outlet_time(doc, method=None):
         if prev_time and prev_wd:
             doc.custom_transaction_local_time = prev_time
             doc.custom_transaction_weekday = prev_wd
-            if not server_ot_change:
+            if not server_ot_change and not is_outlet_transfer(doc):
                 doc.custom_serving_period = prev_period or None
         else:
+            destination_period = doc.get("custom_serving_period")
             stamp_invoice_outlet_time(doc, at=validated_at, overwrite=True)
-            if prev_period and not server_ot_change:
+            if is_outlet_transfer(doc):
+                doc.custom_serving_period = destination_period
+            elif prev_period and not server_ot_change:
                 doc.custom_serving_period = prev_period
 
         if not is_super and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
@@ -1709,7 +1718,10 @@ def validate_price_list(doc, method):
     Open-check Serving Period rate stability (G40) ONLY honors persisted DB state (never
     client-submitted ``custom_serving_period`` or ``selling_price_list`` on REST POST/PUT).
     """
-    if not doc.restaurant:
+    from ury.ury_pos.transfer_context import is_outlet_transfer
+
+    # rebind_outlet already resolved the destination menu and repriced the lines.
+    if is_outlet_transfer(doc) or not doc.restaurant:
         return
 
     flags = getattr(doc, "flags", None)

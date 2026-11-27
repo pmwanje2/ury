@@ -150,6 +150,10 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
     // Method for creating an invoice
     async invoiceCreation() {
       if (this.invoiceUpdating || !this.showUpdateButtton) return;
+      if (this.table.selectedTable && this.table.tableAwaitingInvoice === this.table.selectedTable) {
+        this.notification.createNotification("Wait for the check to load, or reopen the table to retry.");
+        return;
+      }
       this.showUpdateButtton = false;
       this.invoiceUpdating = true;
       let selectedTables = "";
@@ -205,7 +209,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
         const originalItems = {};
         pastOrderdItem.forEach(item => {
           originalItems[item.item_code] = {
-            qty: item.qty,
+            qty: (originalItems[item.item_code]?.qty || 0) + Number(item.qty),
             name: item.item_name
           };
         });
@@ -213,7 +217,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
         const currentItems = {};
         this.menu.cart.forEach(item => {
           currentItems[item.item] = {
-            qty: item.qty,
+            qty: (currentItems[item.item]?.qty || 0) + Number(item.qty),
             name: item.item_name
           };
         });
