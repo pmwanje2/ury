@@ -8,7 +8,14 @@ import { t } from '../i18n';
 import { prepChoice, pricedCondiment, validSelectionCount } from '../lib/condiment';
 import { buildComboChoice } from '../lib/combo-choice';
 
+export interface ConfiguredItemGroup {
+  parent: OrderItem;
+  children: OrderItem[];
+}
+
 interface ProductDialogProps {
+  onConfirm?: (groups: ConfiguredItemGroup[]) => void;
+  initialComment?: string;
   onClose: () => void;
   editMode?: boolean;
   initialVariant?: { id: string; name: string; price: number };
@@ -74,6 +81,8 @@ function buildInitialSelections(
 
 const ProductDialog: React.FC<ProductDialogProps> = ({
   onClose,
+  onConfirm,
+  initialComment,
   editMode = false,
   initialAddons = [],
   initialQuantity,
@@ -115,8 +124,9 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
       catalogMatch?.is_combo_meal
   );
 
+  const stagingRound = Boolean(onConfirm);
   const existingCartItem =
-    selectedItem && !isConfigurable
+    selectedItem && !isConfigurable && !stagingRound
       ? activeOrders.find(
           (order) =>
             order.id === selectedItem.id &&
@@ -140,7 +150,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         : '0'
   );
   const [comments, setComments] = useState<string>(
-    itemToReplace?.comment || existingCartItem?.comment || ''
+    initialComment ?? (itemToReplace?.comment || existingCartItem?.comment || '')
   );
   const [addonsLoading, setAddonsLoading] = useState(false);
   const [addonsError, setAddonsError] = useState<string | null>(null);
@@ -174,7 +184,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
 
   useEffect(() => {
     if (!editMode && selectedItem) {
-      if (isConfigurable) {
+      if (isConfigurable || stagingRound) {
         setQuantity(String(initialQuantity || 1));
       } else if (existingCartItem) {
         setQuantity(existingCartItem.quantity.toString());
@@ -183,7 +193,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         setQuantity(getItemQuantityFromCart(selectedItem).toString());
       }
     }
-  }, [initialQuantity, selectedItem, editMode, isConfigurable, getItemQuantityFromCart, existingCartItem]);
+  }, [initialQuantity, selectedItem, editMode, isConfigurable, stagingRound, getItemQuantityFromCart, existingCartItem]);
 
   const addonDetails = useMemo(() => {
     const rows = Array.isArray(itemDoc?.custom_pos_add_on_items)
@@ -390,41 +400,32 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         hideUnpricedOnReceipt: unpricedMods.some((m) => m.hide_on_receipt === 1),
       };
 
+      if (onConfirm) {
+        onConfirm([{ parent: parentRow, children: childRows }]);
+        return;
+      }
       void addConfiguredItems(parentRow, childRows, editMode ? itemToReplace?.uniqueId : undefined);
       handleClose();
       return;
     }
 
+    const parent = { ...selectedItem, quantity: numericQuantity, price: basePrice, comment: comments || undefined };
+    const rows = [parent, ...selectedAddons.map(addon => {
+      const menuAddon = menuItems.find(item => item.item === addon.id);
+      return {
+        ...(menuAddon ?? {
+          id: addon.id, name: addon.name, image: null, item: addon.id, item_name: addon.name,
+          course: '', description: '', special_dish: 0, tax_rate: 0,
+        }),
+        quantity: numericQuantity, price: addon.price,
+      } as OrderItem;
+    })];
+    if (onConfirm) {
+      onConfirm(rows.map(row => ({ parent: row, children: [] })));
+      return;
+    }
     if (editMode && itemToReplace?.uniqueId) removeFromOrder(itemToReplace.uniqueId);
-
-    addToOrder({
-      ...selectedItem,
-      quantity: numericQuantity,
-      price: basePrice,
-      comment: comments || undefined,
-    });
-
-    selectedAddons.forEach((addon) => {
-      const menuAddon = menuItems.find((item) => item.item === addon.id);
-      if (menuAddon) {
-        addToOrder({ ...menuAddon, quantity: numericQuantity, price: addon.price });
-      } else {
-        addToOrder({
-          id: addon.id,
-          name: addon.name,
-          price: addon.price,
-          quantity: numericQuantity,
-          image: null,
-          item: addon.id,
-          item_name: addon.name,
-          course: '',
-          description: '',
-          special_dish: 0,
-          tax_rate: 0,
-        } as OrderItem);
-      }
-    });
-
+    for (const row of rows) void addToOrder(row);
     handleClose();
   };
 

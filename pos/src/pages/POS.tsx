@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { t } from '../i18n';
 import { Sparkles, Star, TrendingUp } from 'lucide-react';
 import { PLUKeypad } from '../components/PLUKeypad';
@@ -8,7 +8,7 @@ import { workstation } from '../lib/workstation';
 import { isUnavailable } from '../lib/availability-api';
 import Sidebar from '../components/Sidebar';
 import OrderPanel from '../components/OrderPanel';
-import ProductDialog from '../components/ProductDialog';
+import ProductDialog, { type ConfiguredItemGroup } from '../components/ProductDialog';
 import MenuList from '../components/MenuList';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
 import { usePOSStore, type MenuItem, type OrderItem } from '../store/pos-store';
@@ -23,6 +23,15 @@ import { SoldOutSheet } from '../components/SoldOutSheet';
 import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import { showToast } from '@ury/ui';
+
+type RepeatEntry = ConfiguredItemGroup | { item: MenuItem; row: OrderItem };
+
+interface PendingRound {
+  invoice: string;
+  row: OrderItem;
+  ready: ConfiguredItemGroup[];
+  remaining: RepeatEntry[];
+}
 
 const EMPTY_MENU: Array<{ item: string }> = [];
 
@@ -185,11 +194,39 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
     }, 250); // 250ms threshold for double click
   };
 
+  const [pendingRound, setPendingRound] = useState<PendingRound | null>(null);
+
+  useEffect(() => {
+    if (pendingRound && orderId !== pendingRound.invoice) {
+      setPendingRound(null);
+      setSelectedItem(null);
+    }
+  }, [orderId, pendingRound, setSelectedItem]);
+
+  const advanceRound = (invoice: string, remaining: RepeatEntry[], ready: ConfiguredItemGroup[]) => {
+    for (const [index, entry] of remaining.entries()) {
+      if ('row' in entry) {
+        setPendingRound({ invoice, ready, row: entry.row, remaining: remaining.slice(index + 1) });
+        setSelectedItem(entry.item);
+        return;
+      }
+      ready.push(entry);
+    }
+    setPendingRound(null);
+    setSelectedItem(null);
+    if (orderId !== invoice || isMenuInteractionDisabled() || isOrderInteractionDisabled()) return;
+    if (ready.some(({ parent }) => !usePOSStore.getState().validateQuantity(parent.quantity))) {
+      showToast.error(t('privileged_actions.invalid_qty'));
+      return;
+    }
+    for (const { parent, children } of ready) void addConfiguredItems(parent, children);
+  };
+
   const repeatRound = () => {
     if (!lastRound || lastRound.invoice !== orderId || isMenuInteractionDisabled() || isOrderInteractionDisabled()) return;
     const parents = lastRound.lines.filter(row => !row.isModifier && !row.parentLineKey);
     const catalog = new Map(menuItems.map(item => [item.item, item]));
-    const groups: { parent: OrderItem; children: OrderItem[] }[] = [];
+    const groups: RepeatEntry[] = [];
     for (const row of parents) {
       const item = catalog.get(row.item);
       if (!item || item.unavailable_daypart || isUnavailable(availabilityMap?.[row.item]) || requiresManualPrice(item)) {
@@ -199,10 +236,8 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
       const linked = lastRound.lines.filter(line => line.parentLineKey && line.parentLineKey === row.reservationLineKey);
       const modifiers = repeatModifiers(row, item, linked);
       if (!modifiers) {
-        setSelectedItem(item);
-        setDialogQuantity(row.quantity);
-        setIsDialogOpen(true);
-        return;
+        groups.push({ item, row });
+        continue;
       }
       const parent = repeatedLine(row, item.price, item);
       parent.selectedModifiers = modifiers.selectedModifiers;
@@ -224,7 +259,7 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
       }
       groups.push({ parent, children: modifiers.children });
     }
-    for (const {parent, children} of groups) void addConfiguredItems(parent, children);
+    advanceRound(lastRound.invoice, groups, []);
   };
 
   const QuickFilterButton = ({ filter, icon: Icon, label }: { 
@@ -367,6 +402,18 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
         : <OrderPanel onRoundSent={onRoundSent} onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />}
       {noSale && <TillCashDialog initialTab="No Sale" open onOpenChange={setNoSale} />}
       {isDialogOpen && <ProductDialog initialQuantity={dialogQuantity} onClose={() => setIsDialogOpen(false)} />}
+      {pendingRound && pendingRound.invoice === orderId && (
+        <ProductDialog key={pendingRound.remaining.length} initialQuantity={pendingRound.row.quantity}
+          initialComment={pendingRound.row.comment} onClose={() => setPendingRound(null)}
+          onConfirm={groups => {
+            const { row, invoice, remaining, ready } = pendingRound;
+            const configured = groups.map(({ parent, children }) => ({
+              parent: { ...parent, seatNo: row.seatNo, courseOverride: row.courseOverride, ury_held: row.ury_held },
+              children,
+            }));
+            advanceRound(invoice, remaining, [...ready, ...configured]);
+          }} />
+      )}
       {openItemDialog && posProfile && (
         <PriceOverrideDialog
           open
