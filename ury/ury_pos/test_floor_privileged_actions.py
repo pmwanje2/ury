@@ -1062,6 +1062,65 @@ class TestFloorPrivilegedActions(unittest.TestCase):
         self.assertEqual(inv.pos_profile, "Main Till")
         self.assertEqual([call.args[0] for call in access.call_args_list], ["Main Till", "Rooftop Till"])
 
+    def test_picker_offers_all_compatible_destination_profiles(self):
+        profiles = [dict(pos_profile=name, company="Hotel", branch="Bar", currency=currency)
+                    for name, currency in [("Bar USD", "USD"), ("Bar Till", "KWD"), ("Bar Patio", "KWD")]]
+        self.assertEqual(self.floor.destination_profiles(profiles, "Bar", "Hotel", "KWD"),
+                         ["Bar Till", "Bar Patio"])
+
+    def test_counter_check_joins_existing_roster(self):
+        self.h.frappe.session.user = "manager@example.com"
+        inv = self.h.add_invoice("COUNTER", restaurant_table=None)
+        resident = self.h.add_invoice("RESIDENT", restaurant_table="RT-2")
+        table = self.h.tables["RT-2"]
+        table.seating_checks = json.dumps([resident.name])
+        self.floor.transfer_check_outlet(inv.name, "Rooftop Till", "RT-2", join_roster=1)
+        self.assertEqual(set(json.loads(table.seating_checks)), {inv.name, resident.name})
+        self.assertEqual(inv.restaurant_table, table.name)
+
+    def test_counter_destination_requires_authorized_branch(self):
+        self.h.frappe.session.user = "manager@example.com"
+        inv = self.h.add_invoice("COUNTER", restaurant_table=None)
+        self.h.profiles["Rooftop Till"].branch = None
+        ctx = sys.modules["ury.ury_pos.outlet_context"]
+        ctx.get_authorized_outlets = lambda: []
+        with self.assertRaises((PermissionError_, ValidationError)):
+            self.floor.transfer_check_outlet(inv.name, "Rooftop Till", "RT-1")
+        self.assertIsNone(inv.restaurant_table)
+
+    def test_destination_company_currency_applies_to_blank_profile(self):
+        inv = self.h.add_invoice("USD-CHECK", currency="USD")
+        target = self.h.profiles["Rooftop Till"]
+        target.currency = None
+        with patch.object(self.h.frappe.db, "get_value", return_value="UGX"):
+            with self.assertRaises(Exception) as error:
+                self.floor.validate_outlet_transfer(inv, target)
+            self.assertIn("currency", str(error.exception))
+
+    def test_rebinding_discards_origin_vat_and_preserves_option_rate(self):
+        inv = self.h.add_invoice("INV-TAX", taxes_and_charges="Origin VAT")
+        inv.items[1].update(custom_is_modifier=1, custom_parent_line_key="rk-1", rate=1250)
+        target = self.h.profiles["Rooftop Till"]
+        target.update(taxes_and_charges="Destination VAT", selling_price_list="Rooftop Prices")
+        with patch.object(self.order, "price_items_for_invoice", side_effect=lambda rows, *a, **kw:
+                          [dict(rate=770, price_list_rate=770) for row in rows]):
+            self.floor.rebind_outlet(inv, target)
+        self.assertEqual(inv.taxes_and_charges, "Destination VAT")
+        self.assertEqual([row.rate for row in inv.items], [770, 1250])
+
+    def test_printed_primary_state_reaches_merged_partner(self):
+        from ury.ury.api import table_lifecycle as floor
+        self.h.frappe.session.user = "manager@example.com"
+        inv = self.h.add_invoice("JOIN", restaurant_table="T1")
+        resident = self.h.add_invoice("RES", restaurant_table="T2", invoice_printed=1)
+        self.h.tables["T2"].update(occupied=1, merged_with="T3", custom_table_state="Check Printed")
+        self.h.tables["T3"].update(occupied=1, merged_with="T2", custom_table_state="Check Printed")
+        self.reservation_api.open_checks_on = lambda tables, **kw: [resident] if "T2" in tables else []
+        with patch.object(floor, "table_policy", return_value={"custom_table_release_trigger": floor.ON_SETTLEMENT}):
+            self.order.table_transfer("T1", "T3", inv.name, join_roster=1)
+        self.assertEqual(self.h.tables["T2"].custom_table_state, "Check Printed")
+        self.assertEqual(self.h.tables["T3"].custom_table_state, "Check Printed")
+
     # 7. Pick up another server's check keeps waiter sticky + sync_order escalation
     def test_pickup_other_check_requires_privilege_or_pin_and_keeps_waiter_sticky(self):
         self.assertIsNotNone(self.floor, "ury.ury_pos.floor_actions module missing")

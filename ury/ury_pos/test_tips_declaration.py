@@ -398,6 +398,17 @@ class TestTipsDeclaration(unittest.TestCase):
                 self.assertAlmostEqual(by_user["waiter2@example.test"]["net_tips_payable"], w2_net, places=expected_dp)
                 self.assertEqual(by_user["waiter1@example.test"]["employee"], "HR-EMP-001")
 
+    def test_unassigned_guest_tip_is_reconciled_without_payroll_employee(self):
+        store, _, td = self._env(currency="KWD")
+        row = store.invoices[0]
+        row.update(custom_ordering_session="QR-1", custom_tip_server="Administrator", waiter=None,
+                   owner="Administrator", custom_charged_tip=1.235)
+        rows = td.get_shift_tip_declaration_rows("POS-OPE-001")["rows"]
+        bucket = next(r for r in rows if r["user"] == "Guest")
+        self.assertEqual(bucket["net_tips_payable"], 1.235)
+        self.assertIsNone(bucket["employee"])
+        self.assertIn("unassigned", bucket["full_name"].lower())
+
     def test_cross_branch_user_cannot_read_shift_tip_rows(self):
         _store, _frappe, td = self._env(user="outsider@example.test")
         with self.assertRaises(NotPermitted):

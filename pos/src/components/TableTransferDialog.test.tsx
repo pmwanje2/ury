@@ -37,6 +37,18 @@ const mockTable = (name: string, room: string = "Main"): Table => ({
 });
 
 describe("TableTransferDialog", () => {
+  it("submits the selected destination profile", async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(<TableTransferDialog open onOpenChange={vi.fn()} sourceTable={mockTable("T1")}
+      destinationTables={[{ ...mockTable("T2"), transfer_profiles: ["Main", "Late"] }]}
+      onConfirm={onConfirm} />);
+    await user.click(screen.getByText("T2"));
+    await user.selectOptions(screen.getByRole("combobox"), "Late");
+    await user.click(screen.getByRole("button", { name: "Transfer" }));
+    expect(onConfirm).toHaveBeenCalledWith("T2", "Late");
+  });
+
   it("does not render when open is false", () => {
     const onOpenChange = vi.fn();
     const onConfirm = vi.fn();

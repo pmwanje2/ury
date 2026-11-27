@@ -1195,6 +1195,21 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
         with self.assertRaisesRegex(self.h.frappe.PermissionError, "POS-AUTH-REQUIRED"):
             self.inv_hook.validate_invoice(edited, "validate")
 
+    def test_transfer_context_preserves_sent_rows_and_still_checks_quantities(self):
+        from ury.ury_pos.transfer_context import outlet_transfer_save
+        self.h.frappe.session.user = "cashier@example.test"
+        orig = self.h.add_invoice("POS-MOVE", invoice_printed=0, has_sent_kot=True)
+        edited = Doc(orig, pos_profile="Other Till", branch="Other Branch")
+        edited["items"] = [Doc(row) for row in orig.items]
+        with outlet_transfer_save(edited):
+            self.inv_hook.validate_invoice(edited, "validate")
+            edited.items[0].qty -= 1
+            with self.assertRaises(self.h.frappe.PermissionError):
+                self.inv_hook.validate_invoice(edited, "validate")
+        edited.items[0].qty += 1
+        with self.assertRaises(self.h.frappe.PermissionError):
+            self.inv_hook.validate_invoice(edited, "validate")
+
     def test_before_cancel_blocks_direct_cancel_of_closed_and_fiscalised_pos_checks(self):
         self.h.frappe.session.user = "manager@example.test"
         fiscal = self.h.add_invoice("POS-FISC-1", docstatus=1, efris_irn="FDN-999")
