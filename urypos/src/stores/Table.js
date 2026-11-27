@@ -1,3 +1,4 @@
+import { invoiceCartRows } from "../utils/invoice-cart.js";
 import { defineStore } from "pinia";
 import router from "../router";
 import { useMenuStore } from "./Menu.js";
@@ -580,39 +581,7 @@ export const useTableStore = defineStore("table", {
             this.customers.newCustomerMobileNo = ""
           }
 
-          items.forEach((item) => {
-            const previousItem =
-              this.previousOrderdItem &&
-              this.previousOrderdItem.find(
-                (previousItem) => previousItem.item_code === item.item
-              );
-            if (previousItem && !item.qty) {
-              const itemIndex = cart.findIndex((obj) => obj.item === item.item);
-              const itemIndexExists = itemIndex !== -1;
-              if (!itemIndexExists) {
-                item.qty = previousItem.qty;
-                item.comment = previousItem.comment;
-                cart.push(item);
-              }
-            }
-          });
-          if (this.previousOrderdItem && this.previousOrderdItem.length > 0) {
-            this.previousOrderdItem.forEach((previousItem) => {
-              const existsInMenu = items.some(item => item.item === previousItem.item_code);
-              const existsInCart = cart.some(item => item.item === previousItem.item_code);
-
-              if (!existsInMenu && !existsInCart) {
-                // Item no longer in menu but was in previous order - add it to cart
-                cart.push({
-                  item: previousItem.item_code,
-                  item_name: previousItem.item_name,
-                  rate: previousItem.rate,
-                  qty: previousItem.qty,
-                  comment: previousItem.comment
-                });
-              }
-            });
-          }
+          cart.push(...invoiceCartRows(this.previousOrderdItem, items));
         })
         .catch((error) => {
           const permissionRefused = error?.httpStatus === 403 || error?.exc_type === "PermissionError";

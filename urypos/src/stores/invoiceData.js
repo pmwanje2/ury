@@ -205,7 +205,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
         const originalItems = {};
         pastOrderdItem.forEach(item => {
           originalItems[item.item_code] = {
-            qty: item.qty,
+            qty: (originalItems[item.item_code]?.qty || 0) + Number(item.qty),
             name: item.item_name
           };
         });
@@ -213,7 +213,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
         const currentItems = {};
         this.menu.cart.forEach(item => {
           currentItems[item.item] = {
-            qty: item.qty,
+            qty: (currentItems[item.item]?.qty || 0) + Number(item.qty),
             name: item.item_name
           };
         });

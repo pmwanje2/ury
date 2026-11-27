@@ -3807,6 +3807,75 @@ def _normalize_current_line_keys(items):
     return items
 
 
+def _restore_grouped_line_keys(items, saved_rows):
+    """Expand legacy full-cart totals against ordinary issued lines, in invoice order."""
+    def placement(row):
+        return (row.get("item") or row.get("item_code"), row.get("comment") or "",
+                cint(row.get("custom_seat_no") or row.get("seat_no")))
+
+    def ordinary(row):
+        return not (cint(row.get("ury_held")) or row.get("custom_parent_line_key")
+                    or row.get("custom_line_role") not in (None, "", "Standard")
+                    or cint(row.get("custom_is_modifier")) or row.get("custom_modifiers_json")
+                    or row.get("custom_bundle_overrides_json") or row.get("custom_kitchen_anchor")
+                    or cint(row.get("custom_is_open_item")) or cint(row.get("custom_is_complimentary"))
+                    or cint(row.get("custom_price_overridden")))
+
+    unnamed = [item for item in items if not item.get("name") and not item.get("reservation_line_key")]
+    if not unnamed:
+        return items
+    requested = Counter(placement(item) for item in unnamed)
+    claimed_names = {item["name"] for item in items if item.get("name")}
+    claimed_keys = {item["reservation_line_key"] for item in items if item.get("reservation_line_key")}
+    available = defaultdict(list)
+    for row in saved_rows:
+        if row.get("name") not in claimed_names and row.get("reservation_line_key") not in claimed_keys:
+            available[placement(row)].append(row)
+
+    restored = []
+    saved_positions = []
+    expanded_group = False
+    for item in items:
+        group = placement(item)
+        rows = available.get(group, ())
+        course = item.get("custom_course")
+        if course:
+            rows = [row for row in rows if row.get("custom_course") == course]
+        if (item.get("name") or item.get("reservation_line_key") or requested[group] != 1
+                or not any(row.get("reservation_line_key") for row in rows)
+                or len({row.get("custom_course") for row in rows}) != 1
+                or not ordinary(item) or not all(ordinary(row) for row in rows)
+                or flt(item.get("qty")) <= 0):
+            restored.append(item)
+            continue
+        expanded_group |= len(rows) > 1
+        remaining = Decimal(str(item["qty"]))
+        for row in rows:
+            portion = min(remaining, Decimal(str(row.get("qty") or 0)))
+            if portion <= 0:
+                continue
+            line = dict(item, qty=float(portion))
+            if row.get("custom_course"):
+                line["custom_course"] = row.get("custom_course")
+            if row.get("reservation_line_key"):
+                line.update(name=row.get("name"), reservation_line_key=row.get("reservation_line_key"))
+            saved_positions.append((len(restored), row.get("idx") or 0))
+            restored.append(line)
+            remaining -= portion
+            if not remaining:
+                break
+        if remaining:
+            # Additional portions are a new order at the active outlet.
+            restored.append(dict(item, qty=float(remaining), reservation_line_key=frappe.generate_hash(length=20)))
+    # Grouping also loses interleaving (e.g. soup, pie, soup). Keep the
+    # original invoice order among recovered portions; explicit/new rows stay put.
+    if expanded_group:
+        saved_order = [restored[slot] for slot, _ in sorted(saved_positions, key=lambda entry: entry[1])]
+        for (slot, _), line in zip(saved_positions, saved_order, strict=True):
+            restored[slot] = line
+    return restored
+
+
 def _backfill_previous_line_keys(previous_items, current_items):
     """Legacy bridge for orders placed BEFORE line keys were persisted.
 
@@ -4659,6 +4728,8 @@ def sync_order(
     items = [{**item, "comment": item.get("comment") or item.get("comments") or ""} for item in items]
 
     _normalize_current_line_keys(items)
+    if not append and past_item:
+        items = _restore_grouped_line_keys(items, invoice.items)
     parent_holds = {
         row.get("reservation_line_key"): cint(row.get("ury_held"))
         for row in past_item if row.get("reservation_line_key") and not row.get("custom_parent_line_key")

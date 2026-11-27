@@ -90,7 +90,9 @@ export const useMenuStore = defineStore("menu", {
     paginatedItems() {
       const startIndex = (this.currentPage - 1) * this.perPage;
       const endIndex = startIndex + this.perPage;
-      return this.filteredItems.slice(startIndex, endIndex);
+      return this.filteredItems.slice(startIndex, endIndex).map(
+        item => this.cart.find(line => line.item === item.item) || item
+      );
     },
     pageNumbers() {
       const pageNumbers = [];
