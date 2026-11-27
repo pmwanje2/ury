@@ -1,4 +1,12 @@
 {
+  "workstation": {
+    "exact": "Efectivo exacto",
+    "repeat": "Repetir ronda",
+    "overlay": "Mostrar camareros",
+    "check": "Cuenta",
+    "menu": "Menú",
+    "plu": "Código de artículo"
+  },
   "hold_fire": {
     "action": "la retención y el envío a cocina",
     "title": "Retención y envío a cocina",

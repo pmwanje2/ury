@@ -1,4 +1,12 @@
 {
+  "workstation": {
+    "exact": "المبلغ النقدي المطابق",
+    "repeat": "تكرار الجولة",
+    "overlay": "عرض النادل",
+    "check": "الحساب",
+    "menu": "القائمة",
+    "plu": "رمز الصنف"
+  },
   "_meta": {
     "language_code": "ar",
     "translation_method": "machine_translated",

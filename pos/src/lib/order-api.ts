@@ -420,6 +420,7 @@ export interface EfrisWarning {
 }
 
 export interface OrderTotalsPreview {
+  subtotal?: number;
   net_total: number;
   discount_amount: number;
   tax_rows: PreviewTaxRow[];

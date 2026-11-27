@@ -12,6 +12,9 @@ import { TABLE_STATE_STYLES } from './TableCard';
 
 
 interface Props {
+  servers?: Record<string, string>;
+  reserved?: { has: (name: string) => boolean };
+  onOpen?: (table: Table) => void;
   selectedRoom: string;
   tables: Table[];
   onBackToGrid: () => void;
@@ -20,7 +23,7 @@ interface Props {
   onPay?: (table: Table) => void;
 }
 
-const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRefresh, onMarkClean, onPay }) => {
+const LayoutView: React.FC<Props> = ({ servers, reserved, onOpen, selectedRoom, tables, onBackToGrid, onRefresh, onMarkClean, onPay }) => {
   const isRTL = document.dir === 'rtl';
   const [isEditMode, setIsEditMode] = useState(false);
 
@@ -189,6 +192,7 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
     if (table.occupied) return {
       color: TABLE_STATE_STYLES.occupied, label: table.custom_table_state === 'Seated' ? 'floor.seated' : 'tables.occupied', Icon: Users,
     };
+    if (reserved?.has(table.name)) return { color: TABLE_STATE_STYLES.reserved, label: 'tables.reserved_badge', Icon: Users };
     return { color: TABLE_STATE_STYLES.available, label: 'tables.available', Icon: CircleCheck };
   };
 
@@ -272,14 +276,20 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            setSelectedTable(table.name);
+            if (!isEditMode && onOpen && table.custom_table_state !== 'Dirty') onOpen(table);
+            else setSelectedTable(table.name);
           }
         }}
         style={style}
-        onMouseDown={(e) => handleMouseDown(e, table)}
+        onMouseDown={(e) => {
+          if (!isEditMode && onOpen && table.custom_table_state !== 'Dirty') e.stopPropagation();
+          else handleMouseDown(e, table);
+        }}
+        onClick={() => { if (!isEditMode) onOpen?.(table); }}
       >
         <div className="text-center p-1 overflow-hidden pointer-events-none">
           <div className="font-bold truncate px-1">{table.name}</div>
+          {servers?.[table.name] && <div className="text-xs">{servers[table.name]}</div>}
           <div className="text-[10px] flex items-center justify-center gap-1 opacity-80">
             <Icon className="w-3 h-3 shrink-0" aria-hidden />
             <span>{t(label)}</span>
@@ -341,10 +351,15 @@ const LayoutView: React.FC<Props> = ({ selectedRoom, tables, onBackToGrid, onRef
   const selectedTableData = tablesWithPosition.find(t => t.name === selectedTable);
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex min-h-0 flex-1 flex-col bg-muted text-foreground">
+      <div className="flex flex-wrap gap-1 bg-background p-2 text-xs">
+        {Object.entries({available:'tables.available', occupied:'tables.occupied', printed:'floor.check_printed',
+          dirty:'floor.dirty', reserved:'tables.reserved_badge'} as const).map(([state, label]) =>
+          <span key={state} className={cn('rounded border px-2 py-1', TABLE_STATE_STYLES[state as keyof typeof TABLE_STATE_STYLES])}>{t(label)}</span>)}
+      </div>
       {/* Header Controls */}
-      <div className="bg-white border-b border-border p-4">
-        <div className="flex items-center justify-between">
+      <div className="bg-background border-b border-border p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-4">
             <Button
               onClick={onBackToGrid}

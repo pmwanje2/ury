@@ -4,7 +4,7 @@ import { AlertTriangle, Layout, Square } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
 import {
-  getRooms,
+  getRoomServers, getRooms,
   markTableClean,
   getTables,
   getTableCount,
@@ -202,6 +202,7 @@ const TableView = () => {
   }, [branch]);
 
   useEffect(() => {
+    let current = true;
     async function fetchRooms() {
       if (!branch) return;
       setLoadingRooms(true);
@@ -209,27 +210,35 @@ const TableView = () => {
 
       try {
         const sessionKey = `ury_rooms_${branch}`;
-        const cachedRooms = sessionStorage.getItem(sessionKey);
-
-        if (cachedRooms) {
-          const parsedRooms = JSON.parse(cachedRooms) as Room[];
-          setRooms(parsedRooms);
-          setSelectedRoom((prev) => prev ?? (parsedRooms[0]?.name ?? null));
-        } else {
-          const fetchedRooms = await getRooms(branch);
-          setRooms(fetchedRooms);
-          setSelectedRoom((prev) => prev ?? (fetchedRooms[0]?.name ?? null));
-          sessionStorage.setItem(sessionKey, JSON.stringify(fetchedRooms));
+        const cached = sessionStorage.getItem(sessionKey);
+        let rooms: Room[] | undefined;
+        if (cached) {
+          try {
+            const rows = JSON.parse(cached);
+            if (Array.isArray(rows) && rows.every(row => row && Object.prototype.hasOwnProperty.call(row, 'room_type'))) rooms = rows;
+          } catch {
+            // Rebuild an unreadable cache from the outlet.
+          }
+        }
+        if (!rooms) {
+          rooms = (await getRooms(branch)).map(room => ({ ...room, room_type: room.room_type ?? '' }));
+          sessionStorage.setItem(sessionKey, JSON.stringify(rooms));
+        }
+        if (current) {
+          setRooms(rooms);
+          const availableRooms = rooms;
+          setSelectedRoom(prev => availableRooms.some(room => room.name === prev) ? prev : availableRooms[0]?.name ?? null);
         }
       } catch (e) {
         console.error(e);
-        setError(t('tables.failed_to_load_rooms'));
+        if (current) setError(t('tables.failed_to_load_rooms'));
       } finally {
-        setLoadingRooms(false);
+        if (current) setLoadingRooms(false);
       }
     }
 
     fetchRooms();
+    return () => { current = false; };
   }, [branch]);
 
   useEffect(() => {
@@ -743,6 +752,19 @@ const TableView = () => {
 
   const [isLayoutView, setIsLayoutView] = useState(false);
 
+  const [overlay, setOverlay] = useState(false);
+  const [servers, setServers] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let current = true;
+    setServers({});
+    if (isLayoutView && overlay && branch) {
+      getRoomServers(branch, tables.filter(table => table.occupied).map(table => table.name))
+        .then(result => { if (current) setServers(result); })
+        .catch(() => { if (current) showToast.error(t('tables.no_active_order')); });
+    }
+    return () => { current = false; };
+  }, [isLayoutView, overlay, branch, tables]);
+
   const handleLayoutView = () => {
     if (selectedRoom) {
       loadTables(selectedRoom, { useCache: false });
@@ -750,9 +772,26 @@ const TableView = () => {
     setIsLayoutView(true);
   };
 
-  if (isLayoutView && selectedRoom) {
+  if (isLayoutView && selectedRoom && !heldReservation) {
+    const selectedArea = rooms.find(room => room.name === selectedRoom)?.room_type;
     return (
+      <div className="flex h-full min-h-0 flex-col">
+        <nav className="flex flex-wrap items-center gap-1 bg-background p-2">
+          {[...new Set(rooms.map(room => room.room_type).filter(Boolean))].map(area =>
+            <Button key={area} variant="tab" data-selected={selectedArea === area}
+              onClick={() => handleRoomChange(rooms.find(room => room.room_type === area)!.name)}>{area}</Button>)}
+          {rooms.filter(room => !room.room_type || room.room_type === selectedArea).map(room =>
+            <Button key={room.name} variant="outline" aria-pressed={room.name === selectedRoom} onClick={() => handleRoomChange(room.name)}>{room.name}</Button>)}
+          <Button variant="outline" aria-pressed={overlay} onClick={() => setOverlay(!overlay)}>{t('workstation.overlay')}</Button>
+        </nav>
       <LayoutView
+        servers={overlay ? servers : {}}
+        reserved={lockActiveReservationsByTable}
+        onOpen={table => {
+          if (table.custom_table_state === 'Dirty' && branchSettings?.block_dirty_table_seating !== 0) return;
+          if (table.custom_table_state === 'Check Printed') void payTable(table);
+          else void handleNavigateToPOS(table.name);
+        }}
         selectedRoom={selectedRoom}
         tables={tablesToDisplay}
         onBackToGrid={() => setIsLayoutView(false)}
@@ -760,6 +799,7 @@ const TableView = () => {
         onPay={(table) => void payTable(table)}
         onRefresh={() => loadTables(selectedRoom, { useCache: false })}
       />
+      </div>
     );
   }
 

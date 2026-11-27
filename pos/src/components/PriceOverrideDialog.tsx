@@ -44,6 +44,7 @@ export interface PriceOverrideDialogProps {
   table?: string | null;
   customer?: string | null;
   noOfPax?: number;
+  initialQuantity?: number;
   onSuccess: (result?: Record<string, unknown>) => void | Promise<void>;
 }
 
@@ -63,6 +64,7 @@ export default function PriceOverrideDialog({
   table,
   customer,
   noOfPax,
+  initialQuantity = 1,
   onSuccess,
 }: PriceOverrideDialogProps) {
   const privilege = mode === 'override' ? 'price_override' : 'open_item';
@@ -89,7 +91,7 @@ export default function PriceOverrideDialog({
     }
     setSelectedOpenItem(itemCode || openItems?.[0]?.item || '');
     setRateInput(mode === 'override' ? String(currentRate ?? '') : '');
-    setQtyInput('1');
+    setQtyInput(String(initialQuantity));
     setReference('');
     setSelectedReason('');
     setReasonNote('');
@@ -106,7 +108,7 @@ export default function PriceOverrideDialog({
     return () => {
       active = false;
     };
-  }, [open, mode, currentRate, privilege, itemCode, openItems]);
+  }, [open, mode, currentRate, privilege, itemCode, openItems, initialQuantity]);
 
   const effectiveItemCode =
     mode === 'open_item' ? selectedOpenItem || itemCode || openItems?.[0]?.item || '' : itemCode || '';

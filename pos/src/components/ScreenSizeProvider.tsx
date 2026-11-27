@@ -5,43 +5,24 @@ import ScreenSizeDialog from './ScreenSizeDialog';
 
 interface ScreenSizeProviderProps {
   children: React.ReactNode;
+  pathname?: string;
 }
 
-const isCaptainRoute = () => window.location.pathname.includes('/order');
-
-const ScreenSizeProvider = ({ children }: ScreenSizeProviderProps) => {
+const ScreenSizeProvider = ({ children, pathname = window.location.pathname }: ScreenSizeProviderProps) => {
   const phoneTill = usePOSStore((state) => offlineCaptureEnabled(state.posProfile));
-  const [isScreenTooSmall, setIsScreenTooSmall] = useState(false);
-
-  const checkScreenSize = () => {
-    const isSmall = window.innerWidth < (phoneTill ? 320 : 1024) && !isCaptainRoute();
-    setIsScreenTooSmall(isSmall);
-  };
-
+  const [width, setWidth] = useState(() => window.innerWidth);
   useEffect(() => {
-    // Check on mount
-    checkScreenSize();
+    const resize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
 
-    // Add resize listener
-    const handleResize = () => {
-      checkScreenSize();
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    // Cleanup
-    return () => {
-      window.removeEventListener('resize', handleResize);
-    };
-  }, [phoneTill]);
-
-  // Show dialog if screen is too small
-  if (isScreenTooSmall) {
+  const route = pathname.replace(/^\/pos(?=\/|$)/, '').replace(/\/$/, '');
+  const handheldRoute = ['', '/register', '/tables', '/table'].includes(route);
+  if (!pathname.includes('/order') && width < (handheldRoute || phoneTill ? 320 : 1024)) {
     return <ScreenSizeDialog />;
   }
-
-  // Render children if screen size is acceptable
   return <>{children}</>;
 };
 
-export default ScreenSizeProvider; 
+export default ScreenSizeProvider;

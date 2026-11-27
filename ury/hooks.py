@@ -829,6 +829,7 @@ fixtures = [
                     "POS Profile-custom_floor_idle_signout_seconds",
                     "POS Profile-custom_floor_signout_after_send",
                     "POS Profile-custom_floor_stay_signed_in_roles",
+                    "POS Profile-custom_workstation_layout",
                     "POS Profile-custom_floor_pin_login",
                     "POS Profile-custom_floor_pin_roles",
                     "POS Profile-custom_floor_device_epoch",

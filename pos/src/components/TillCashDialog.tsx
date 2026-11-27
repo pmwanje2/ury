@@ -53,6 +53,7 @@ import {
 } from '../lib/till-controls-api';
 
 interface TillCashDialogProps {
+  initialTab?: TillMenuTab;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -91,7 +92,7 @@ type PendingApprovalKind =
       needsPicker: boolean;
     };
 
-const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
+const TillCashDialog = ({ open, onOpenChange, initialTab }: TillCashDialogProps) => {
   const { posProfile } = usePOSStore();
   const posProfileName = posProfile?.name || '';
 
@@ -105,7 +106,7 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
   const [busyRow, setBusyRow] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<TillMenuTab>('Pickup');
+  const [activeTab, setActiveTab] = useState<TillMenuTab>(initialTab || 'Pickup');
   const [amountInput, setAmountInput] = useState('');
   const [reason, setReason] = useState('');
   const [reference, setReference] = useState('');

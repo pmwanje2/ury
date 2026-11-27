@@ -1,7 +1,8 @@
+import { hasTillRole } from '../lib/home-route';
 import { coversLimit } from '@ury/core/covers';
 import { useEffect, useMemo, useState } from 'react';
 import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { usePOSStore } from '../store/pos-store';
+import { usePOSStore, type OrderItem } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { formatCurrency, parseFrappeError } from '@ury/core';
 import { resolveDefaultCustomer } from '@ury/core/default-customer';
@@ -45,8 +46,9 @@ const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'w
 
 const EMPTY_AVAILABILITY: MenuAvailability = {};
 
-const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPTY_AVAILABILITY }: {
+const OrderPanel = ({ onCashierCheck, onRoundSent, availabilityMap: availabilityByItem = EMPTY_AVAILABILITY }: {
   onCashierCheck?: (invoice: SavedInvoice) => void;
+  onRoundSent?: (invoice: string, round: OrderItem[]) => void;
   availabilityMap?: MenuAvailability;
 }) => {
   const { 
@@ -84,6 +86,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     lastModifiedTime
   } = usePOSStore();
   const activeCurrency = posProfile?.currency || storeCurrency;
+  const checkMoney = (amount: number) => formatCurrency(amount, activeCurrency, { fixedPrecision: true });
   const [extraSeatLimit, setExtraSeatLimit] = useState(0);
   const seatLimit = Math.max(noOfPax || 0, 4, activeSeat, extraSeatLimit, ...activeOrders.map((line) => line.seatNo || 0));
   const seats = Array.from({ length: Math.min(99, seatLimit) + 1 }, (_, index) => index);
@@ -367,7 +370,12 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
             ? t('success.order_updated')
             : t('success.order_created'),
       );
-      if (result?.message && 'name' in result.message && user.roles?.includes('URY Cashier')) {
+      if (result?.message && 'name' in result.message && hasTillRole(user, posProfile)) {
+        const previous = new Map(originalSentItems.map(row => [row.reservation_line_key, row.qty]));
+        const round = activeOrders.map(line => ({
+          ...line, quantity: line.quantity - (previous.get(line.reservationLineKey || '') || 0),
+        })).filter(line => line.quantity > 0 && !line.ury_held);
+        if (round.length) onRoundSent?.(result.message.name, round);
         onCashierCheck?.(result.message);
       }
     } catch (error) {
@@ -625,7 +633,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const isInteractionDisabled = isOrderInteractionDisabled() || isSubmitting;
 
   return (
-    <div data-testid="order-panel" className="min-h-0 w-full flex-1 overflow-y-auto border-t border-border bg-white lg:flex lg:h-full lg:w-96 lg:flex-none lg:flex-col lg:overflow-hidden lg:border-s lg:border-t-0">
+    <div data-testid="order-panel" className="min-h-0 w-full flex-1 overflow-y-auto border-t border-border bg-background text-foreground lg:flex lg:h-full lg:w-96 lg:flex-none lg:flex-col lg:overflow-hidden lg:border-s lg:border-t-0">
       <div className="min-h-0 overflow-y-auto border-b border-border p-4">
         {outbox.queue && outbox.offline && <label className="block text-sm mb-2">{t('offline.round_target')}
           <select data-testid="offline-round-target" className="block w-full border p-1" value={offlineTarget} disabled={isInteractionDisabled || outbox.replaying} onChange={(event) => setOfflineTarget(event.target.value)}>
@@ -633,6 +641,11 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
             {outbox.rows.filter((row) => row.state === 'pending' && !row.settlement && row.next_round === 0).map((row) => <option key={row.client_order_id} value={row.client_order_id}>{row.order.customer} · {row.client_order_id.slice(0, 8)}</option>)}
           </select>
         </label>}
+        <div className="flex flex-wrap gap-2 text-sm font-semibold text-foreground">
+          {orderId && <span>{t('workstation.check')} {orderId}</span>}
+          {selectedTable && <span>{selectedTable}</span>}
+          {posProfile?.active_business_date && <time>{posProfile.active_business_date}</time>}
+        </div>
         <OrderTypeSelect disabled={isInteractionDisabled} />
         <div className="mt-3"><CustomerSelect disabled={isInteractionDisabled} /></div>
         <div className="mt-3 flex items-center justify-between">
@@ -702,14 +715,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                         {item.name}
                       </p>
                       <p className="text-gray-500">
-                        {item.quantity} × {formatCurrency(item.price, activeCurrency)}
+                        {item.quantity} × {checkMoney(item.price)}
                       </p>
                     </div>
                     <span className="ms-2 shrink-0 flex items-center gap-1 font-medium text-gray-700 tabular-nums">
-                      <span>{formatCurrency(lineTotal, activeCurrency)}</span>
+                      <span>{checkMoney(lineTotal)}</span>
                       {lineTotal < baseLineTotal && (
                         <span className="text-[11px] text-gray-400 line-through">
-                          {formatCurrency(baseLineTotal, activeCurrency)}
+                          {checkMoney(baseLineTotal)}
                         </span>
                       )}
                     </span>
@@ -725,10 +738,13 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                     isInteractionDisabled && "opacity-50"
                   )}
                 >
+                  {(item.courseOverride || item.course) && (idx === 0 || (activeOrders[idx-1].courseOverride || activeOrders[idx-1].course) !== (item.courseOverride || item.course)) &&
+                    <h4 className="text-xs font-semibold text-muted-foreground">{item.courseOverride || item.course}</h4>}
                   <div className="flex items-center justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <h3 className="font-medium text-gray-900 text-sm">{item.name}</h3>
+                        <h3 className="font-medium text-foreground text-sm">{item.name}</h3>
+                        {item.seatNo ? <Badge size="sm">{t('floor.seat_short', { seat: item.seatNo })}</Badge> : null}
                         {!item.ury_held && orderId && kotState[item.item] && (
                           <Badge
                             size="sm"
@@ -791,10 +807,10 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                         </div>
                       )}
                       <p className="flex items-center gap-1.5 text-gray-600 text-sm tabular-nums">
-                        <span>{formatCurrency(lineTotal, activeCurrency)}</span>
+                        <span>{checkMoney(lineTotal)}</span>
                         {lineTotal < baseLineTotal && (
                           <span className="text-xs text-gray-400 line-through">
-                            {formatCurrency(baseLineTotal, activeCurrency)}
+                            {checkMoney(baseLineTotal)}
                           </span>
                         )}
                       </p>
@@ -913,13 +929,13 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs text-gray-600">
-                    {t('privileged_actions.sc_summary_net')}: {formatCurrency(hasServerPreview && orderPreview ? orderPreview.net_total : total, activeCurrency)}
+                    {t(hasServerPreview ? 'payment.subtotal' : 'privileged_actions.sc_summary_net')}: {checkMoney(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total)}
                     {hasServerPreview
                       ? serverServiceChargeTotal > 0
-                        ? ` · ${serverServiceChargeRows[0]?.description || t('privileged_actions.service_charge')}: ${formatCurrency(serverServiceChargeTotal, activeCurrency)}`
+                        ? ` · ${serverServiceChargeRows[0]?.description || t('privileged_actions.service_charge')}: ${checkMoney(serverServiceChargeTotal)}`
                         : ''
                       : activeServiceChargeRule && estimatedServiceCharge > 0
-                        ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${formatCurrency(estimatedServiceCharge, activeCurrency)}`
+                        ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${checkMoney(estimatedServiceCharge)}`
                         : ''}
                   </div>
                   <div className="text-xs font-medium text-blue-700">
@@ -927,20 +943,20 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5 font-semibold text-gray-900 tabular-nums">
-                  <span>{formatCurrency(displayTotal, activeCurrency)}</span>
+                  <span>{checkMoney(displayTotal)}</span>
                   {mobileSummaryOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </div>
               </button>
               {mobileSummaryOpen && (
                 <div className="mt-2 rounded-md border border-gray-200 bg-white p-3 space-y-1.5 text-sm">
                   <div className="flex items-center justify-between text-gray-600">
-                    <span>{t('privileged_actions.sc_summary_net')}</span>
-                    <span className="tabular-nums">{formatCurrency(hasServerPreview && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
+                    <span>{t(hasServerPreview ? 'payment.subtotal' : 'privileged_actions.sc_summary_net')}</span>
+                    <span className="tabular-nums">{checkMoney(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total)}</span>
                   </div>
-                  {hasServerPreview && orderPreview && orderPreview.discount_amount > 0 && (
+                  {hasServerPreview && orderPreview && (
                     <div className="flex items-center justify-between text-emerald-700 tabular-nums">
                       <span>{t('cart.discount')}</span>
-                      <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
+                      <span>-{checkMoney(orderPreview.discount_amount)}</span>
                     </div>
                   )}
                   {showClientServiceChargeEstimate && activeServiceChargeRule && (
@@ -950,10 +966,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                         {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
                       </span>
                       <span className="shrink-0 tabular-nums font-medium">
-                        {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                        {checkMoney(estimatedServiceCharge)}
                       </span>
                     </div>
                   )}
+                  {hasServerPreview && orderPreview && !serverServiceChargeRows.length && <div className="flex justify-between text-sm">
+                    <span>{t('privileged_actions.service_charge')}</span><span>{checkMoney(0)}</span></div>}
+                  {hasServerPreview && orderPreview && !orderPreview.tax_rows.some(row => !isServiceChargePreviewRow(row)) && <div className="flex justify-between text-sm">
+                    <span>{t('cart.tax')}</span><span>{checkMoney(0)}</span></div>}
                   {hasServerPreview && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => (
                     <div
                       key={`${taxRow.description}-${idx}`}
@@ -962,12 +982,12 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                       <span className="min-w-0 truncate">
                         {formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'))}
                       </span>
-                      <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
+                      <span className="shrink-0">{checkMoney(taxRow.tax_amount)}</span>
                     </div>
                   ))}
                   <div className="flex items-center justify-between border-t border-gray-100 pt-1.5 font-semibold text-gray-900">
                     <span>{t('cart.total')}</span>
-                    <span className="tabular-nums">{formatCurrency(displayTotal, activeCurrency)}</span>
+                    <span className="tabular-nums">{checkMoney(displayTotal)}</span>
                   </div>
                 </div>
               )}
@@ -978,13 +998,13 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
               {hasServerPreview || showClientServiceChargeEstimate ? (
                 <>
                   <div className="flex items-center justify-between text-xs text-gray-600 tabular-nums">
-                    <span>{hasServerPreview ? t('cart.net_total') : t('privileged_actions.sc_summary_net')}</span>
-                    <span>{formatCurrency(hasServerPreview && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
+                    <span>{hasServerPreview ? t('payment.subtotal') : t('privileged_actions.sc_summary_net')}</span>
+                    <span>{checkMoney(hasServerPreview && orderPreview ? (orderPreview.subtotal ?? orderPreview.net_total) : total)}</span>
                   </div>
-                  {hasServerPreview && orderPreview && orderPreview.discount_amount > 0 && (
+                  {hasServerPreview && orderPreview && (
                     <div className="flex items-center justify-between text-xs text-emerald-700 tabular-nums">
                       <span>{t('cart.discount')}</span>
-                      <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
+                      <span>-{checkMoney(orderPreview.discount_amount)}</span>
                     </div>
                   )}
                   {showClientServiceChargeEstimate && activeServiceChargeRule && (
@@ -1008,10 +1028,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                         </span>
                       )}
                       <span className="shrink-0 tabular-nums font-medium">
-                        {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                        {checkMoney(estimatedServiceCharge)}
                       </span>
                     </div>
                   )}
+                  {hasServerPreview && orderPreview && !serverServiceChargeRows.length && <div className="flex justify-between text-sm">
+                    <span>{t('privileged_actions.service_charge')}</span><span>{checkMoney(0)}</span></div>}
+                  {hasServerPreview && orderPreview && !orderPreview.tax_rows.some(row => !isServiceChargePreviewRow(row)) && <div className="flex justify-between text-sm">
+                    <span>{t('cart.tax')}</span><span>{checkMoney(0)}</span></div>}
                   {hasServerPreview && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => {
                     const isScRow = isServiceChargePreviewRow(taxRow);
                     const rowLabel = formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'));
@@ -1032,7 +1056,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                         ) : (
                           <span className="truncate pe-2">{rowLabel}</span>
                         )}
-                        <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
+                        <span className="shrink-0">{checkMoney(taxRow.tax_amount)}</span>
                       </div>
                     );
                   })}
@@ -1076,7 +1100,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                 </Button>
                 <span className="text-lg font-semibold">{t('cart.total')}</span>
               </div>
-              <span className="text-lg font-semibold tabular-nums">{formatCurrency(displayTotal, activeCurrency)}</span>
+              <span className="text-lg font-semibold tabular-nums">{checkMoney(displayTotal)}</span>
             </div>
             <Button
               onClick={handleSubmit}

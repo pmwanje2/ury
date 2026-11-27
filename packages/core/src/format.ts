@@ -122,7 +122,7 @@ function fallbackCurrency(): CurrencyInfo {
  * digits (``en``; Indian grouping only for INR). A mixed currency
  * (``code: null``) renders the bare number, never a guessed symbol.
  */
-export function formatCurrency(amount: number, currency?: CurrencyInfo | string | null): string {
+export function formatCurrency(amount: number, currency?: CurrencyInfo | string | null, options?: { fixedPrecision?: boolean }): string {
   const info = resolveCurrency(currency) ?? fallbackCurrency();
 
   if (typeof amount !== 'number' || isNaN(amount)) {
@@ -133,8 +133,10 @@ export function formatCurrency(amount: number, currency?: CurrencyInfo | string 
     return amount.toLocaleString('en', { maximumFractionDigits: 2 });
   }
 
+  const digits = currencyFractionDigits(info.code);
   const formattedVal = amount.toLocaleString(isIndianGrouping(info.code) ? 'en-IN' : 'en', {
-    maximumFractionDigits: currencyFractionDigits(info.code),
+    minimumFractionDigits: options?.fixedPrecision ? digits : 0,
+    maximumFractionDigits: digits,
   });
   return joinMoney(currencyDisplaySymbol(info.code, info.symbol), formattedVal);
 }

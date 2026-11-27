@@ -96,10 +96,10 @@ test('the phone menu can add a cart line below the offline banner without reserv
   }
 });
 
-test('a phone without offline capture still sees the desktop-only guard', async () => {
+test('a phone without offline capture still sees the desktop-only guard on settings', async () => {
   vi.stubGlobal('innerWidth', 390);
   usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, ury_offline_capture: 0 } });
-  await act(async () => root.render(<ScreenSizeProvider><POS /></ScreenSizeProvider>));
+  await act(async () => root.render(<ScreenSizeProvider pathname="/settings"><POS /></ScreenSizeProvider>));
   expect(within(container).getByRole('heading', { name: 'Desktop Only' })).toBeVisible();
   expect(within(container).queryByTestId('order-panel')).toBeNull();
 });
