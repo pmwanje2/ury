@@ -227,3 +227,46 @@ it('can start a new check after loading a vacant table with no saved invoice', a
     invoice: null, table: 'T2', items: [expect.objectContaining({ item: 'Tea' })],
   }));
 });
+
+it.each([
+  ['local document marker', { __islocal: 1 }],
+  ['POS Invoice doctype', { doctype: 'POS Invoice' }],
+])('sends the first order for an occupied seated reservation after loading a new check (%s)', async (_, marker) => {
+  setActivePinia(createPinia());
+  const floor = useTableStore();
+  const invoice = useInvoiceDataStore();
+  vi.spyOn(floor, 'fetchTable').mockImplementation(() => {});
+  api.get.mockResolvedValueOnce({ message: { ...marker, name: null, items: [] } });
+  api.post.mockClear().mockResolvedValueOnce({ message: { name: 'First-check' } });
+
+  floor.routeToMenu({ name: 'T1', occupied: 1 });
+  await flushPromises();
+  floor.customers.numberOfPax = 2;
+  floor.menu.addToCart({ item: 'Pie', rate: 5 });
+  await invoice.invoiceCreation();
+
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(api.post).toHaveBeenCalledWith(expect.stringMatching(/\.sync_order$/), expect.objectContaining({
+    invoice: null, table: 'T1', no_of_pax: 2, items: [expect.objectContaining({ item: 'Pie', qty: 1 })],
+  }));
+});
+
+it.each([
+  ['missing items', { name: null, __islocal: 1 }],
+  ['wrong doctype', { name: null, doctype: 'Sales Invoice', __islocal: 1, items: [] }],
+  ['populated anonymous check', { name: null, doctype: 'POS Invoice', items: [{ item_code: 'Soup' }] }],
+  ['empty payload', {}],
+])('keeps Send blocked for an occupied table after a malformed first-check response (%s)', async (_, message) => {
+  setActivePinia(createPinia());
+  const floor = useTableStore();
+  vi.spyOn(floor, 'fetchTable').mockImplementation(() => {});
+  api.get.mockResolvedValueOnce({ message });
+  api.post.mockClear().mockResolvedValueOnce({ message: { name: 'Unexpected' } });
+
+  floor.routeToMenu({ name: 'T1', occupied: 1 });
+  await flushPromises();
+  floor.customers.numberOfPax = 2;
+  floor.menu.addToCart({ item: 'Pie', rate: 5 });
+  await useInvoiceDataStore().invoiceCreation();
+  expect(api.post).not.toHaveBeenCalled();
+});
