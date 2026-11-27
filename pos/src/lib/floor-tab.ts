@@ -55,22 +55,26 @@ export function revokeTabConfirmation(): void {
   }
 }
 
-function confirmedInTab(key: string, user: string): boolean {
-  if (window.name === LOCKED_TAB_NAME) return false;
+function confirmedUser(key: string): string | undefined {
+  if (window.name === LOCKED_TAB_NAME) return;
   try {
     const record = JSON.parse(sessionStorage.getItem(key) || 'null');
-    return !!user && record?.user === user && record.tabId === currentTabId();
+    if (record?.tabId === currentTabId() && typeof record.user === 'string') return record.user;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
+export function confirmedTabUser(): string | undefined {
+  return confirmedUser(FLOOR_SESSION_MARKER) ?? confirmedUser(RECOVERY_MARKER);
+}
+
 export function hasFloorSessionMarker(user: string): boolean {
-  return confirmedInTab(FLOOR_SESSION_MARKER, user);
+  return !!user && confirmedUser(FLOOR_SESSION_MARKER) === user;
 }
 
 export function hasRecoveryConfirmation(user: string): boolean {
-  return confirmedInTab(RECOVERY_MARKER, user);
+  return !!user && confirmedUser(RECOVERY_MARKER) === user;
 }
 
 export function isFloorSessionConfirmedForTab(user?: string): boolean {

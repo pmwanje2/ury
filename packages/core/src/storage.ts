@@ -109,11 +109,10 @@ export function getUserSessionStorageKey(key: string, user: string | null | unde
 
 export const getSessionUser = (): string | null => {
   if (typeof document === 'undefined') return null;
-  const cookie = document.cookie.split(';').map((part) => part.trim())
-    .find((part) => part.startsWith('user_id='));
-  if (!cookie) return null;
   try {
-    return decodeURIComponent(cookie.slice('user_id='.length)) || null;
+    const cookie = document.cookie.split(';').map((part) => part.trim())
+      .find((part) => part.startsWith('user_id='));
+    return cookie ? decodeURIComponent(cookie.slice('user_id='.length)) || null : null;
   } catch {
     return null;
   }

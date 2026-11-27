@@ -136,7 +136,16 @@ def guard_floor_request_user():
         expected = request.args.get("ury_floor_print_user")
     if isinstance(expected, str) and expected and (expected != frappe.session.user or expected == "Guest"):
         frappe.local.response_headers["X-URY-Floor-Error"] = "URY_FLOOR_SESSION_MISMATCH"
-        raise frappe.AuthenticationError("URY_FLOOR_SESSION_MISMATCH")
+        # Session resume may already have queued Set-Cookie headers. A late
+        # mismatch response must not overwrite a newer login in another tab.
+        manager = frappe.local.cookie_manager
+        identity_cookies = {"sid", "user_id", "full_name", "user_image", "user_lang", "system_user"}
+        for key in identity_cookies:
+            manager.cookies.pop(key, None)
+        manager.to_delete = [key for key in manager.to_delete if key not in identity_cookies]
+        # AuthenticationError would requeue deletions in Frappe's error handler.
+        frappe.local.response["floor_error"] = "URY_FLOOR_SESSION_MISMATCH"
+        raise frappe.PermissionError("URY_FLOOR_SESSION_MISMATCH")
 
 
 def on_session_creation(login_manager=None):

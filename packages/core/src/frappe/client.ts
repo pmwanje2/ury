@@ -1,4 +1,4 @@
-import { FLOOR_USER_HEADER, sdkFloorRequestUser, rejectFloorRequest } from './floor-request';
+import { FLOOR_USER_HEADER, sdkFloorRequestUser, checkFloorFailure } from './floor-request';
 import { FrappeApp } from "frappe-js-sdk";
 
 export function createFrappeClient(baseUrl: string | undefined = import.meta.env?.VITE_FRAPPE_BASE_URL) {
@@ -16,8 +16,9 @@ transport.interceptors.request.use(config => {
 });
 transport.interceptors.response.use(undefined, (error) => {
   const expected = error?.config?.headers?.get?.(FLOOR_USER_HEADER);
-  if (expected && error.response?.headers?.get?.('X-URY-Floor-Error') === 'URY_FLOOR_SESSION_MISMATCH') {
-    rejectFloorRequest(expected);
+  if (expected) {
+    const headers = error.response?.headers;
+    checkFloorFailure(expected, headers?.get?.('X-URY-Floor-Error') ?? headers?.['x-ury-floor-error'], error.response?.data);
   }
   if (error && typeof error === 'object' && !error.response && error.code === 'ERR_NETWORK') {
     error.response = {

@@ -125,7 +125,7 @@ function ColdBootSignOut({ profile, user, passwordOnly, failedLogout }: { failed
 
   useEffect(() => retryFloorSignOut((result) => {
     if (result !== 'cancelled') setState(result);
-  }, failedLogout), [failedLogout]);
+  }, failedLogout, user.name), [failedLogout, user.name]);
 
   if (state === 'signed_out' || state === 'logout_failed') return <FloorPinPad usernameOnly={passwordOnly || state === 'logout_failed'} />;
   if (state === 'checking') return <Spinner message={t('common.loading')} />;

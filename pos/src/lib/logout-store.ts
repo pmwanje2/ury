@@ -21,7 +21,11 @@ async function markerRequest<T>(mode: IDBTransactionMode, operation: (store: IDB
 }
 
 export async function readLogoutMarker(): Promise<boolean> {
-  return Boolean(await markerRequest('readonly', store => store.get('failed')));
+  return Boolean(await readLogoutOwner());
+}
+
+export function readLogoutOwner(): Promise<string | undefined> {
+  return markerRequest('readonly', store => store.get('failed'));
 }
 
 export async function writeLogoutMarker(user: string | null): Promise<void> {

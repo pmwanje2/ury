@@ -1,8 +1,9 @@
+import { admittedFloorRequestUser } from '@ury/core/floor-request';
 import { v4 as uuid } from 'uuid';
-import { readGeneration, writeGeneration, readLogoutMarker, writeLogoutMarker } from './logout-store';
+import { readGeneration, writeGeneration, readLogoutMarker, readLogoutOwner, writeLogoutMarker } from './logout-store';
 import { hasWebLocks, withEmptyOutbox } from '../offline/outbox';
 import { showToast } from '@ury/ui';
-import { FLOOR_TAB_LOCKED, boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
+import { FLOOR_TAB_LOCKED, boundTabGeneration, confirmedTabUser, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
 export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
 import { useEffect } from 'react';
 import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
@@ -201,11 +202,11 @@ export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | 
 type SignOutResult = 'signed_out' | 'logout_failed' | 'blocked' | 'cancelled';
 
 // Recheck under the outbox lock, including when replay ran in a different tab.
-export function retryFloorSignOut(onResult?: (result: SignOutResult) => void, retryingFailedLogout = false): () => void {
+export function retryFloorSignOut(onResult?: (result: SignOutResult) => void, retryingFailedLogout = false, admittedUser?: string): () => void {
   let cancelled = false;
   let timer: ReturnType<typeof setTimeout>;
   const attempt = async () => {
-    const result = await floorSignOut(() => !cancelled, retryingFailedLogout);
+    const result = await floorSignOut(() => !cancelled, retryingFailedLogout, admittedUser);
     if (cancelled) return;
     onResult?.(result);
     if (result === 'blocked') timer = setTimeout(attempt, 5000);
@@ -221,7 +222,7 @@ export function retryFloorSignOut(onResult?: (result: SignOutResult) => void, re
  * End a shared-tablet session even when the server cannot answer, so the next
  * waiter never inherits the previous user's tab state.
  */
-export async function floorSignOut(stillRequested?: () => boolean, retryingFailedLogout = false): Promise<SignOutResult> {
+export async function floorSignOut(stillRequested?: () => boolean, retryingFailedLogout = false, admittedUser?: string): Promise<SignOutResult> {
   let outcome: SignOutResult = 'cancelled';
   try {
     await withEmptyOutbox(async () => {
@@ -232,7 +233,7 @@ export async function floorSignOut(stillRequested?: () => boolean, retryingFaile
         }
         if (!stillRequested()) return;
       }
-      outcome = await endFloorSession(retryingFailedLogout, stillRequested);
+      outcome = await endFloorSession(retryingFailedLogout, stillRequested, admittedUser);
     });
     return outcome;
   } catch (error) {
@@ -251,7 +252,7 @@ function lockLogoutTab(): false {
   return false;
 }
 
-export async function logoutWithFloorMarker(stillRequested?: () => boolean): Promise<boolean | undefined> {
+export async function logoutWithFloorMarker(stillRequested?: () => boolean, admittedUser?: string, retry = false): Promise<boolean | undefined> {
   // Check the caller after acquiring the same lock used by verified login.
   if (!hasWebLocks()) return lockLogoutTab();
   const bound = boundTabGeneration();
@@ -269,13 +270,23 @@ export async function logoutWithFloorMarker(stillRequested?: () => boolean): Pro
   }
   if (expected !== current) return lockLogoutTab();
 
+  // Desk logins can replace the cookie without advancing the POS generation.
+  const owner = confirmedTabUser() ?? admittedFloorRequestUser() ?? admittedUser;
+  if (!owner || owner === 'Guest' || (admittedUser && admittedUser !== owner) || getSessionUser() !== owner) {
+    return lockLogoutTab();
+  }
+  if (retry || privateRetry !== null) {
+    let failedOwner: string | null | undefined;
+    try { failedOwner = localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER); } catch { /* Try IndexedDB. */ }
+    if (!failedOwner) failedOwner = await readLogoutOwner().catch(() => undefined);
+    if (failedOwner !== owner) return lockLogoutTab();
+  }
+
   // Activity may cancel an idle logout while its generation is being read.
   if (stillRequested && !stillRequested()) return undefined;
 
   // Persist before the network request: the tab may close while logout is in flight.
   try { clearTabConfirmation(); } catch { /* Still attempt server logout. */ }
-  let owner = 'true';
-  try { owner = getSessionUser() || owner; } catch { /* Cookies may be inaccessible. */ }
   let localSaved = false;
   try {
     localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, owner);
@@ -299,7 +310,14 @@ export async function logoutWithFloorMarker(stillRequested?: () => boolean): Pro
     }
   } catch { /* The origin-wide failure markers still protect accessible storage. */ }
   announceSessionChange('logout', generation);
-  if (await logout().catch(() => false) === false) {
+  let signedOut;
+  try {
+    signedOut = await logout(owner);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'URY_FLOOR_SESSION_MISMATCH') return lockLogoutTab();
+    signedOut = false;
+  }
+  if (signedOut === false) {
     // A retry from this control belongs to the generation its own logout attempt created.
     try {
       if (generation) observeTabGeneration(generation);
@@ -312,9 +330,9 @@ export async function logoutWithFloorMarker(stillRequested?: () => boolean): Pro
   return true;
 }
 
-async function endFloorSession(retryingFailedLogout: boolean, stillRequested?: () => boolean): Promise<SignOutResult> {
+async function endFloorSession(retryingFailedLogout: boolean, stillRequested?: () => boolean, admittedUser?: string): Promise<SignOutResult> {
   const retrying = retryingFailedLogout || hasFloorLogoutFailureMarker();
-  const signedOut = await logoutWithFloorMarker(stillRequested);
+  const signedOut = await logoutWithFloorMarker(stillRequested, admittedUser, retrying);
   if (signedOut === undefined) return 'cancelled';
   if (!signedOut && boundTabGeneration() === null) return 'logout_failed';
   for (const key of SESSION_KEYS) {
