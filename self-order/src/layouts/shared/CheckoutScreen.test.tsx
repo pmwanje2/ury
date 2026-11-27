@@ -47,6 +47,18 @@ describe("CheckoutScreen", () => {
     expect(onSubmitCart).toHaveBeenCalledWith("20.000")
   })
 
+  it.each([["UGX", 0, 1.5], ["USD", 2, 1.555], ["KWD", 3, 1.5555]] as const)(
+    "blocks a rounded %s preset above the cart subtotal", async (currency, precision, subtotal) => {
+      render(<CheckoutScreen {...baseProps} cartTotal={subtotal} capabilities={{
+        ...baseProps.capabilities, tip_prompt: { currency, precision, presets: [100] },
+      }} />)
+      await userEvent.click(screen.getByRole("button", { name: "100%" }))
+      expect(screen.getByRole("button", { name: "Place Order" })).toBeDisabled()
+      await userEvent.click(screen.getByRole("button", { name: "No Tip" }))
+      expect(screen.getByRole("button", { name: "Place Order" })).toBeEnabled()
+    },
+  )
+
   it("renders order summary with cart items", () => {
     render(<CheckoutScreen {...baseProps} />)
 

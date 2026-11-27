@@ -1068,6 +1068,80 @@ class TestFloorPrivilegedActions(unittest.TestCase):
         self.assertEqual(self.floor.destination_profiles(profiles, "Bar", "Hotel", "KWD"),
                          ["Bar Till", "Bar Patio"])
 
+    def test_picker_excludes_other_restaurant_on_same_branch(self):
+        check = self.h.add_invoice()
+        table = self.h.tables["T2"]
+        profiles = [dict(pos_profile=name, branch=table.branch, restaurant=restaurant,
+                         company=check.company, currency=check.currency)
+                    for name, restaurant in [("Main Till", table.restaurant), ("Bar Till", "Bar")]]
+        ctx = sys.modules["ury.ury_pos.outlet_context"]
+        with patch.object(ctx, "get_authorized_outlets", return_value=profiles, create=True), \
+             patch.object(self.h.frappe, "get_list", return_value=[table], create=True):
+            options = self.floor.get_transfer_destinations(check.branch, "T1", check.name)
+        self.assertEqual([row.name for row in options], ["T2"])
+        self.assertNotIn("Bar Till", options[0].get("transfer_profiles") or [])
+
+    def test_rejects_destination_profile_for_another_restaurant(self):
+        self.h.frappe.session.user = "manager@example.com"
+        check = self.h.add_invoice()
+        self.h.tables["RT-1"].restaurant = "Bar"
+        with self.assertRaises(ValidationError):
+            self.floor.transfer_check_outlet(check.name, "Rooftop Till", "RT-1", join_roster=1)
+        self.assertEqual(check.restaurant_table, "T1")
+
+    def test_rejects_out_of_scope_secondary_before_writing_roster(self):
+        self.h.frappe.session.user = "manager@example.com"
+        for field, value in [("branch", self.h.branch_2), ("restaurant", "Bar")]:
+            with self.subTest(field=field):
+                check = self.h.add_invoice()
+                self.h.tables["T2"].merged_with = "T3"
+                partner = self.h.tables["T3"]
+                partner.update(branch=self.h.branch, restaurant="Main Resto", merged_with="T2")
+                partner[field] = value
+                with self.assertRaises(ValidationError):
+                    self.order.table_transfer("T1", "T2", check.name, join_roster=1)
+                self.assertEqual(check.restaurant_table, "T1")
+                self.assertFalse(partner.get("seating_checks"))
+
+    def test_rejects_merge_destination_owned_by_another_company(self):
+        self.h.frappe.session.user = "manager@example.com"
+        check = self.h.add_invoice()
+        self.h.tables["T2"].merged_with = "T3"
+        self.h.tables["T3"].merged_with = "T2"
+        self.h.restaurants["Main Resto"].company = "Other Company"
+        with self.assertRaises(ValidationError):
+            self.order.table_transfer("T1", "T2", check.name, join_roster=1)
+
+    def test_held_warehouse_moves_but_issued_line_keeps_its_warehouse(self):
+        inv = self.h.add_invoice()
+        target = self.h.profiles["Rooftop Till"]
+        target.update(selling_price_list="Rooftop Prices", warehouse="Rooftop Stock")
+        inv.items[0].update(ury_held=1, warehouse="Main Stock")
+        inv.items[1].update(ury_held=0, warehouse="Main Stock")
+        prices = [dict(rate=8, price_list_rate=8, warehouse="Rooftop Kitchen") for row in inv.items]
+        with patch.object(self.order, "price_items_for_invoice", return_value=prices):
+            self.floor.rebind_outlet(inv, target)
+        self.assertEqual([row.warehouse for row in inv.items], ["Rooftop Kitchen", "Main Stock"])
+
+    def test_held_modifier_preserves_rate_and_uses_destination_stock(self):
+        inv = self.h.add_invoice()
+        target = self.h.profiles["Rooftop Till"]
+        target.update(selling_price_list="Rooftop Prices", warehouse="Rooftop Stock")
+        inv.items[1].update(custom_is_modifier=1, ury_held=1, rate=4, warehouse="Main Stock")
+        with patch.object(self.order, "_department_warehouse_for_item", return_value=None), \
+             patch.object(self.order, "price_items_for_invoice", return_value=[dict(rate=8, price_list_rate=8)]):
+            self.floor.rebind_outlet(inv, target)
+        self.assertEqual((inv.items[1].rate, inv.items[1].warehouse), (4, "Rooftop Stock"))
+
+    def test_explicit_current_profile_allows_part_paid_table_move(self):
+        self.h.frappe.session.user = "manager@example.com"
+        check = self.h.add_invoice(payments=[FakeDoc(custom_tender_received=1, amount=10)])
+        self.order.table_transfer("T1", "T2", check.name, target_pos_profile=check.pos_profile, join_roster=1)
+        self.assertEqual(check.restaurant_table, "T2")
+        self.assertEqual(check.payments[0].amount, 10)
+        with self.assertRaisesRegex(ValidationError, "received tenders"):
+            self.floor.transfer_check_outlet(check.name, "Rooftop Till", "RT-1", join_roster=1)
+
     def test_counter_check_joins_existing_roster(self):
         self.h.frappe.session.user = "manager@example.com"
         inv = self.h.add_invoice("COUNTER", restaurant_table=None)

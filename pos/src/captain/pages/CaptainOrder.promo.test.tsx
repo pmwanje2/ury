@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { tableTransfer } from "../../lib/order-api";
+import type { ManagerApprovalProps } from "../../components/ManagerApproval";
 import CaptainOrder from "./CaptainOrder";
 
 const storeState = vi.hoisted(() => ({
@@ -15,7 +17,7 @@ const storeState = vi.hoisted(() => ({
       quantity: 1,
     },
   ],
-  posProfile: { name: "Till A", currency: "UGX", cashier: "Cashier", owner: "Owner" },
+  posProfile: { branch: "Main", name: "Till A", currency: "UGX", cashier: "Cashier", owner: "Owner" },
   currency: "UGX",
   selectedCustomer: { id: "Walk In", name: "Walk In" },
   selectedRoom: "Main Hall",
@@ -49,14 +51,14 @@ vi.mock("../../store/root-store", () => ({
 }));
 vi.mock("../hooks/useTableOrderContext", () => ({
   useTableOrderContext: () => ({
-    context: { order: null, assignment: null, table: { is_take_away: 0, restaurant_room: "Main Hall" } },
+    context: { order: { name: "INV-1", pos_profile: "Till A" }, assignment: null, table: { is_take_away: 0, restaurant_room: "Main Hall" } },
     permissions: {
       view: true,
       modify: true,
       reduce_items: false,
       remove_items: false,
       reprint_kot: false,
-      transfer_table: false,
+      transfer_table: true,
       transfer_captain: false,
       print_bill: false,
       split_bill: false,
@@ -99,10 +101,15 @@ vi.mock("@ury/core", () => ({
 }));
 vi.mock("../components/CaptainMenu", () => ({ default: () => <div data-testid="captain-menu" /> }));
 vi.mock("../components/CaptainOrderLine", () => ({ default: () => null }));
-vi.mock("../components/CaptainActionsMenu", () => ({ default: () => null }));
+vi.mock("../components/CaptainActionsMenu", () => ({ default: ({ onTransferTable }: any) =>
+  <button onClick={onTransferTable}>Move table</button> }));
 vi.mock("../../components/ProductDialog", () => ({ default: () => null }));
 vi.mock("../../components/CommentDialog", () => ({ default: () => null }));
-vi.mock("../../components/TableTransferDialog", () => ({ default: () => null }));
+vi.mock("../../components/TableTransferDialog", () => ({ default: ({ open, onConfirm }: any) =>
+  open ? <button onClick={() => onConfirm("B2", "Bar").catch(() => {})}>Move to bar</button> : null }));
+vi.mock("../../components/ManagerApproval", () => ({ default: (props: ManagerApprovalProps) =>
+  props.open ? <button onClick={() => props.onApproved({ token: "approved", approverName: "Manager", reason: "Move", note: "Party moved" })}>
+    {JSON.stringify(props.claim)}</button> : null }));
 vi.mock("../../components/CaptainTransferDialog", () => ({ default: () => null }));
 vi.mock("../../components/CustomerSelect", () => ({ CustomerSelect: () => null }));
 vi.mock("../../components/HoldFireControls", () => ({ HoldFireControls: () => null }));
@@ -125,3 +132,19 @@ describe("CaptainOrder Happy Hour / daypart promo totals", () => {
     }
   });
 });
+
+it("retries the same captain transfer with the scoped manager approval", async () => {
+  vi.mocked(tableTransfer).mockRejectedValueOnce(new Error("[POS-AUTH-REQUIRED]"))
+    .mockResolvedValueOnce(undefined)
+  render(<CaptainOrder />)
+  fireEvent.click(screen.getByText("Move table"))
+  fireEvent.click(await screen.findByText("Move to bar"))
+  const approve = await screen.findByRole("button", { name: /transfer_check_outlet/ })
+  expect(JSON.parse(approve.textContent!)).toEqual({ action: "transfer_check_outlet",
+    invoice: "INV-1", from_profile: "Till A", to_profile: "Bar", to_table: "B2" })
+  expect(storeState.clearTableOrder).not.toHaveBeenCalled()
+  fireEvent.click(approve)
+  await waitFor(() => expect(tableTransfer).toHaveBeenLastCalledWith("T-04", "B2", "INV-1",
+    { approvalToken: "approved", reason: "Move", reasonNote: "Party moved" }, "Bar"))
+  expect(storeState.clearTableOrder).toHaveBeenCalledTimes(1)
+})
