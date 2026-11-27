@@ -15,7 +15,11 @@ import { useNotificationModal } from "./NotificationModal.js";
 function isTableInvoice(check, occupied) {
   if (!Array.isArray(check?.items)) return false;
   if (check.doctype != null && check.doctype !== "POS Invoice") return false;
-  if (check.name != null) return typeof check.name === "string" && check.name.trim() !== "";
+  if (check.name != null) {
+    return typeof check.name === "string" && check.name.trim() !== "" && check.items.every(row =>
+      typeof row?.item_code === "string" && row.item_code.trim() !== "" && Number.isFinite(row.qty)
+    );
+  }
 
   // Seating a reservation occupies the table before its first check is saved.
   if (check.items.length !== 0) return false;
@@ -595,13 +599,12 @@ export const useTableStore = defineStore("table", {
           }
           this.previousOrderdItem = this.previousOrder.items;
           this.previousOrderdCustomer = this.previousOrder.customer;
+          this.customers.numberOfPax ??= saved.no_of_pax ?? "";
           if (this.previousOrderdCustomer) {
             this.customers.search = this.previousOrderdCustomer;
-            this.customers.numberOfPax ??= this.previousOrder.no_of_pax;
             this.customers.fectchCustomerFavouriteItem();
           } else {
             this.customers.search = "";
-            this.customers.numberOfPax ??= "";
             this.customers.customerFavouriteItems = "";
             this.customers.newCustomerMobileNo = ""
           }

@@ -1113,14 +1113,18 @@ def validate_seated_reservation_transfer(from_table, to_table, pos_invoice):
     return moving
 
 
-def transfer_seated_reservation(from_table, to_table, pos_invoice):
+def transfer_seated_reservation(from_table, to_table, pos_invoice, *, moving=None):
     """Move any Seated reservation belonging to pos_invoice onto to_table (Simphony: reservation follows its check)."""
-    moving = validate_seated_reservation_transfer(from_table, to_table, pos_invoice)
+    if moving is None:
+        moving = validate_seated_reservation_transfer(from_table, to_table, pos_invoice)
+    if not moving:
+        return []
+    destination_branch = frappe.db.get_value("URY Table", to_table, "branch")
     inv_name = _doc_field(pos_invoice, "name")
     moved_names = []
     for res in moving:
         old_table = res.get("reserved_table")
-        updates = {"reserved_table": to_table}
+        updates = {"reserved_table": to_table, "branch": destination_branch}
         if not res.get("pos_invoice") or _is_discarded_or_cancelled_check(res.get("pos_invoice")):
             if inv_name:
                 updates["pos_invoice"] = inv_name

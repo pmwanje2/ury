@@ -5814,9 +5814,6 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
                 )
             )
 
-    if old_table_name:
-        validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
-
     if len(destination_group) > 1:
         from ury.ury.api.table_reservation import open_checks_on
 
@@ -5824,6 +5821,11 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         primary = next((row.restaurant_table for row in sorted(existing, key=lambda r: str(r.creation))
                         if row.restaurant_table in destination_group), new_table.name)
         new_table = locked_tables[primary]
+    # Identify the party while the locked check still belongs to its source branch.
+    moving_reservations = (
+        validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
+        if old_table_name else []
+    )
     if roster:
         pos_invoice.custom_merged_tables = ",".join(sorted(set(destination_group) - {new_table.name})) or None
     pos_invoice.restaurant_table = new_table.name
@@ -5852,8 +5854,8 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         if hasattr(pos_invoice, "flags"):
             pos_invoice.flags.ury_privileged_action_verified = prev_priv_verified
 
-    if old_table_name:
-        transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
+    if moving_reservations:
+        transfer_seated_reservation(old_table_name, new_table.name, pos_invoice, moving=moving_reservations)
     destination_state = update_tables_after_transfer(old_table_name, new_table.name, pos_invoice)
 
     if len(destination_group) > 1:
