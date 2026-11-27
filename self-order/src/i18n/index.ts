@@ -103,5 +103,5 @@ export function getActiveLanguage(): string {
 export function applyDocumentLocale(env?: { documentElement?: { lang: string; dir: string } }): void {
   const root = env?.documentElement ?? document.documentElement
   root.lang = activeLanguage
-  root.dir = 'ltr'
+  root.dir = activeLanguage === 'ar' ? 'rtl' : 'ltr'
 }

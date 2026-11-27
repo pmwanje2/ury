@@ -2,6 +2,9 @@ export const DEFAULT_LANGUAGE = 'en'
 
 export const GUEST_LANGUAGES = [
   { code: 'en', label: 'EN' },
+  { code: 'fr', label: 'Français' },
+  { code: 'es', label: 'Español' },
+  { code: 'ar', label: 'العربية' },
   { code: 'sw', label: 'Kiswahili' },
   { code: 'lg', label: 'Luganda' },
 ] as const

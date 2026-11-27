@@ -127,9 +127,20 @@ def update_tables_after_transfer(source, destination, invoice):
     hold = policy.get("custom_table_release_trigger") == ON_SETTLEMENT
     state = "Check Printed" if hold and cint(invoice.get("invoice_printed")) else "Seated"
     record_table_transfer(frappe, invoice, source, destination)
-    set_table_state(destination, state, since=invoice.creation, check=invoice.name)
+    occupied = cint(frappe.db.get_value("URY Table", destination, "occupied", for_update=True))
+    since = invoice.creation
+    if occupied:
+        if hold and frappe.db.get_value("URY Table", destination, "custom_table_state") == "Check Printed":
+            state = "Check Printed"
+        if frappe.db.get_value("URY Table", destination, "latest_invoice_time"):
+            since = None
+    set_table_state(destination, state, since=since, check=invoice.name)
     update_members(frappe, source, remove=[invoice.name])
 
+    source_branch = frappe.db.get_value("URY Table", source, "branch")
+    if source_branch and source_branch != invoice.branch:
+        policy = table_policy(source_branch)
+        hold = policy.get("custom_table_release_trigger") == ON_SETTLEMENT
     siblings = find_checks([source], for_update=True)
     if siblings:
         state = "Check Printed" if hold and any(cint(row.get("invoice_printed")) for row in siblings) else "Seated"

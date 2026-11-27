@@ -264,6 +264,7 @@ export async function tableTransfer(
 ): Promise<void> {
   await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.table_transfer', {
+    join_roster: 1,
     table,
     newTable,
     invoice,

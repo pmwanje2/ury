@@ -229,13 +229,13 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
             payingOnline={payingOnline}
             billRequested={billRequested}
             paymentRequest={paymentRequest}
-            onSubmitCart={() => {
-              submitCart().then((success) => {
+            onSubmitCart={(tip) => {
+              submitCart(tip).then((success) => {
                 if (success) goToStatus()
               })
             }}
-            onPayOnline={async () => {
-              if (cartItems.length > 0 && !(await submitCart())) return
+            onPayOnline={async (tip) => {
+              if (cartItems.length > 0 && !(await submitCart(tip))) return
               payOnline()
             }}
             onRequestBill={handleRequestBill}

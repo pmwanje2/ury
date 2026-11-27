@@ -168,6 +168,74 @@ def authorize_and_count_bill_print(
     }
 
 
+def validate_outlet_transfer(inv, target_profile):
+    from ury.ury_pos.outlet_context import assert_outlet_access
+
+    assert_outlet_access(inv.pos_profile)
+    assert_outlet_access(target_profile.name)
+    if not inv.company or inv.company != target_profile.company:
+        frappe.throw(_("Cannot transfer checks between companies."), frappe.PermissionError)
+    if inv.get("currency") and target_profile.get("currency") and inv.currency != target_profile.currency:
+        frappe.throw(_("Choose an outlet using the check currency."))
+    if any(cint(row.get("custom_tender_received")) and flt(row.get("amount")) for row in inv.get("payments") or []):
+        frappe.throw(_("Cannot move a check with received tenders."))
+
+
+def rebind_outlet(inv, target):
+    from ury.ury.doctype.ury_order.ury_order import _dayparts_mod, invoice_pricing_date, price_items_for_invoice
+    from ury.ury_pos.tax_determination import apply_order_type_tax
+
+    # Remove the source outlet's liability row before the invoice save hook
+    # rebuilds it using the destination account.
+    if flt(inv.get("custom_charged_tip")):
+        old_account = frappe.db.get_value("POS Profile", inv.pos_profile, "custom_tips_payable_account")
+        if old_account:
+            inv.set("taxes", [row for row in inv.get("taxes") or [] if row.account_head != old_account])
+    inv.pos_profile = target.name
+    inv.branch = target.branch
+    inv.restaurant = target.get("restaurant")
+    resolved = _dayparts_mod().resolve_menu_and_price_list(
+        inv.branch, restaurant=inv.restaurant, table=inv.get("restaurant_table"),
+        room=inv.get("custom_restaurant_room"), order_type=inv.get("order_type"),
+        customer=inv.get("customer"),
+    )
+    inv.custom_serving_period = (resolved.get("serving_period") or {}).get("period_name")
+    price_list = resolved.get("price_list") or target.get("selling_price_list")
+    if price_list:
+        inv.selling_price_list = price_list
+        inv.flags.ury_authoritative_price_list = price_list
+        inv.flags.ury_trusted_server_pricing = True
+        menu = resolved.get("menu")
+        rows = [row for row in inv.get("items") or []
+                if not any(cint(row.get(flag)) for flag in
+                           ("is_disposable", "custom_price_overridden", "custom_is_open_item", "custom_is_complimentary"))
+                and row.get("custom_line_role") != "Combo Upcharge"]
+        priced = price_items_for_invoice(
+            [{"item": row.item_code, "qty": row.qty} for row in rows],
+            price_list, target.name, inv.branch, menu,
+            posting_date=invoice_pricing_date(inv), customer=inv.customer,
+        )
+        for row, prices in zip(rows, priced):
+            row.rate = prices["rate"]
+            row.price_list_rate = prices["price_list_rate"]
+    apply_order_type_tax(inv, target, reset_non_exempt_item_taxes=True)
+
+
+@frappe.whitelist()
+def get_transfer_destinations(branch, exclude_table=None):
+    from ury.ury_pos.outlet_context import get_authorized_outlets
+
+    outlets = get_authorized_outlets()
+    companies = {o["company"] for o in outlets if o["branch"] == branch}
+    branches = sorted({o["branch"] for o in outlets if o["company"] in companies and o["branch"]})
+    if not branches:
+        return []
+    return frappe.get_list("URY Table", filters={"branch": ["in", branches], "name": ["!=", exclude_table or ""]},
+                           fields=["name", "branch", "restaurant_room", "occupied", "merged_with",
+                                   "no_of_seats", "table_shape"], order_by="branch, restaurant_room, name",
+                           limit_page_length=0)
+
+
 @frappe.whitelist(methods=["POST"])
 def transfer_check_outlet(
     invoice: str,
@@ -176,11 +244,20 @@ def transfer_check_outlet(
     approval_token: str | None = None,
     reason: str | None = None,
     reason_note: str | None = None,
+    join_roster: int = 0,
 ) -> dict[str, Any]:
     """Transfer an open check to another outlet / POS Profile (Simphony Opt 46)."""
     assert_not_offline_replay()
     if not invoice or not target_pos_profile:
         frappe.throw(_("Invoice and target POS Profile are required."), frappe.ValidationError)
+
+    if target_table:
+        source = frappe.db.get_value("POS Invoice", invoice, "restaurant_table")
+        if source and source != target_table:
+            from ury.ury.doctype.ury_order.ury_order import table_transfer
+
+            return table_transfer(source, target_table, invoice, approval_token, reason, reason_note,
+                                  join_roster=join_roster, target_pos_profile=target_pos_profile)
 
     inv = frappe.get_doc("POS Invoice", invoice, for_update=True)
     if not frappe.has_permission("POS Invoice", "write", doc=inv):
@@ -202,6 +279,7 @@ def transfer_check_outlet(
     if source_profile.company != target_profile.company:
         frappe.throw(_("Cannot transfer a check to a POS Profile in another company."), frappe.PermissionError)
 
+    validate_outlet_transfer(inv, target_profile)
     old_table_name = inv.get("restaurant_table")
     tables_to_lock = sorted({t for t in (old_table_name, target_table) if t})
     locked_tables: dict[str, Any] = {}
@@ -241,12 +319,6 @@ def transfer_check_outlet(
         allow_fallback_predicate=fallback_allowed,
     )
 
-    inv.pos_profile = target_pos_profile
-    if target_profile.get("branch"):
-        inv.branch = target_profile.branch
-    if target_profile.get("restaurant"):
-        inv.restaurant = target_profile.restaurant
-
     if target_table_doc is not None:
         inv.restaurant_table = target_table_doc.name
         inv.custom_restaurant_room = target_table_doc.get("restaurant_room")
@@ -271,6 +343,7 @@ def transfer_check_outlet(
                 {"occupied": 0, "seating_checks": "[]", "latest_invoice_time": None},
             )
 
+    rebind_outlet(inv, target_profile)
     from ury.ury_pos.pricing_actions import sync_service_charge
 
     sync_service_charge(inv, target_profile)

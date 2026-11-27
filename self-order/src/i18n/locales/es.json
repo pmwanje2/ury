@@ -1,0 +1,27 @@
+{
+  "tip": {
+    "title": "Propina",
+    "none": "Sin propina",
+    "custom": "Importe personalizado"
+  },
+  "checkout": {
+    "summary": "Resumen del pedido",
+    "payment_method": "Forma de pago",
+    "title": "Pago"
+  },
+  "order": {
+    "place": "Hacer pedido",
+    "placing": "Enviando pedido…"
+  },
+  "payment": {
+    "pay_online": "Pagar en línea",
+    "pay_at_counter": "Pagar en caja"
+  },
+  "bill": {
+    "request": "Pedir la cuenta"
+  },
+  "cart": {
+    "count_one": "{{count}} artículo",
+    "count_many": "{{count}} artículos"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "tip": {
+    "title": "Pourboire",
+    "none": "Sans pourboire",
+    "custom": "Montant libre"
+  },
+  "checkout": {
+    "summary": "Récapitulatif",
+    "payment_method": "Mode de paiement",
+    "title": "Paiement"
+  },
+  "order": {
+    "place": "Commander",
+    "placing": "Commande en cours…"
+  },
+  "payment": {
+    "pay_online": "Payer en ligne",
+    "pay_at_counter": "Payer au comptoir"
+  },
+  "bill": {
+    "request": "Demander l’addition"
+  },
+  "cart": {
+    "count_one": "{{count}} article",
+    "count_many": "{{count}} articles"
+  }
+}

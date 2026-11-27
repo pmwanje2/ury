@@ -1,3 +1,6 @@
+import fr from './locales/fr.json'
+import es from './locales/es.json'
+import ar from './locales/ar.json'
 import en from './locales/en.json'
 import sw from './locales/sw.json'
 import lg from './locales/lg.json'
@@ -5,7 +8,7 @@ import { DEFAULT_LANGUAGE } from './resolve-language'
 
 type TranslationMap = Record<string, unknown>
 
-export const bundledLocales: Record<string, TranslationMap> = { en, sw, lg }
+export const bundledLocales: Record<string, TranslationMap> = { en, sw, lg, fr, es, ar }
 const bundled = bundledLocales
 
 const cache: Record<string, TranslationMap> = {}

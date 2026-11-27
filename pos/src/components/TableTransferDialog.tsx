@@ -34,9 +34,9 @@ const TableTransferDialog = ({
     loading={loading}
     options={destinationTables.map((table) => ({
       name: table.name,
-      room: table.restaurant_room,
+      room: [table.branch, table.restaurant_room].filter(Boolean).join(' · '),
       shape: asShape(table.table_shape),
-      seatsLabel:
+      seatsLabel: table.occupied ? t('tables.occupied') :
         typeof table.no_of_seats === 'number' ? `${table.no_of_seats} ${t('tables.seats')}` : undefined,
     }))}
     onConfirm={onConfirm}

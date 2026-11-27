@@ -5510,7 +5510,8 @@ def pos_opening_check():
 
 
 @frappe.whitelist()
-def table_transfer(table, newTable, invoice, approval_token=None, reason=None, reason_note=None):
+def table_transfer(table, newTable, invoice, approval_token=None, reason=None, reason_note=None,
+                   join_roster=0, target_pos_profile=None):
     from ury.ury_pos.floor_actions import assert_table_free_for_transfer
     from ury.ury.api.table_lifecycle import assert_table_seatable, update_tables_after_transfer
     from ury.ury.api.table_reservation import lock_reservation_tables
@@ -5524,7 +5525,15 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
     assert_not_offline_replay()
 
     # Use the host stand's table-first lock order before locking the invoice.
-    lock_reservation_tables([table, newTable])
+    roster = cint(join_roster) == 1
+    destination_group, snapshot = _get_merge_cluster(newTable) if roster else ([newTable], {})
+    lock_reservation_tables([table, *destination_group])
+    for member in destination_group if roster else ():
+        current_links = frappe.db.get_value("URY Table", member, "merged_with", for_update=True)
+        if set(_parse_merged_with(current_links)) != set(_parse_merged_with(snapshot[member].merged_with)):
+            frappe.throw(_("The table group changed. Refresh the floor and try again."))
+    if table in destination_group:
+        frappe.throw(_("Choose a different table group."))
     pos_invoice = frappe.get_doc("POS Invoice", invoice, for_update=True)
     locked_tables = {
         t: frappe.get_doc("URY Table", t, for_update=True)
@@ -5542,7 +5551,7 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
 
     # Anti-race check: reject if another waiter already transferred this check elsewhere.
     old_table_name = current_table.name if isinstance(current_table.name, str) else table
-    if pos_invoice.restaurant_table and pos_invoice.restaurant_table != old_table_name:
+    if (roster or target_pos_profile or pos_invoice.restaurant_table) and pos_invoice.restaurant_table != old_table_name:
         frappe.throw(
             coded_message(
                 "TRANSFER-CONFLICT",
@@ -5569,31 +5578,51 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
     if len(merge_members) > 1:
         frappe.throw(_("Table transfer is not allowed for merged tables. Unmerge first."))
 
-    if current_table.branch != new_table.branch:
-        frappe.throw(_("Table transfer between different branches is restricted."))
+    target_profile = None
+    if target_pos_profile or current_table.branch != new_table.branch:
+        if not (roster or target_pos_profile):
+            frappe.throw(_("Table transfer between different branches is restricted."))
+        from ury.ury_pos.floor_actions import validate_outlet_transfer
 
-    # Check destination occupancy BEFORE consuming any manager PIN token (refused even with PIN!).
-    assert_table_seatable(new_table.name, new_table.branch)
-    assert_table_free_for_transfer(new_table, exclude_invoice=pos_invoice.name)
+        if not target_pos_profile:
+            from ury.ury_pos.outlet_context import get_authorized_outlets
+            outlets = [outlet for outlet in get_authorized_outlets()
+                       if outlet["branch"] == new_table.branch and outlet["company"] == pos_invoice.company]
+            if not outlets:
+                frappe.throw(_("Not permitted to transfer to this outlet."), frappe.PermissionError)
+            target_name = outlets[0]["pos_profile"]
+        else:
+            target_name = target_pos_profile
+        target_profile = frappe.get_doc("POS Profile", target_name)
+        validate_outlet_transfer(pos_invoice, target_profile)
+        if target_profile.branch != new_table.branch or cint(target_profile.get("disabled")):
+            frappe.throw(_("Target table does not belong to an enabled destination outlet."))
+
+    for member in destination_group:
+        assert_table_seatable(member, new_table.branch)
+    if not roster:
+        assert_table_free_for_transfer(new_table, exclude_invoice=pos_invoice.name)
 
     raw_company = getattr(pos_invoice, "company", None) or getattr(pos_profile_doc, "company", None)
     company = raw_company if _is_valid_str(raw_company) else None
     policy_active = is_company_policy_active(company)
     legacy_allowed = _has_role(frappe.get_roles(), pos_profile_doc.transfer_role_permissions)
 
-    authorize_or_perform(
+    claim = {"action": "table_transfer", "from_table": old_table_name, "to_table": newTable, "invoice": invoice}
+    if target_pos_profile:
+        claim = {"action": "transfer_check_outlet", "from_profile": pos_invoice.pos_profile,
+                 "to_profile": target_pos_profile, "to_table": newTable, "invoice": invoice}
+        from ury.ury_pos.privileged_auth import DEFAULT_MANAGER_ROLES
+        legacy_allowed = legacy_allowed or bool(set(frappe.get_roles()) & DEFAULT_MANAGER_ROLES)
+
+    auth = authorize_or_perform(
         privilege="transfer_check",
         pos_profile=pos_invoice.pos_profile,
         company=company,
         skip_profile_company_lookup=True,
         reference_doctype="POS Invoice",
         reference_name=pos_invoice.name,
-        claim={
-            "action": "table_transfer",
-            "from_table": old_table_name,
-            "to_table": new_table.name,
-            "invoice": pos_invoice.name,
-        },
+        claim=claim,
         token=approval_token,
         reason=reason,
         reason_note=reason_note,
@@ -5608,26 +5637,40 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         transfer_seated_reservation,
         validate_seated_reservation_transfer,
     )
-    active_res = check_table_reservation(new_table.name, for_update=True)
-    if active_res and active_res.get("is_lock_window_active") and active_res.get("status") == "Confirmed":
-        res_time_raw = active_res.get("reserved_at")
-        formatted_res_time = ""
-        if res_time_raw:
-            try:
-                res_dt = parse_to_datetime(res_time_raw)
-                formatted_res_time = res_dt.strftime("%I:%M %p").lstrip("0")
-            except Exception:
-                formatted_res_time = str(res_time_raw)
-        frappe.throw(
-            frappe._("Table {0} is reserved for {1}. Please choose another table.").format(
-                new_table.name, formatted_res_time
+    for member in destination_group:
+        active_res = check_table_reservation(member, for_update=True)
+        if active_res and active_res.get("is_lock_window_active") and active_res.get("status") == "Confirmed":
+            res_time_raw = active_res.get("reserved_at")
+            formatted_res_time = ""
+            if res_time_raw:
+                try:
+                    res_dt = parse_to_datetime(res_time_raw)
+                    formatted_res_time = res_dt.strftime("%I:%M %p").lstrip("0")
+                except Exception:
+                    formatted_res_time = str(res_time_raw)
+            frappe.throw(
+                frappe._("Table {0} is reserved for {1}. Please choose another table.").format(
+                    new_table.name, formatted_res_time
+                )
             )
-        )
 
     validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
 
+    if len(destination_group) > 1:
+        from ury.ury.api.table_reservation import open_checks_on
+
+        existing = open_checks_on(destination_group, for_update=True)
+        primary = next((row.restaurant_table for row in sorted(existing, key=lambda r: str(r.creation))
+                        if row.restaurant_table in destination_group), new_table.name)
+        new_table = frappe.get_doc("URY Table", primary, for_update=True)
+    if roster:
+        pos_invoice.custom_merged_tables = ",".join(sorted(set(destination_group) - {new_table.name})) or None
     pos_invoice.restaurant_table = new_table.name
     pos_invoice.custom_restaurant_room = new_table.restaurant_room
+    if target_profile:
+        from ury.ury_pos.floor_actions import rebind_outlet
+        rebind_outlet(pos_invoice, target_profile)
+        pos_profile_doc = target_profile
     _sync_service_charge(pos_invoice, pos_profile_doc)
     if callable(getattr(pos_invoice, "calculate_taxes_and_totals", None)):
         pos_invoice.calculate_taxes_and_totals()
@@ -5643,12 +5686,22 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
     transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
     update_tables_after_transfer(old_table_name, new_table.name, pos_invoice)
 
+    if len(destination_group) > 1:
+        from ury.ury.api.table_lifecycle import set_table_state
+        for member in destination_group:
+            if member != new_table.name:
+                set_table_state(member, "Seated", check=pos_invoice.name)
+
     # Do not swallow KOT-transfer failures: a raise here aborts the request
     # (and its transaction) so the table/invoice changes above are rolled
     # back instead of silently leaving order/table/KOT locations
     # inconsistent. An empty matching-KOT set is a valid no-op and does not
     # raise.
     change_table_in_kot(pos_invoice.name, new_table.name, pos_invoice.branch)
+    if target_pos_profile:
+        return {"invoice": invoice, "pos_profile": pos_invoice.pos_profile, "branch": pos_invoice.branch,
+                "restaurant_table": pos_invoice.restaurant_table, "approver": auth["approver"]}
+
 
 
 @frappe.whitelist()
@@ -6865,6 +6918,7 @@ def make_invoice(
     fiscal_receipt_requested=1,
 ):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
+    tip_omitted = tip is None
     tip = flt(tip)
     if tip < 0:
         frappe.throw(coded_message("TIP-NEGATIVE", _("A tip cannot be negative.")))
@@ -6974,6 +7028,9 @@ def make_invoice(
     # The cashier's tip (cash, or charged on a card or room-charge tender):
     # its Tips Payable line is on the bill before the totals the tenders are
     # allocated against. Owed to the bill's server unless another is named.
+    if tip_omitted and _pa_is_valid_str(invoice.get("custom_ordering_session")):
+        tip = flt(invoice.get("custom_charged_tip"))
+        tip_server = invoice.get("custom_tip_server") or tip_server
     invoice.custom_charged_tip = tip
     invoice.custom_tip_server = (tip_server or invoice.waiter) if tip else None
     sync_charged_tip(invoice)

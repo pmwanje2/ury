@@ -35,6 +35,8 @@
   "column_break_billing_payment",
   "enable_payment_link",
   "enable_pay_at_counter",
+  "enable_guest_tips",
+  "guest_tip_presets",
   "feedback_section",
   "enable_feedback",
   "feedback_template",
@@ -247,6 +249,19 @@
    "no_copy": 1,
    "print_hide": 1,
    "report_hide": 1
+  },
+  {
+   "fieldname": "enable_guest_tips",
+   "fieldtype": "Check",
+   "label": "Offer guest tip at checkout",
+   "default": "0"
+  },
+  {
+   "fieldname": "guest_tip_presets",
+   "fieldtype": "Data",
+   "label": "Tip percentages (comma-separated)",
+   "default": "5,10,15",
+   "depends_on": "eval:doc.enable_guest_tips"
   }
  ],
  "index_web_pages_for_search": 1,

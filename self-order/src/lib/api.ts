@@ -14,6 +14,7 @@ export interface OrderingCapabilities {
   pay_at_counter_enabled: boolean
   add_to_running_table_enabled: boolean
   /** Profile feedback is on and a Quality Feedback Template is chosen. */
+  tip_prompt?: { currency: string; precision: number; presets: number[] } | null
   feedback_enabled?: boolean
 }
 
@@ -188,10 +189,12 @@ export async function getCurrentOrder(session: string): Promise<CustomerOrder> {
 export async function addItems(
   session: string,
   items: { item: string; qty: number; comment?: string }[],
+  tip?: string,
 ): Promise<CustomerOrder> {
   const response = await call.post<FrappeResponse<CustomerOrder>>(`${M}.add_customer_items`, {
     session,
     items: JSON.stringify(items),
+    ...(tip === undefined ? {} : { tip }),
   })
   return response.message
 }

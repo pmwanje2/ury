@@ -379,7 +379,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   // screen to render inline), so a caller doing `submitCart().then(...)`
   // without checking this return value would navigate to "Order confirmed"
   // even when submission failed.
-  async function submitCart(): Promise<boolean> {
+  async function submitCart(tip?: string): Promise<boolean> {
     if (!context || cartItems.length === 0) return false
     setSubmitting(true)
     setShownError(null)
@@ -404,7 +404,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
         qty: entry.qty,
         ...(notesEnabled && entry.comment ? { comment: entry.comment } : {}),
       }))
-      const updated = await addItems(context.session, payload)
+      const updated = await addItems(context.session, payload, ...(tip === undefined ? [] : [tip]))
       setOrder(updated)
       setCart({})
       return true

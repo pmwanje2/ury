@@ -1,0 +1,27 @@
+{
+  "tip": {
+    "title": "الإكرامية",
+    "none": "بدون إكرامية",
+    "custom": "مبلغ مخصص"
+  },
+  "checkout": {
+    "summary": "ملخص الطلب",
+    "payment_method": "طريقة الدفع",
+    "title": "الدفع"
+  },
+  "order": {
+    "place": "إرسال الطلب",
+    "placing": "جارٍ إرسال الطلب…"
+  },
+  "payment": {
+    "pay_online": "الدفع عبر الإنترنت",
+    "pay_at_counter": "الدفع عند الصندوق"
+  },
+  "bill": {
+    "request": "طلب الفاتورة"
+  },
+  "cart": {
+    "count_one": "{{count}} عنصر",
+    "count_many": "عدد العناصر: {{count}}"
+  }
+}

@@ -131,6 +131,7 @@ export async function tableTransfer(
   invoice: string
 ): Promise<void> {
   await call.post('ury.ury.doctype.ury_order.ury_order.table_transfer', {
+    join_roster: 1,
     table,
     newTable,
     invoice,

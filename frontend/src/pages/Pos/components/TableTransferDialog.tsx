@@ -164,9 +164,9 @@ const TableTransferDialog = ({
                         >
                           <TableShapeIcon shape={table.table_shape || 'Rectangle'} />
                           <div className="min-w-0">
-                            <p className="font-medium text-foreground">{table.name}</p>
+                            <p className="font-medium text-foreground">{table.name} {table.occupied ? t('tables.occupied') : ''}</p>
                             <p className="text-xs text-text-tertiary">
-                              {typeof table.no_of_seats === 'number'
+                              {table.branch} {typeof table.no_of_seats === 'number'
                                 ? `${table.no_of_seats} ${t('tables.seats')}`
                                 : ''}
                             </p>
