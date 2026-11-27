@@ -585,7 +585,10 @@ export const useTableStore = defineStore("table", {
             this.customers.newCustomerMobileNo = ""
           }
 
-          this.menu.cart = invoiceCartRows(this.previousOrderdItem, items);
+          // The cart was cleared at load start. Keep rows added from the menu
+          // while this table's invoice was on its way.
+          const unsentItems = this.menu.cart.filter(row => !row.name);
+          this.menu.cart = [...invoiceCartRows(this.previousOrderdItem, items), ...unsentItems];
         })
         .catch((error) => {
           if (!isCurrent()) return;
