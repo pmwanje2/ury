@@ -1,4 +1,5 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useLayoutEffect, useState } from 'react';
+import { bindFloorRequestUser, disposeFloorRequests } from '@ury/core/floor-request';
 import { useRootStore } from '../store/root-store';
 import { Button } from '@ury/ui';
 import { Spinner } from '@ury/ui';
@@ -32,6 +33,20 @@ const SESSION_CHECK_INTERVAL_MS = 5000;
 
 interface Props {
   children: React.ReactNode;
+}
+
+// Install the identity before mounting children: even their first request must be bound.
+function CashierWorkspace({ user, children }: Props & { user: string }) {
+  const [bound, setBound] = useState<string>();
+  useLayoutEffect(() => {
+    const release = bindFloorRequestUser(user, () => {
+      revokeTabConfirmation();
+      window.dispatchEvent(new Event(FLOOR_TAB_LOCKED));
+    });
+    setBound(user);
+    return release;
+  }, [user]);
+  return bound === user ? <>{children}</> : null;
 }
 
 function RecoveryOutbox({ profile, user }: { profile: OfflineProfile | null; user: OfflineUser }) {
@@ -102,7 +117,7 @@ function UnconfirmedWorkspace({ user, children }: Props & { user: OfflineUser })
 
   if (empty === null) return <Spinner message={t('common.loading')} />;
   if (!empty) return <OwnerSignIn user={user} passwordOnly={!isFloorPadActive()} />;
-  return <>{children}</>;
+  return <CashierWorkspace user={user.name}>{children}</CashierWorkspace>;
 }
 
 function ColdBootSignOut({ profile, user, passwordOnly, failedLogout }: { failedLogout: boolean; profile: OfflineProfile | null; user: OfflineUser; passwordOnly: boolean }) {
@@ -117,7 +132,7 @@ function ColdBootSignOut({ profile, user, passwordOnly, failedLogout }: { failed
   if (failedLogout || !hasRecoveryConfirmation(user.name) || hasFloorLogoutFailureMarker()) {
     return <OwnerSignIn user={user} passwordOnly={passwordOnly} />;
   }
-  return <RecoveryOutbox profile={profile} user={user} />;
+  return <CashierWorkspace user={user.name}><RecoveryOutbox profile={profile} user={user} /></CashierWorkspace>;
 }
 
 const AuthGuard: React.FC<Props> = ({ children }) => {
@@ -137,6 +152,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
+  useLayoutEffect(() => disposeFloorRequests, []);
   const floorPadActive = isFloorPadActive();
   const [gate, setGate] = useState<'checking' | 'ready' | 'failed' | 'revoked'>('checking');
   useEffect(() => {
@@ -288,7 +304,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   if (requiresOutletSelection && !posProfile) {
     return (
-      <Suspense
+      <CashierWorkspace user={user.name}><Suspense
         fallback={
           <div className="min-h-screen">
             <Spinner message={t('common.loading')} />
@@ -304,7 +320,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
             await fetchPosProfile(true);
           }}
         />
-      </Suspense>
+      </Suspense></CashierWorkspace>
     );
   }
 
@@ -350,7 +366,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   if (!hasFloorSessionMarker(user.name)) {
     return <UnconfirmedWorkspace key={user.name} user={user}>{children}</UnconfirmedWorkspace>;
   }
-  return <>{children}</>;
+  return <CashierWorkspace user={user.name}>{children}</CashierWorkspace>;
 };
 
 export default AuthGuard; 

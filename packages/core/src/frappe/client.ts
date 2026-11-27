@@ -1,3 +1,4 @@
+import { FLOOR_USER_HEADER, sdkFloorRequestUser, rejectFloorRequest } from './floor-request';
 import { FrappeApp } from "frappe-js-sdk";
 
 export function createFrappeClient(baseUrl: string | undefined = import.meta.env?.VITE_FRAPPE_BASE_URL) {
@@ -8,7 +9,16 @@ const frappe = createFrappeClient();
 // The SDK maps both cancellations and transport failures to status 0. Tag only ERR_NETWORK.
 export const NETWORK_FAILURE_MARK = 'ury_network_failure';
 const transport = (frappe as unknown as { axios: import('axios').AxiosInstance }).axios;
+transport.interceptors.request.use(config => {
+  const user = sdkFloorRequestUser(config.url);
+  if (user) config.headers.set(FLOOR_USER_HEADER, user);
+  return config;
+});
 transport.interceptors.response.use(undefined, (error) => {
+  const expected = error?.config?.headers?.get?.(FLOOR_USER_HEADER);
+  if (expected && error.response?.headers?.get?.('X-URY-Floor-Error') === 'URY_FLOOR_SESSION_MISMATCH') {
+    rejectFloorRequest(expected);
+  }
   if (error && typeof error === 'object' && !error.response && error.code === 'ERR_NETWORK') {
     error.response = {
       status: 0,

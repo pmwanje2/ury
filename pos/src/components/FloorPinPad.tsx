@@ -2,6 +2,7 @@ import { FormEvent, useRef, useState } from 'react';
 import { auth, call, parseFrappeError } from '@ury/core';
 import { Button, Input } from '@ury/ui';
 import { t } from '../i18n';
+import { FLOOR_TAB_LOCKED, revokeTabConfirmation } from '../lib/floor-tab';
 import { withOutboxLogin } from '../offline/outbox';
 import { confirmVerifiedLogin, getFloorPad, requestFloorLogin } from '../lib/floor-session';
 
@@ -112,9 +113,9 @@ export default function FloorPinPad({ offline = false, usernameOnly = false, rec
     try {
       if (otpUnavailable) return;
       const identity = challenge?.username ?? username.trim();
-      await withOutboxLogin(identity, async (pending) => {
+      await withOutboxLogin(identity, async (owner) => {
         // Keep the recovery gate across reloads, even if session verification loses connectivity.
-        if (pending) sessionStorage.setItem('ury_floor_reconcile', 'pending');
+        if (owner) sessionStorage.setItem('ury_floor_reconcile', 'pending');
         const { result, generation } = await requestFloorLogin(() => auth.loginWithUsernamePassword(
           challenge ? { tmp_id: challenge.tmp_id, otp } : { username: identity, password },
         ));
@@ -124,12 +125,16 @@ export default function FloorPinPad({ offline = false, usernameOnly = false, rec
         } else if (result?.message === 'Logged In' || result?.message === 'No App') {
           const user = 'authenticated_user' in result && typeof result.authenticated_user === 'string'
             ? result.authenticated_user : identity;
-          if (pending && user !== identity) throw new Error(t('floor_pin.owner_required'));
-          await signedIn(user, pending, generation);
+          if (owner && user !== owner) {
+            revokeTabConfirmation();
+            window.dispatchEvent(new Event(FLOOR_TAB_LOCKED));
+            throw new Error(t('floor_pin.owner_required'));
+          }
+          await signedIn(user, !!owner, generation);
         } else {
           throw new Error(t('floor_pin.login_failed'));
         }
-      });
+      }, true);
     } catch (reason) {
       setError(parseFrappeError(reason, t('floor_pin.login_failed')));
     } finally {

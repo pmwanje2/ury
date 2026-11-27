@@ -1,3 +1,4 @@
+import { floorFetch } from '@ury/core/floor-request';
 import { useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { call, getSessionUser } from '@ury/core';
@@ -115,7 +116,7 @@ function UserNotifications({ user, title = 'Recent Notifications', documentType,
           fields: JSON.stringify(['name', 'for_user', 'subject', 'email_content', 'creation', 'read', 'document_type', 'document_name']),
           order_by: 'creation desc', limit_page_length: '10',
         });
-        const response = await fetch(`/api/method/frappe.client.get_list?${params}`, { signal: controller.signal });
+        const response = await floorFetch(`/api/method/frappe.client.get_list?${params}`, { signal: controller.signal });
         if (!response.ok) throw new Error('Notifications unavailable');
         const data = await response.json();
         if (!Array.isArray(data.message)) throw new Error('Invalid notification list');

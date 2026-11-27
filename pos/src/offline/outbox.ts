@@ -1,3 +1,4 @@
+import { floorFetch } from '@ury/core/floor-request';
 import { currencyFractionDigits, resolveDefaultCustomer, type DefaultCustomerConfig } from '@ury/core';
 import { v4 as uuid } from 'uuid';
 import { t } from '../i18n';
@@ -214,11 +215,19 @@ const exclusive = <T,>(run: () => Promise<T>): Promise<T> => {
   return Promise.reject(new Error('This browser cannot lock the offline outbox across tabs. Offline capture is unavailable.'));
 };
 // Capture, replay, and identity changes share the same cross-tab lock.
-export async function withOutboxLogin(user: string | null, login: (pending: boolean) => Promise<void>): Promise<void> {
+export async function withOutboxLogin(
+  user: string | null, login: (owner: string | null) => Promise<void>, allowPasswordAlias = false,
+): Promise<void> {
   const guarded = async () => {
     const rows = await all();
-    if (rows.some((row) => !user || row.owner !== user)) throw new Error(t('floor_pin.owner_required'));
-    await login(rows.length > 0);
+    const owner = rows[0]?.owner ?? null;
+    if (rows.length) {
+      const alias = allowPasswordAlias && user && !user.includes('@');
+      if (!owner || rows.some(row => row.owner !== owner) || (user !== owner && !alias)) {
+        throw new Error(t('floor_pin.owner_required'));
+      }
+    }
+    await login(owner);
   };
   if (hasWebLocks()) await exclusive(guarded);
   else await guarded();
@@ -296,12 +305,12 @@ export class OfflineOutbox {
   persistent: boolean | null = null;
   private replayPromise?: Promise<void>;
   private scope: string;
-  private request: typeof fetch;
+  private request: (url: string, init?: RequestInit) => Promise<Response>;
   private print: OfflinePrint;
   private onSettled?: OfflineSettledHook;
   constructor(private options: Options) {
     this.scope = JSON.stringify([options.user.name, options.profile.name]);
-    this.request = options.request || ((url, init) => fetch(url, init));
+    this.request = options.request || ((url, init) => floorFetch(url, init, options.user.name));
     this.print = options.print || (() => false);
     this.onSettled = options.onSettled;
   }

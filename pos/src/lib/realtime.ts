@@ -1,3 +1,4 @@
+import { floorFetch } from '@ury/core/floor-request';
 import { useEffect, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
@@ -10,7 +11,7 @@ let globalSiteName = '';
 
 async function fetchSiteName(): Promise<string> {
   try {
-    const response = await fetch('/api/method/ury.ury.api.ury_kot_display.get_site_name', {
+    const response = await floorFetch('/api/method/ury.ury.api.ury_kot_display.get_site_name', {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',

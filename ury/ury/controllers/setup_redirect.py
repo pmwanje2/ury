@@ -128,6 +128,17 @@ def _role_based_home_page():
     return None
 
 
+def guard_floor_request_user():
+    """Reject a POS request if its workspace belongs to a different server session."""
+    request = frappe.local.request
+    expected = request.headers.get("X-URY-Floor-User")
+    if not expected and (request.path == "/printview" or request.path.startswith("/api/method/ury.ury.api.ury_print.")):
+        expected = request.args.get("ury_floor_print_user")
+    if isinstance(expected, str) and expected and (expected != frappe.session.user or expected == "Guest"):
+        frappe.local.response_headers["X-URY-Floor-Error"] = "URY_FLOOR_SESSION_MISMATCH"
+        raise frappe.AuthenticationError("URY_FLOOR_SESSION_MISMATCH")
+
+
 def on_session_creation(login_manager=None):
     """Hint login toward the wizard on incomplete sites.
 

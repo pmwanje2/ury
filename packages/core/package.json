@@ -14,6 +14,10 @@
       "types": "./src/utils/defaultCustomer.ts",
       "import": "./src/utils/defaultCustomer.ts"
     },
+    "./floor-request": {
+      "types": "./src/frappe/floor-request.ts",
+      "import": "./src/frappe/floor-request.ts"
+    },
     "./covers": {
       "types": "./src/covers.ts",
       "import": "./src/covers.ts"
