@@ -516,6 +516,20 @@ def _reconcile_invoice_merged_tables(invoice, persist=False):
     return invoice
 
 
+def _oldest_table_invoice(table, filters):
+    candidates = frappe.get_all(
+        "POS Invoice",
+        filters=filters,
+        or_filters={"restaurant_table": table, "custom_merged_tables": ["like", f"%{table}%"]},
+        fields=["name", "restaurant_table", "custom_merged_tables"],
+        order_by="creation asc",
+    )
+    return next((
+        row.name for row in candidates
+        if row.restaurant_table == table or table in _parse_merged_with(row.get("custom_merged_tables"))
+    ), None)
+
+
 def _open_invoice_names_for_table(table):
     names = set()
     for row in frappe.get_all(
@@ -527,9 +541,10 @@ def _open_invoice_names_for_table(table):
     for row in frappe.get_all(
         "POS Invoice",
         filters={"docstatus": 0, "custom_merged_tables": ["like", f"%{table}%"]},
-        fields=["name"],
+        fields=["name", "custom_merged_tables"],
     ):
-        names.add(row.name)
+        if table in _parse_merged_with(row.custom_merged_tables):
+            names.add(row.name)
     return names
 
 
@@ -616,14 +631,13 @@ def _has_open_pos_invoices_for_cluster(tables):
                 "custom_merged_tables": ["like", f"%{table}%"],
             },
             fields=[
-                "name",
+                "custom_merged_tables",
                 "invoice_printed",
             ],
         )
 
         for inv in merged:
-
-            if inv.invoice_printed == 0:
+            if inv.invoice_printed == 0 and table in _parse_merged_with(inv.custom_merged_tables):
                 return True
 
     return False
@@ -2550,19 +2564,7 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
         elif is_payment != "Payments" and not holds_until_settlement(branch):
             filters["invoice_printed"] = 0
 
-        or_filters = {
-            "restaurant_table": table,
-            "custom_merged_tables": ["like", f"%{table}%"]
-        }
-
-        invoices = frappe.get_all(
-            "POS Invoice",
-            filters=filters,
-            or_filters=or_filters,
-            order_by="creation asc",
-            limit=1,
-        )
-        invoice_name = invoices[0].name if invoices else None
+        invoice_name = _oldest_table_invoice(table, filters)
         if invoice_name:
             invoice = frappe.get_doc("POS Invoice", invoice_name)
             _enforce_read_permission(invoice)
@@ -3405,17 +3407,7 @@ def get_table_order_context(table):
     filters = {"docstatus": 0}
     if not holds_until_settlement(table_doc.branch):
         filters["invoice_printed"] = 0
-    invoices = frappe.get_all(
-        "POS Invoice",
-        filters=filters,
-        or_filters={
-            "restaurant_table": table,
-            "custom_merged_tables": ["like", f"%{table}%"],
-        },
-        order_by="creation asc",
-        limit=1,
-    )
-    invoice_name = invoices[0].name if invoices else None
+    invoice_name = _oldest_table_invoice(table, filters)
 
     order = None
     invoice = None

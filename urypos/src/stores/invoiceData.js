@@ -150,6 +150,10 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
     // Method for creating an invoice
     async invoiceCreation() {
       if (this.invoiceUpdating || !this.showUpdateButtton) return;
+      if (this.table.selectedTable && this.table.tableAwaitingInvoice === this.table.selectedTable) {
+        this.notification.createNotification("Wait for the check to load, or reopen the table to retry.");
+        return;
+      }
       this.showUpdateButtton = false;
       this.invoiceUpdating = true;
       let selectedTables = "";

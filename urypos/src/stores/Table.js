@@ -24,6 +24,7 @@ export const useTableStore = defineStore("table", {
     serviceRequestsRoom: null,
     selectedTable: null,
     tableLoadRequest: 0,
+    tableAwaitingInvoice: null,
     previousOrderdItem: [],
     invoiceNo: "",
     takeAwayTable: 0,
@@ -512,15 +513,20 @@ export const useTableStore = defineStore("table", {
     async loadSelectedTable(table) {
       const request = ++this.tableLoadRequest;
       const isCurrent = () => request === this.tableLoadRequest && this.selectedTable === table.name;
+      this.tableAwaitingInvoice = table.name;
       this.selectedTable = table.name;
+      // null means untouched during this load. An explicit empty note is an edit.
+      this.menu.comments = null;
+      this.customers.numberOfPax = null;
       this.takeAwayTable = 0;
 
       if (table.is_take_away === 1) {
         this.isTakeAway = "Take Away";
         this.takeAwayTable = 1;
       }
-      let previousOrderdNumberOfPax = "";
       this.previousOrderdItem = [];
+      this.recentOrders.draftInvoice = "";
+      this.invoiceData.invoiceNumber = "";
       this.recentOrders.modifiedTime = ""
       this.recentOrders.pastOrderdItem = []
       this.invoiceNo = "";
@@ -540,9 +546,14 @@ export const useTableStore = defineStore("table", {
         )
         .then((result) => {
           if (!isCurrent()) return;
-          this.previousOrder = result.message;
+          const saved = result.message;
+          if (!saved || (saved.name && !Array.isArray(saved.items)) || (!saved.name && Number(table.occupied) === 1)) {
+            this.notification.createNotification("Reopen the table to load its check.");
+            return;
+          }
+          this.previousOrder = saved;
           this.invoicePrinted = this.previousOrder.invoice_printed;
-          this.menu.comments = this.previousOrder.custom_comments;
+          this.menu.comments ??= this.previousOrder.custom_comments ?? "";
           this.modifiedTime = this.previousOrder.modified;
           this.grandTotal = this.previousOrder.grand_total;
           this.mobileNumber = this.previousOrder.mobile_number;
@@ -565,22 +576,21 @@ export const useTableStore = defineStore("table", {
                     window.location.reload();
                   });
                 });
-            } else {
-              this.notification.createNotification("Past Order Fetched");
+              return;
             }
+            this.notification.createNotification("Past Order Fetched");
           } else {
             router.push("/Menu");
           }
           this.previousOrderdItem = this.previousOrder.items;
           this.previousOrderdCustomer = this.previousOrder.customer;
-          previousOrderdNumberOfPax = this.previousOrder.no_of_pax;
           if (this.previousOrderdCustomer) {
             this.customers.search = this.previousOrderdCustomer;
-            this.customers.numberOfPax = previousOrderdNumberOfPax;
+            this.customers.numberOfPax ??= this.previousOrder.no_of_pax;
             this.customers.fectchCustomerFavouriteItem();
           } else {
             this.customers.search = "";
-            this.customers.numberOfPax = "";
+            this.customers.numberOfPax ??= "";
             this.customers.customerFavouriteItems = "";
             this.customers.newCustomerMobileNo = ""
           }
@@ -589,6 +599,7 @@ export const useTableStore = defineStore("table", {
           // while this table's invoice was on its way.
           const unsentItems = this.menu.cart.filter(row => !row.name);
           this.menu.cart = [...invoiceCartRows(this.previousOrderdItem, items), ...unsentItems];
+          this.tableAwaitingInvoice = null;
         })
         .catch((error) => {
           if (!isCurrent()) return;
