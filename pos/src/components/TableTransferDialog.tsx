@@ -9,7 +9,7 @@ interface TableTransferDialogProps {
   sourceTable: Table | null;
   destinationTables: Table[];
   loading?: boolean;
-  onConfirm: (destinationTable: string) => Promise<void>;
+  onConfirm: (destinationTable: string, profile?: string) => Promise<void>;
 }
 
 type TableShape = NonNullable<Table['table_shape']>;
@@ -34,6 +34,7 @@ const TableTransferDialog = ({
     loading={loading}
     options={destinationTables.map((table) => ({
       name: table.name,
+      profiles: table.transfer_profiles,
       room: [table.branch, table.restaurant_room].filter(Boolean).join(' · '),
       shape: asShape(table.table_shape),
       seatsLabel: table.occupied ? t('tables.occupied') :
@@ -44,6 +45,7 @@ const TableTransferDialog = ({
     labels={{
       title: t('tables.transfer_table'),
       description: t('tables.select_destination_table', { table: sourceTable?.name ?? '' }),
+      profileLabel: t('pos_opening.pos_profile'),
       currentLabel: t('tables.current_table'),
       searchPlaceholder: t('tables.search_transfer_placeholder'),
       empty: t('tables.no_destination_tables'),

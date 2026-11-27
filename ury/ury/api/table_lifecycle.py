@@ -135,6 +135,9 @@ def update_tables_after_transfer(source, destination, invoice):
         if frappe.db.get_value("URY Table", destination, "latest_invoice_time"):
             since = None
     set_table_state(destination, state, since=since, check=invoice.name)
+    destination_state = state
+    if not source:
+        return destination_state
     update_members(frappe, source, remove=[invoice.name])
 
     source_branch = frappe.db.get_value("URY Table", source, "branch")
@@ -150,6 +153,7 @@ def update_tables_after_transfer(source, destination, invoice):
     else:
         state = "Dirty" if cint(policy.get("custom_enable_bussing_state")) else "Available"
     set_table_state(source, state, continuing_visit=True)
+    return destination_state
 
 
 def on_check_closed(doc, method=None):

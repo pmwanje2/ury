@@ -15,13 +15,45 @@
   },
   "payment": {
     "pay_online": "Payer en ligne",
-    "pay_at_counter": "Payer au comptoir"
+    "pay_at_counter": "Payer au comptoir",
+    "starting": "Démarrage du paiement…",
+    "request_created": "Demande de paiement créée ({{amount}} {{currency}}). Un membre du personnel vous aidera à payer.",
+    "paid": "Payé ({{amount}} {{currency}}). Merci.",
+    "remaining": "Vous avez payé {{paid}} {{currency}} par téléphone. Veuillez régler les {{remaining}} {{currency}} restants en caisse."
   },
   "bill": {
-    "request": "Demander l’addition"
+    "request": "Demander l’addition",
+    "requested": "Addition demandée. Le personnel a été averti."
   },
   "cart": {
     "count_one": "{{count}} article",
     "count_many": "{{count}} articles"
+  },
+  "nav": {
+    "back_to_cart": "Retour au panier",
+    "back_to_menu": "Retour au menu"
+  },
+  "language": {
+    "chooser": "Langue"
+  },
+  "errors": {
+    "place_order": "Impossible de passer la commande. Veuillez réessayer.",
+    "request_bill": "Impossible de demander l’addition. Veuillez contacter le personnel.",
+    "pay_online": "Impossible de démarrer le paiement en ligne. Veuillez payer en caisse."
+  },
+  "footer": {
+    "source": "Source du logiciel",
+    "built_on": "propulsé par"
+  },
+  "header": {
+    "pickup": "Commande à emporter",
+    "location": "{{table}}",
+    "area_location": "{{area}} · {{table}}"
+  },
+  "actions": {
+    "new_order": "Nouvelle commande"
+  },
+  "confirm": {
+    "new_order": "Commencer une nouvelle commande et vider le panier actuel ?"
   }
 }

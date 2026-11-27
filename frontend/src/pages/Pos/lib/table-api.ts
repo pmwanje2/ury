@@ -7,6 +7,7 @@ export interface Room {
 }
 
 export interface Table {
+  transfer_profiles?: string[];
   branch?: string;
   name: string;
   occupied: number;
@@ -74,9 +75,9 @@ export async function getTables(room: string): Promise<Table[]> {
 }
 
 // Historical export name used by the table and captain screens.
-export async function getVacantTablesForBranch(branch: string, excludeTable?: string): Promise<Table[]> {
+export async function getVacantTablesForBranch(branch: string, excludeTable?: string, invoice?: string): Promise<Table[]> {
   const result = await call.get<{ message: Table[] }>('ury.ury_pos.floor_actions.get_transfer_destinations', {
-    branch, exclude_table: excludeTable,
+    branch, exclude_table: excludeTable, invoice,
   });
   return result.message;
 }

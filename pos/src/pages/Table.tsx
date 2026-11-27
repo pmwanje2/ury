@@ -82,7 +82,7 @@ const TableView = () => {
   const [mergeSourceTable, setMergeSourceTable] = useState<Table | null>(null);
   const [unmergeSourceTable, setUnmergeSourceTable] = useState<Table | null>(null);
   const [transferSourceTable, setTransferSourceTable] = useState<Table | null>(null);
-  const [transferInvoiceName, setTransferInvoiceName] = useState<string | null>(null);
+  const [transferInvoice, setTransferInvoice] = useState<{ name: string; profile?: string } | null>(null);
   const [transferDestinationTables, setTransferDestinationTables] = useState<Table[]>([]);
   const [transferDestinationsLoading, setTransferDestinationsLoading] = useState(false);
   const [captainTransferContext, setCaptainTransferContext] = useState<{
@@ -99,6 +99,7 @@ const TableView = () => {
   const [seatLoading, setSeatLoading] = useState(false);
   const [pendingTableApproval, setPendingTableApproval] = useState<{
     privilege: 'transfer_check' | 'merge_checks';
+    profile?: string;
     title: string;
     summaryLines: string[];
     reference: { doctype: string; name: string };
@@ -530,18 +531,18 @@ const TableView = () => {
     }
 
     setTransferSourceTable(table);
-    setTransferInvoiceName(null);
+    setTransferInvoice(null);
     setTransferDestinationTables([]);
     setTransferDestinationsLoading(true);
 
     try {
       const invoice = await validateActiveTableOrder(table.name);
-      const destinations = await getVacantTablesForBranch(branch, table.name);
+      const destinations = await getVacantTablesForBranch(branch, table.name, invoice.name);
       setTransferDestinationTables(destinations);
-      setTransferInvoiceName(invoice.name);
+      setTransferInvoice({ name: invoice.name, profile: invoice.pos_profile });
     } catch (error) {
       setTransferSourceTable(null);
-      setTransferInvoiceName(null);
+      setTransferInvoice(null);
       setTransferDestinationTables([]);
       showToast.error(error instanceof Error ? error.message : t('tables.transfer_failed'));
     } finally {
@@ -565,10 +566,11 @@ const TableView = () => {
     }
   };
 
-  const handleTableTransferConfirm = async (newTable: string, approval?: ManagerApprovalResult) => {
-    if (!transferSourceTable || !transferInvoiceName) return;
+  const handleTableTransferConfirm = async (newTable: string, targetProfile?: string, approval?: ManagerApprovalResult) => {
+    if (!transferSourceTable || !transferInvoice) return;
     const fromTable = transferSourceTable.name;
-    const invName = transferInvoiceName;
+    const invName = transferInvoice.name;
+    const sourceProfile = transferInvoice.profile || posProfile?.name;
 
     try {
       await tableTransfer(
@@ -576,6 +578,7 @@ const TableView = () => {
         newTable,
         invName,
         approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+        targetProfile,
       );
       if (selectedRoom) {
         await loadTables(selectedRoom, { useCache: false });
@@ -588,8 +591,11 @@ const TableView = () => {
           title: t('privileged_actions.transfer_check'),
           summaryLines: [`${fromTable} → ${newTable}`, `${t('privileged_actions.check_ref')}: ${invName}`],
           reference: { doctype: 'POS Invoice', name: invName },
-          claim: { action: 'table_transfer', from_table: fromTable, to_table: newTable, invoice: invName },
-          retry: (res) => handleTableTransferConfirm(newTable, res),
+          profile: sourceProfile,
+          claim: targetProfile
+            ? { action: 'transfer_check_outlet', from_profile: sourceProfile, to_profile: targetProfile, to_table: newTable, invoice: invName }
+            : { action: 'table_transfer', from_table: fromTable, to_table: newTable, invoice: invName },
+          retry: (res) => handleTableTransferConfirm(newTable, targetProfile, res),
         });
         return;
       }
@@ -901,7 +907,7 @@ const TableView = () => {
         onOpenChange={(open) => {
           if (!open) {
             setTransferSourceTable(null);
-            setTransferInvoiceName(null);
+            setTransferInvoice(null);
             setTransferDestinationTables([]);
           }
         }}
@@ -943,7 +949,7 @@ const TableView = () => {
       {pendingTableApproval && posProfile && (
         <ManagerApproval
           open
-          posProfile={posProfile.name}
+          posProfile={pendingTableApproval.profile || posProfile.name}
           privilege={pendingTableApproval.privilege}
           title={pendingTableApproval.title}
           summaryLines={pendingTableApproval.summaryLines}

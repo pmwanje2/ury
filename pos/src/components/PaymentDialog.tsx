@@ -472,8 +472,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const tipInvalid = tipAmount < 0;
   const amountDue = roundToCurrency(finalTotal + Math.max(0, tipAmount), currencyCode);
   const balanceDue = Math.max(0, roundToCurrency(amountDue - receivedTotal, currencyCode));
-  // Sent only when there is a tip, so an untipped settlement is unchanged.
-  const tipFields = tipAmount > 0 ? { tip: tipAmount } : {};
+  // An explicit zero clears a saved guest tip at settlement.
+  const tipFields = tipAmount > 0 || existingTip > 0 ? { tip: tipAmount } : {};
 
   const getModeDetail = (id: string): PaymentModeConfig | undefined => paymentModeDetails?.[id];
 

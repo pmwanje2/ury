@@ -261,6 +261,7 @@
     "unmerge_success": "Mesas separadas correctamente",
     "unmerge_failed": "Error al separar mesas",
     "not_merged": "Esta mesa no está unida",
+    "transfer_profile": "Perfil de punto de venta",
     "transfer_table": "Transferir mesa",
     "transfer_captain": "Transferir capitán",
     "select_destination_table": "Mover el pedido de {{table}} a cualquier mesa libre de esta sucursal",

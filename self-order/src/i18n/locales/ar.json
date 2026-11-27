@@ -15,13 +15,45 @@
   },
   "payment": {
     "pay_online": "الدفع عبر الإنترنت",
-    "pay_at_counter": "الدفع عند الصندوق"
+    "pay_at_counter": "الدفع عند الصندوق",
+    "starting": "جارٍ بدء الدفع…",
+    "request_created": "تم إنشاء طلب دفع بقيمة {{amount}} {{currency}}. سيساعدك أحد الموظفين في إتمام الدفع.",
+    "paid": "تم دفع {{amount}} {{currency}}. شكرًا لك.",
+    "remaining": "دفعت {{paid}} {{currency}} عبر الهاتف. يرجى دفع المبلغ المتبقي وقدره {{remaining}} {{currency}} عند الصندوق."
   },
   "bill": {
-    "request": "طلب الفاتورة"
+    "request": "طلب الفاتورة",
+    "requested": "تم طلب الفاتورة وإبلاغ الموظفين."
   },
   "cart": {
     "count_one": "{{count}} عنصر",
     "count_many": "عدد العناصر: {{count}}"
+  },
+  "nav": {
+    "back_to_cart": "العودة إلى السلة",
+    "back_to_menu": "العودة إلى القائمة"
+  },
+  "language": {
+    "chooser": "اللغة"
+  },
+  "errors": {
+    "place_order": "تعذّر إرسال الطلب. يرجى المحاولة مجددًا.",
+    "request_bill": "تعذّر طلب الفاتورة. يرجى التواصل مع الموظفين.",
+    "pay_online": "تعذّر بدء الدفع الإلكتروني. يرجى الدفع عند الصندوق."
+  },
+  "footer": {
+    "source": "الشفرة المصدرية",
+    "built_on": "مدعوم من"
+  },
+  "header": {
+    "pickup": "طلب للاستلام",
+    "location": "{{table}}",
+    "area_location": "{{area}} · {{table}}"
+  },
+  "actions": {
+    "new_order": "طلب جديد"
+  },
+  "confirm": {
+    "new_order": "هل تريد بدء طلب جديد وإفراغ السلة الحالية؟"
   }
 }

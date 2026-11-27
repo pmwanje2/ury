@@ -5537,9 +5537,9 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
     pos_invoice = frappe.get_doc("POS Invoice", invoice, for_update=True)
     locked_tables = {
         t: frappe.get_doc("URY Table", t, for_update=True)
-        for t in sorted({table, newTable})
+        for t in sorted({t for t in (table, newTable) if t})
     }
-    current_table = locked_tables[table]
+    current_table = locked_tables.get(table)
     new_table = locked_tables[newTable]
 
     if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice):
@@ -5550,8 +5550,8 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
     assert_not_efris_fiscalised(pos_invoice)
 
     # Anti-race check: reject if another waiter already transferred this check elsewhere.
-    old_table_name = current_table.name if isinstance(current_table.name, str) else table
-    if (roster or target_pos_profile or pos_invoice.restaurant_table) and pos_invoice.restaurant_table != old_table_name:
+    old_table_name = current_table.name if current_table and isinstance(current_table.name, str) else table
+    if (pos_invoice.restaurant_table or None) != (old_table_name or None):
         frappe.throw(
             coded_message(
                 "TRANSFER-CONFLICT",
@@ -5574,28 +5574,40 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
 
         timeclock.enforce_clock_in_for_profile(pos_profile_doc, user=frappe.session.user)
 
-    merge_members, _table_map = _get_merge_cluster(table)
+    merge_members = _get_merge_cluster(table)[0] if table else []
     if len(merge_members) > 1:
         frappe.throw(_("Table transfer is not allowed for merged tables. Unmerge first."))
 
+    if not new_table.branch or not frappe.has_permission("Branch", "read", doc=new_table.branch):
+        frappe.throw(_("Not permitted to transfer checks to this branch."), frappe.PermissionError)
+
     target_profile = None
-    if target_pos_profile or current_table.branch != new_table.branch:
+    if target_pos_profile or not current_table or current_table.branch != new_table.branch:
         if not (roster or target_pos_profile):
             frappe.throw(_("Table transfer between different branches is restricted."))
         from ury.ury_pos.floor_actions import validate_outlet_transfer
 
         if not target_pos_profile:
             from ury.ury_pos.outlet_context import get_authorized_outlets
-            outlets = [outlet for outlet in get_authorized_outlets()
-                       if outlet["branch"] == new_table.branch and outlet["company"] == pos_invoice.company]
-            if not outlets:
-                frappe.throw(_("Not permitted to transfer to this outlet."), frappe.PermissionError)
-            target_name = outlets[0]["pos_profile"]
+            from ury.ury_pos.floor_actions import check_currency, destination_profiles
+            currency = check_currency(pos_invoice)
+            profiles = destination_profiles(get_authorized_outlets(), new_table.branch, pos_invoice.company, currency)
+            if not profiles:
+                frappe.throw(_("No authorized destination profile uses the check currency."), frappe.PermissionError)
+            target_name = profiles[0]
         else:
             target_name = target_pos_profile
         target_profile = frappe.get_doc("POS Profile", target_name)
         validate_outlet_transfer(pos_invoice, target_profile)
-        if target_profile.branch != new_table.branch or cint(target_profile.get("disabled")):
+        if not target_profile.branch:
+            from ury.ury_pos.outlet_context import get_authorized_outlets
+            allowed_branch = new_table.branch and any(
+                o["branch"] == new_table.branch and o["company"] == pos_invoice.company
+                for o in get_authorized_outlets()
+            )
+        else:
+            allowed_branch = target_profile.branch == new_table.branch
+        if not allowed_branch or cint(target_profile.get("disabled")):
             frappe.throw(_("Target table does not belong to an enabled destination outlet."))
 
     for member in destination_group:
@@ -5654,7 +5666,8 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
                 )
             )
 
-    validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
+    if old_table_name:
+        validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
 
     if len(destination_group) > 1:
         from ury.ury.api.table_reservation import open_checks_on
@@ -5662,14 +5675,20 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         existing = open_checks_on(destination_group, for_update=True)
         primary = next((row.restaurant_table for row in sorted(existing, key=lambda r: str(r.creation))
                         if row.restaurant_table in destination_group), new_table.name)
-        new_table = frappe.get_doc("URY Table", primary, for_update=True)
+        primary_table = frappe.get_doc("URY Table", primary, for_update=True)
+        if primary_table.branch != new_table.branch:
+            frappe.throw(_("A merged table group must belong to one branch."))
+        new_table = primary_table
     if roster:
         pos_invoice.custom_merged_tables = ",".join(sorted(set(destination_group) - {new_table.name})) or None
     pos_invoice.restaurant_table = new_table.name
     pos_invoice.custom_restaurant_room = new_table.restaurant_room
-    if target_profile:
+    changing_outlet = target_profile and (
+        target_profile.name != pos_invoice.pos_profile or new_table.branch != pos_invoice.branch
+    )
+    if changing_outlet:
         from ury.ury_pos.floor_actions import rebind_outlet
-        rebind_outlet(pos_invoice, target_profile)
+        rebind_outlet(pos_invoice, target_profile, table_branch=new_table.branch)
         pos_profile_doc = target_profile
     _sync_service_charge(pos_invoice, pos_profile_doc)
     if callable(getattr(pos_invoice, "calculate_taxes_and_totals", None)):
@@ -5678,19 +5697,25 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
     if hasattr(pos_invoice, "flags"):
         pos_invoice.flags.ury_privileged_action_verified = True
     try:
-        pos_invoice.save()
+        if changing_outlet:
+            from ury.ury_pos.transfer_context import outlet_transfer_save
+            with outlet_transfer_save(pos_invoice):
+                pos_invoice.save()
+        else:
+            pos_invoice.save()
     finally:
         if hasattr(pos_invoice, "flags"):
             pos_invoice.flags.ury_privileged_action_verified = prev_priv_verified
 
-    transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
-    update_tables_after_transfer(old_table_name, new_table.name, pos_invoice)
+    if old_table_name:
+        transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
+    destination_state = update_tables_after_transfer(old_table_name, new_table.name, pos_invoice)
 
     if len(destination_group) > 1:
         from ury.ury.api.table_lifecycle import set_table_state
         for member in destination_group:
             if member != new_table.name:
-                set_table_state(member, "Seated", check=pos_invoice.name)
+                set_table_state(member, destination_state, check=pos_invoice.name)
 
     # Do not swallow KOT-transfer failures: a raise here aborts the request
     # (and its transaction) so the table/invoice changes above are rolled

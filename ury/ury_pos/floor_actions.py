@@ -168,6 +168,11 @@ def authorize_and_count_bill_print(
     }
 
 
+def check_currency(inv):
+    return (inv.get("currency") or frappe.db.get_value("POS Profile", inv.pos_profile, "currency")
+            or frappe.db.get_value("Company", inv.company, "default_currency"))
+
+
 def validate_outlet_transfer(inv, target_profile):
     from ury.ury_pos.outlet_context import assert_outlet_access
 
@@ -175,13 +180,14 @@ def validate_outlet_transfer(inv, target_profile):
     assert_outlet_access(target_profile.name)
     if not inv.company or inv.company != target_profile.company:
         frappe.throw(_("Cannot transfer checks between companies."), frappe.PermissionError)
-    if inv.get("currency") and target_profile.get("currency") and inv.currency != target_profile.currency:
+    target_currency = target_profile.get("currency") or frappe.db.get_value("Company", inv.company, "default_currency")
+    if check_currency(inv) != target_currency:
         frappe.throw(_("Choose an outlet using the check currency."))
     if any(cint(row.get("custom_tender_received")) and flt(row.get("amount")) for row in inv.get("payments") or []):
         frappe.throw(_("Cannot move a check with received tenders."))
 
 
-def rebind_outlet(inv, target):
+def rebind_outlet(inv, target, *, table_branch=None):
     from ury.ury.doctype.ury_order.ury_order import _dayparts_mod, invoice_pricing_date, price_items_for_invoice
     from ury.ury_pos.tax_determination import apply_order_type_tax
 
@@ -192,7 +198,7 @@ def rebind_outlet(inv, target):
         if old_account:
             inv.set("taxes", [row for row in inv.get("taxes") or [] if row.account_head != old_account])
     inv.pos_profile = target.name
-    inv.branch = target.branch
+    inv.branch = table_branch or target.branch
     inv.restaurant = target.get("restaurant")
     resolved = _dayparts_mod().resolve_menu_and_price_list(
         inv.branch, restaurant=inv.restaurant, table=inv.get("restaurant_table"),
@@ -208,7 +214,8 @@ def rebind_outlet(inv, target):
         menu = resolved.get("menu")
         rows = [row for row in inv.get("items") or []
                 if not any(cint(row.get(flag)) for flag in
-                           ("is_disposable", "custom_price_overridden", "custom_is_open_item", "custom_is_complimentary"))
+                           ("is_disposable", "custom_price_overridden", "custom_is_open_item", "custom_is_complimentary", "custom_is_modifier"))
+                and not row.get("custom_parent_line_key")
                 and row.get("custom_line_role") != "Combo Upcharge"]
         priced = price_items_for_invoice(
             [{"item": row.item_code, "qty": row.qty} for row in rows],
@@ -218,22 +225,48 @@ def rebind_outlet(inv, target):
         for row, prices in zip(rows, priced):
             row.rate = prices["rate"]
             row.price_list_rate = prices["price_list_rate"]
+    if not cint(inv.get("custom_tax_exempt")):
+        inv.taxes_and_charges = target.get("taxes_and_charges") or ""
     apply_order_type_tax(inv, target, reset_non_exempt_item_taxes=True)
 
 
+def destination_profiles(outlets, branch, company, currency):
+    return [o["pos_profile"] for o in outlets if o["branch"] == branch and o["company"] == company
+            and (not currency or currency == o["currency"])]
+
+
 @frappe.whitelist()
-def get_transfer_destinations(branch, exclude_table=None):
+def get_transfer_destinations(branch, exclude_table=None, invoice=None):
     from ury.ury_pos.outlet_context import get_authorized_outlets
 
     outlets = get_authorized_outlets()
     companies = {o["company"] for o in outlets if o["branch"] == branch}
+    currency = source_profile = None
+    if invoice:
+        check = frappe.get_doc("POS Invoice", invoice)
+        check.check_permission("read")
+        if check.branch != branch or check.company not in companies:
+            frappe.throw(_("Not permitted to transfer this check."), frappe.PermissionError)
+        companies = {check.company}
+        source_profile = check.pos_profile
+        currency = check_currency(check)
     branches = sorted({o["branch"] for o in outlets if o["company"] in companies and o["branch"]})
     if not branches:
         return []
-    return frappe.get_list("URY Table", filters={"branch": ["in", branches], "name": ["!=", exclude_table or ""]},
-                           fields=["name", "branch", "restaurant_room", "occupied", "merged_with",
-                                   "no_of_seats", "table_shape"], order_by="branch, restaurant_room, name",
-                           limit_page_length=0)
+    tables = frappe.get_list("URY Table", filters={"branch": ["in", branches], "name": ["!=", exclude_table or ""]},
+                             fields=["name", "branch", "restaurant_room", "occupied", "merged_with",
+                                     "no_of_seats", "table_shape"], order_by="branch, restaurant_room, name",
+                             limit_page_length=0)
+    if not invoice:
+        return tables
+    result = []
+    for table in tables:
+        profiles = destination_profiles(outlets, table.branch, check.company, currency)
+        if profiles:
+            if profiles != [source_profile]:
+                table.transfer_profiles = sorted(profiles, key=lambda name: name != source_profile)
+            result.append(table)
+    return result
 
 
 @frappe.whitelist(methods=["POST"])
@@ -253,7 +286,7 @@ def transfer_check_outlet(
 
     if target_table:
         source = frappe.db.get_value("POS Invoice", invoice, "restaurant_table")
-        if source and source != target_table:
+        if source != target_table:
             from ury.ury.doctype.ury_order.ury_order import table_transfer
 
             return table_transfer(source, target_table, invoice, approval_token, reason, reason_note,
@@ -288,7 +321,7 @@ def transfer_check_outlet(
 
     target_table_doc = locked_tables.get(target_table) if target_table else None
     if target_table_doc is not None:
-        if target_profile.get("branch") and target_table_doc.get("branch") != target_profile.get("branch"):
+        if not target_table_doc.branch or target_table_doc.branch != target_profile.get("branch"):
             frappe.throw(_("Target table does not belong to the target outlet branch."), frappe.ValidationError)
         # Check occupied BEFORE consuming any manager PIN token
         assert_table_free_for_transfer(target_table_doc, exclude_invoice=inv.name)
@@ -350,8 +383,10 @@ def transfer_check_outlet(
     if callable(getattr(inv, "calculate_taxes_and_totals", None)):
         inv.calculate_taxes_and_totals()
     inv.flags.ury_privileged_action_verified = True
+    from ury.ury_pos.transfer_context import outlet_transfer_save
     try:
-        inv.save()
+        with outlet_transfer_save(inv):
+            inv.save()
     finally:
         inv.flags.ury_privileged_action_verified = False
 

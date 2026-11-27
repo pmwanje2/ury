@@ -119,6 +119,7 @@ def compute_shift_tip_rows(
             "waiter",
             "owner",
             "custom_tip_server",
+            "custom_ordering_session",
             "custom_charged_tip",
             "consolidated_invoice",
         ],
@@ -149,7 +150,10 @@ def compute_shift_tip_rows(
             servers.add(server)
         if charged_tip != 0:
             attributed = tip_server or server
-            if attributed and attributed not in ("Administrator", "Guest"):
+            if inv.get("custom_ordering_session"):
+                from ury.ury.api.guest_tip import self_order_tip_server
+                attributed = self_order_tip_server(tip_server, waiter)
+            if attributed and (attributed not in ("Administrator", "Guest") or inv.get("custom_ordering_session")):
                 servers.add(attributed)
                 if charged_receipts is not None:
                     charged_receipts.append((attributed, ts, charged_tip))
@@ -212,7 +216,7 @@ def compute_shift_tip_rows(
             {
                 "user": user,
                 "employee": _employee_for_user(user, opening["company"]),
-                "full_name": _user_full_name(user),
+                "full_name": _("Unassigned self-order tips") if user == "Guest" else _user_full_name(user),
                 "currency": currency,
                 "charged_tips_collected": charged,
                 "tips_paid_from_till": paid_out,

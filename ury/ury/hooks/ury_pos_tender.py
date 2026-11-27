@@ -244,7 +244,12 @@ def sync_charged_tip(doc):
 	if not tip:
 		return
 	_check_tips_account(doc, account)
-	doc.custom_tip_server = doc.get("custom_tip_server") or doc.get("waiter") or doc.get("owner") or frappe.session.user
+	if doc.get("custom_ordering_session"):
+		from ury.ury.api.guest_tip import self_order_tip_server
+
+		doc.custom_tip_server = self_order_tip_server(doc.get("custom_tip_server"), doc.get("waiter"))
+	else:
+		doc.custom_tip_server = doc.get("custom_tip_server") or doc.get("waiter") or doc.get("owner") or frappe.session.user
 	_append_tip_row(doc, account, tip)
 
 

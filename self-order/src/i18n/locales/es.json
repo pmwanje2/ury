@@ -15,13 +15,45 @@
   },
   "payment": {
     "pay_online": "Pagar en línea",
-    "pay_at_counter": "Pagar en caja"
+    "pay_at_counter": "Pagar en caja",
+    "starting": "Iniciando el pago…",
+    "request_created": "Solicitud de pago creada ({{amount}} {{currency}}). El personal le ayudará a pagar.",
+    "paid": "Pagado ({{amount}} {{currency}}). Gracias.",
+    "remaining": "Ha pagado {{paid}} {{currency}} por teléfono. Pague los {{remaining}} {{currency}} restantes en caja."
   },
   "bill": {
-    "request": "Pedir la cuenta"
+    "request": "Pedir la cuenta",
+    "requested": "Cuenta solicitada. Se ha avisado al personal."
   },
   "cart": {
     "count_one": "{{count}} artículo",
     "count_many": "{{count}} artículos"
+  },
+  "nav": {
+    "back_to_cart": "Volver al carrito",
+    "back_to_menu": "Volver al menú"
+  },
+  "language": {
+    "chooser": "Idioma"
+  },
+  "errors": {
+    "place_order": "No se pudo enviar el pedido. Inténtelo de nuevo.",
+    "request_bill": "No se pudo pedir la cuenta. Consulte al personal.",
+    "pay_online": "No se pudo iniciar el pago en línea. Pague en caja."
+  },
+  "footer": {
+    "source": "Código fuente",
+    "built_on": "desarrollado con"
+  },
+  "header": {
+    "pickup": "Pedido para recoger",
+    "location": "{{table}}",
+    "area_location": "{{area}} · {{table}}"
+  },
+  "actions": {
+    "new_order": "Nuevo pedido"
+  },
+  "confirm": {
+    "new_order": "¿Iniciar un nuevo pedido y vaciar el carrito actual?"
   }
 }

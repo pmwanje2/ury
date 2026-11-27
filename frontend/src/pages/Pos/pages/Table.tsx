@@ -281,7 +281,7 @@ const TableView = () => {
 
     try {
       const invoice = await validateActiveTableOrder(table.name);
-      const destinations = await getVacantTablesForBranch(branch, table.name);
+      const destinations = await getVacantTablesForBranch(branch, table.name, invoice.name);
       setTransferDestinationTables(destinations);
       setTransferInvoiceName(invoice.name);
     } catch (error) {
@@ -310,11 +310,11 @@ const TableView = () => {
     }
   };
 
-  const handleTableTransferConfirm = async (newTable: string) => {
+  const handleTableTransferConfirm = async (newTable: string, targetProfile?: string) => {
     if (!transferSourceTable || !transferInvoiceName) return;
 
     try {
-      await tableTransfer(transferSourceTable.name, newTable, transferInvoiceName);
+      await tableTransfer(transferSourceTable.name, newTable, transferInvoiceName, targetProfile);
       if (selectedRoom) {
         await loadTables(selectedRoom, { useCache: false });
       }
