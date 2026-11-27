@@ -5,6 +5,7 @@ import { formatCurrency, db } from '@ury/core';
 import { OrderItem, usePOSStore } from '../store/pos-store';
 import type { BundleOverride, ModifierGroup, SelectedModifier } from '../lib/menu-api';
 import { t } from '../i18n';
+import { buildComboChoice } from '../lib/combo-choice';
 
 interface ProductDialogProps {
   onClose: () => void;
@@ -357,41 +358,9 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
           if (!opt) continue;
 
           if (grp.group_type === 'Combo Choice' || opt.replaces_bundle_item) {
-            const chosenItemCode = opt.item || opt.option_code;
-            bundleOverrides.push({
-              group: grp.name,
-              slot_item: opt.replaces_bundle_item || '',
-              chosen_item: chosenItemCode,
-              option_code: opt.option_code,
-              label: opt.label,
-              qty: opt.qty || 1,
-              inherit_parent_routing: grp.inherit_parent_routing ? 1 : 0,
-              hide_on_receipt: grp.hide_unpriced_on_receipt ? 1 : 0,
-            });
-            const upcharge = Number(opt.unit_price ?? opt.upcharge_amount ?? 0);
-            if (opt.price_mode === 'Combo Upcharge' && upcharge > 0) {
-              const feeItemCode = opt.upcharge_item || chosenItemCode;
-              childRows.push({
-                id: feeItemCode,
-                item: feeItemCode,
-                name: opt.label,
-                item_name: opt.label,
-                image: null,
-                price: upcharge,
-                quantity: numericQuantity * (opt.qty || 1),
-                course: selectedItem.course || '',
-                special_dish: 0,
-                tax_rate: 0,
-                parentLineKey: parentKey,
-                isModifier: true,
-                lineRole: 'Combo Upcharge',
-                modifierGroup: grp.name,
-                modifierOption: opt.option_code,
-                modifierPrefix: sel.prefix || null,
-                inheritParentRouting: grp.inherit_parent_routing,
-                hideUnpricedOnReceipt: false,
-              });
-            }
+            const { override, fee } = buildComboChoice(grp, opt, numericQuantity, selectedItem.course, sel.prefix);
+            bundleOverrides.push(override);
+            if (fee) childRows.push({ ...fee, parentLineKey: parentKey });
           } else if (opt.price_mode === 'Menu Item Price') {
             const modItemCode = opt.item || opt.option_code;
             childRows.push({

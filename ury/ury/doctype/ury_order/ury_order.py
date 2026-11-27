@@ -6968,333 +6968,340 @@ def make_invoice(
     
     invoice.company = pos_prof.company
     invoice.currency = pos_prof.currency
-    tx_mod = _tax_mod()
-    tx_mod.apply_order_type_tax(invoice, pos_prof)
+    # ERPNext rounds the mutable item rates on the very first totals calculation.
+    # Keep both documents at settlement precision through allocation and posting.
+    with ExitStack() as precision:
+        precision.enter_context(with_currency_precision(invoice))
+        tx_mod = _tax_mod()
+        tx_mod.apply_order_type_tax(invoice, pos_prof)
 
-    # The cashier's tip (cash, or charged on a card or room-charge tender):
-    # its Tips Payable line is on the bill before the totals the tenders are
-    # allocated against. Owed to the bill's server unless another is named.
-    invoice.custom_charged_tip = tip
-    invoice.custom_tip_server = (tip_server or invoice.waiter) if tip else None
-    sync_charged_tip(invoice)
+        # The cashier's tip (cash, or charged on a card or room-charge tender):
+        # its Tips Payable line is on the bill before the totals the tenders are
+        # allocated against. Owed to the bill's server unless another is named.
+        invoice.custom_charged_tip = tip
+        invoice.custom_tip_server = (tip_server or invoice.waiter) if tip else None
+        sync_charged_tip(invoice)
 
-    _sync_service_charge(invoice, pos_prof)
+        _sync_service_charge(invoice, pos_prof)
 
-    target = None
-    if invoice.custom_merged_pos_invoice:
-        target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
-        target.cashier = frappe.session.user
-        _sync_service_charge(target, pos_prof)
-        fx_proofs = getattr(getattr(invoice, "flags", None), "get", lambda *a: None)("pos_verified_fx_overrides")
-        if fx_proofs:
-            from ury.ury_pos.fx import mark_verified_fx_override
-            for proof in fx_proofs:
-                mark_verified_fx_override(target, proof.mode_of_payment, proof.from_currency, proof.to_currency, proof.rate)
+        target = None
+        if invoice.custom_merged_pos_invoice:
+            target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
+            precision.enter_context(with_currency_precision(target))
+            target.cashier = frappe.session.user
+            _sync_service_charge(target, pos_prof)
+            fx_proofs = getattr(getattr(invoice, "flags", None), "get", lambda *a: None)("pos_verified_fx_overrides")
+            if fx_proofs:
+                from ury.ury_pos.fx import mark_verified_fx_override
+                for proof in fx_proofs:
+                    mark_verified_fx_override(target, proof.mode_of_payment, proof.from_currency, proof.to_currency, proof.rate)
 
-    if discount_spec["has_any_arg"]:
-        with _split_discount_pricing(invoice, target):
-            apply_discount_to_invoice(
+        if discount_spec["has_any_arg"]:
+            with _split_discount_pricing(invoice, target):
+                apply_discount_to_invoice(
+                    invoice,
+                    pos_prof,
+                    discount_spec,
+                    require_reason=True,
+                    enforce_auth=True,
+                    linked_partner=target,
+                )
+        else:
+            invoice.calculate_taxes_and_totals()
+            if target is not None:
+                target.calculate_taxes_and_totals()
+
+        if target is not None:
+            doc_existing = _received_payment_rows(invoice)
+            target_existing = _received_payment_rows(target)
+            if doc_existing or target_existing:
+                combined_existing_check = frappe._dict(
+                    name=invoice.name,
+                    company=invoice.get("company"),
+                    payments=doc_existing + target_existing,
+                    precision=getattr(invoice, "precision", None),
+                )
+                reconciled_all = _reconcile_settlement_payments(combined_existing_check, payments)
+                new_rows = reconciled_all[len(doc_existing) + len(target_existing):]
+                invoice.set("payments", [])
+                target.set("payments", [])
+                for row in doc_existing:
+                    copied = _copy_payment_row(row)
+                    copied["custom_tender_received"] = 1
+                    invoice.append("payments", copied)
+                for row in target_existing:
+                    copied = _copy_payment_row(row)
+                    copied["custom_tender_received"] = 1
+                    target.append("payments", copied)
+                doc_req = max(0, flt(invoice.rounded_total or invoice.grand_total) - sum(flt(r.amount) for r in invoice.payments))
+                target_req = max(0, flt(target.rounded_total or target.grand_total) - sum(flt(r.amount) for r in target.payments))
+                alloc_rows = new_rows
+            else:
+                invoice.set("payments", [])
+                target.set("payments", [])
+                doc_req = invoice.rounded_total or invoice.grand_total
+                target_req = target.rounded_total or target.grand_total
+                alloc_rows = payments
+
+            alloc_base_prec = invoice.precision("paid_amount") if callable(getattr(invoice, "precision", None)) else 2
+            if not isinstance(alloc_base_prec, int) or isinstance(alloc_base_prec, bool):
+                alloc_base_prec = 2
+            fx_alloc_prec = 4
+
+            for d in alloc_rows:
+                amt = float(d["amount"])
+                mode = d["mode_of_payment"]
+                extra_fields = {
+                    k: d[k]
+                    for k in (
+                        "reference_no",
+                        "reference_date",
+                        "clearance_date",
+                        "custom_tender_currency",
+                        "custom_exchange_rate",
+                        "custom_exchange_rate_date",
+                    )
+                    if d.get(k)
+                }
+                orig_total = amt if amt > 0 else 1.0
+                orig_fx = flt(d.get("custom_tender_amount"))
+                rem_fx = flt(orig_fx, fx_alloc_prec) if orig_fx > 0 else 0.0
+                primary_row = None
+
+                if doc_req > 0:
+                    give = min(amt, doc_req)
+                    row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
+                    if orig_fx > 0:
+                        give_fx = (
+                            flt(rem_fx, fx_alloc_prec)
+                            if abs(amt - give) <= 1e-9
+                            else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
+                        )
+                        row_payload["custom_tender_amount"] = give_fx
+                        rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
+                    primary_row = invoice.append("payments", row_payload)
+                    amt = flt(amt - give, alloc_base_prec)
+                    doc_req = flt(doc_req - give, alloc_base_prec)
+
+                if target_req > 0 and amt > 0:
+                    give = min(amt, target_req)
+                    row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
+                    if orig_fx > 0:
+                        give_fx = (
+                            flt(rem_fx, fx_alloc_prec)
+                            if abs(amt - give) <= 1e-9
+                            else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
+                        )
+                        row_payload["custom_tender_amount"] = give_fx
+                        rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
+                    target.append("payments", row_payload)
+                    amt = flt(amt - give, alloc_base_prec)
+                    target_req = flt(target_req - give, alloc_base_prec)
+
+                if amt > 0:
+                    # Preserve any remaining over-tender on the primary bill so
+                    # ury_pos_tender.before_validate applies the tender's over-tender
+                    # rule (Refuse / Post to Charged Tip) or cash change, keeping FX
+                    # fields and converted base-amount math exact across both branches.
+                    existing = primary_row
+                    if existing is None:
+                        d_curr = extra_fields.get("custom_tender_currency")
+                        d_rate = flt(extra_fields.get("custom_exchange_rate"), 9) if extra_fields.get("custom_exchange_rate") else None
+                        existing = next(
+                            (
+                                row
+                                for row in reversed(invoice.payments)
+                                if row.mode_of_payment == mode
+                                and (
+                                    orig_fx <= 0
+                                    or (
+                                        row.get("custom_tender_currency") == d_curr
+                                        and (d_rate is None or abs(flt(row.get("custom_exchange_rate"), 9) - d_rate) <= 1e-6)
+                                    )
+                                )
+                            ),
+                            None,
+                        )
+                    if existing is not None:
+                        existing.amount = flt(flt(existing.amount) + amt, alloc_base_prec)
+                        if orig_fx > 0:
+                            existing.custom_tender_amount = flt(
+                                flt(existing.get("custom_tender_amount")) + rem_fx,
+                                fx_alloc_prec,
+                            )
+                            for k, v in extra_fields.items():
+                                if not existing.get(k):
+                                    setattr(existing, k, v)
+                            rem_fx = 0.0
+                    else:
+                        row_payload = dict(mode_of_payment=mode, amount=amt, **extra_fields)
+                        if orig_fx > 0:
+                            row_payload["custom_tender_amount"] = flt(rem_fx, fx_alloc_prec)
+                            rem_fx = 0.0
+                        invoice.append("payments", row_payload)
+
+            if not target.payments and payments:
+                target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
+            _validate_confirmed_phone_payments(invoice, invoice.payments)
+            _validate_confirmed_phone_payments(target, target.payments)
+            if _enforce_on_account(
                 invoice,
                 pos_prof,
-                discount_spec,
-                require_reason=True,
-                enforce_auth=True,
-                linked_partner=target,
-            )
-    else:
-        invoice.calculate_taxes_and_totals()
-        if target is not None:
-            target.calculate_taxes_and_totals()
+                customer_disabled,
+                target,
+                on_account_approval=on_account_approval,
+                on_account_reason=on_account_reason,
+                consume_token=bool(submit_invoice),
+            ):
+                if target.company != invoice.company or target.pos_profile != invoice.pos_profile or target.docstatus != 0:
+                    frappe.throw(_('Merged credit bills must be open on the same till.'))
+                _set_settlement_customer(target, customer)
+                target.set_paid_amount()
+                target.set_outstanding_amount()
+            target.flags.ignore_payment_sync = True
 
-    if target is not None:
-        doc_existing = _received_payment_rows(invoice)
-        target_existing = _received_payment_rows(target)
-        if doc_existing or target_existing:
-            combined_existing_check = frappe._dict(
-                name=invoice.name,
-                company=invoice.get("company"),
-                payments=doc_existing + target_existing,
-                precision=getattr(invoice, "precision", None),
-            )
-            reconciled_all = _reconcile_settlement_payments(combined_existing_check, payments)
-            new_rows = reconciled_all[len(doc_existing) + len(target_existing):]
-            invoice.set("payments", [])
-            target.set("payments", [])
-            for row in doc_existing:
-                copied = _copy_payment_row(row)
-                copied["custom_tender_received"] = 1
-                invoice.append("payments", copied)
-            for row in target_existing:
-                copied = _copy_payment_row(row)
-                copied["custom_tender_received"] = 1
-                target.append("payments", copied)
-            doc_req = max(0, flt(invoice.rounded_total or invoice.grand_total) - sum(flt(r.amount) for r in invoice.payments))
-            target_req = max(0, flt(target.rounded_total or target.grand_total) - sum(flt(r.amount) for r in target.payments))
-            alloc_rows = new_rows
+            frappe.flags.in_bill_merge_sync = True
+            prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+            prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
+            prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
+            if target_existing:
+                frappe.flags.ury_server_tender_received = True
+            frappe.flags.pos_server_override_fields = True
+            if discount_spec["has_any_arg"]:
+                frappe.flags.ury_server_discount_write = True
+            try:
+                # Tender allocation has installed new payment rows since entry.
+                with with_currency_precision(target):
+                    target.save(ignore_permissions=True)
+            finally:
+                frappe.flags.ury_server_tender_received = prev_tender_flag
+                frappe.flags.pos_server_override_fields = prev_override_flag
+                frappe.flags.ury_server_discount_write = prev_disc_flag
+                frappe.flags.in_bill_merge_sync = False
+
+            invoice.flags.ignore_payment_sync = True
         else:
+            reconciled_payments = _reconcile_settlement_payments(invoice, payments)
+            _validate_confirmed_phone_payments(invoice, reconciled_payments)
             invoice.set("payments", [])
-            target.set("payments", [])
-            doc_req = invoice.rounded_total or invoice.grand_total
-            target_req = target.rounded_total or target.grand_total
-            alloc_rows = payments
+            for row_dict in reconciled_payments:
+                invoice.append("payments", row_dict)
 
-        alloc_base_prec = invoice.precision("paid_amount") if callable(getattr(invoice, "precision", None)) else 2
-        if not isinstance(alloc_base_prec, int) or isinstance(alloc_base_prec, bool):
-            alloc_base_prec = 2
-        fx_alloc_prec = 4
+        from ury.ury_pos import offline_tenders, room_charge
 
-        for d in alloc_rows:
-            amt = float(d["amount"])
-            mode = d["mode_of_payment"]
-            extra_fields = {
-                k: d[k]
-                for k in (
-                    "reference_no",
-                    "reference_date",
-                    "clearance_date",
-                    "custom_tender_currency",
-                    "custom_exchange_rate",
-                    "custom_exchange_rate_date",
-                )
-                if d.get(k)
-            }
-            orig_total = amt if amt > 0 else 1.0
-            orig_fx = flt(d.get("custom_tender_amount"))
-            rem_fx = flt(orig_fx, fx_alloc_prec) if orig_fx > 0 else 0.0
-            primary_row = None
-
-            if doc_req > 0:
-                give = min(amt, doc_req)
-                row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
-                if orig_fx > 0:
-                    give_fx = (
-                        flt(rem_fx, fx_alloc_prec)
-                        if abs(amt - give) <= 1e-9
-                        else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
-                    )
-                    row_payload["custom_tender_amount"] = give_fx
-                    rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
-                primary_row = invoice.append("payments", row_payload)
-                amt = flt(amt - give, alloc_base_prec)
-                doc_req = flt(doc_req - give, alloc_base_prec)
-
-            if target_req > 0 and amt > 0:
-                give = min(amt, target_req)
-                row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
-                if orig_fx > 0:
-                    give_fx = (
-                        flt(rem_fx, fx_alloc_prec)
-                        if abs(amt - give) <= 1e-9
-                        else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
-                    )
-                    row_payload["custom_tender_amount"] = give_fx
-                    rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
-                target.append("payments", row_payload)
-                amt = flt(amt - give, alloc_base_prec)
-                target_req = flt(target_req - give, alloc_base_prec)
-
-            if amt > 0:
-                # Preserve any remaining over-tender on the primary bill so
-                # ury_pos_tender.before_validate applies the tender's over-tender
-                # rule (Refuse / Post to Charged Tip) or cash change, keeping FX
-                # fields and converted base-amount math exact across both branches.
-                existing = primary_row
-                if existing is None:
-                    d_curr = extra_fields.get("custom_tender_currency")
-                    d_rate = flt(extra_fields.get("custom_exchange_rate"), 9) if extra_fields.get("custom_exchange_rate") else None
-                    existing = next(
-                        (
-                            row
-                            for row in reversed(invoice.payments)
-                            if row.mode_of_payment == mode
-                            and (
-                                orig_fx <= 0
-                                or (
-                                    row.get("custom_tender_currency") == d_curr
-                                    and (d_rate is None or abs(flt(row.get("custom_exchange_rate"), 9) - d_rate) <= 1e-6)
-                                )
-                            )
-                        ),
-                        None,
-                    )
-                if existing is not None:
-                    existing.amount = flt(flt(existing.amount) + amt, alloc_base_prec)
-                    if orig_fx > 0:
-                        existing.custom_tender_amount = flt(
-                            flt(existing.get("custom_tender_amount")) + rem_fx,
-                            fx_alloc_prec,
-                        )
-                        for k, v in extra_fields.items():
-                            if not existing.get(k):
-                                setattr(existing, k, v)
-                        rem_fx = 0.0
-                else:
-                    row_payload = dict(mode_of_payment=mode, amount=amt, **extra_fields)
-                    if orig_fx > 0:
-                        row_payload["custom_tender_amount"] = flt(rem_fx, fx_alloc_prec)
-                        rem_fx = 0.0
-                    invoice.append("payments", row_payload)
-                
-        if not target.payments and payments:
-            target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
-        _validate_confirmed_phone_payments(invoice, invoice.payments)
-        _validate_confirmed_phone_payments(target, target.payments)
-        if _enforce_on_account(
+        offline_tenders.enforce_offline_tender_replay(
             invoice,
             pos_prof,
-            customer_disabled,
-            target,
-            on_account_approval=on_account_approval,
-            on_account_reason=on_account_reason,
+            invoice.payments,
+            offline_replay=offline_replay,
+            offline_approval=offline_approval,
+            offline_reason=offline_reason,
             consume_token=bool(submit_invoice),
-        ):
-            if target.company != invoice.company or target.pos_profile != invoice.pos_profile or target.docstatus != 0:
-                frappe.throw(_('Merged credit bills must be open on the same till.'))
-            _set_settlement_customer(target, customer)
-            target.set_paid_amount()
-            target.set_outstanding_amount()
-        target.flags.ignore_payment_sync = True
-        
-        frappe.flags.in_bill_merge_sync = True
+            _frappe=frappe,
+        )
+        rc_outcome = room_charge.enforce_room_charge_settlement(
+            invoice,
+            pos_prof,
+            invoice.payments,
+            room_number=incoming_room or None,
+            room_charge_stay=room_charge_stay,
+            room_charge_approval=room_charge_approval,
+            room_charge_reason=room_charge_reason,
+            consume_token=bool(submit_invoice),
+            _frappe=frappe,
+        )
+
+        invoice.set_paid_amount()
+        if not target:
+            _enforce_on_account(
+                invoice,
+                pos_prof,
+                customer_disabled,
+                on_account_approval=on_account_approval,
+                on_account_reason=on_account_reason,
+                consume_token=bool(submit_invoice),
+            )
+        invoice.set_outstanding_amount()
+        if not invoice.get("is_return"):
+            due_total = flt(invoice.rounded_total or invoice.grand_total)
+            paid_total = flt(invoice.paid_amount)
+            if paid_total > due_total:
+                with with_currency_precision(invoice):
+                    if callable(getattr(invoice, "calculate_change_amount", None)):
+                        invoice.calculate_change_amount()
+                    if flt(invoice.get("change_amount")) <= 0:
+                        invoice.change_amount = flt(paid_total - due_total, invoice.precision("change_amount"))
+                    ensure_local_change_payment_row(invoice, pos_profile=pos_prof)
+        if client_order_id:
+            invoice.ury_client_order_id = client_order_id
+            if round_id is not None:
+                _record_round(invoice, round_id)
+        # Consume optional Manager PIN token for Over-HALO tenders before invoice.save() triggers before_validate
+        if halo_approval_token:
+            from ury.ury_pos.till_controls import apply_halo_approval_token
+
+            apply_halo_approval_token(invoice, halo_approval_token, reason=halo_approval_reason)
+
+        # invoice.owner = owner
         prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
         prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
         prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
-        if target_existing:
+        if existing_received_tenders:
             frappe.flags.ury_server_tender_received = True
         frappe.flags.pos_server_override_fields = True
         if discount_spec["has_any_arg"]:
             frappe.flags.ury_server_discount_write = True
         try:
-            target.save(ignore_permissions=True)
+            with with_currency_precision(invoice):
+                invoice.save()
         finally:
             frappe.flags.ury_server_tender_received = prev_tender_flag
             frappe.flags.pos_server_override_fields = prev_override_flag
             frappe.flags.ury_server_discount_write = prev_disc_flag
-            frappe.flags.in_bill_merge_sync = False
-            
-        invoice.flags.ignore_payment_sync = True
-    else:
-        reconciled_payments = _reconcile_settlement_payments(invoice, payments)
-        _validate_confirmed_phone_payments(invoice, reconciled_payments)
-        invoice.set("payments", [])
-        for row_dict in reconciled_payments:
-            invoice.append("payments", row_dict)
 
-    from ury.ury_pos import offline_tenders, room_charge
+        if not submit_invoice:
+            return {"name": invoice.name, "status": "Draft"}
 
-    offline_tenders.enforce_offline_tender_replay(
-        invoice,
-        pos_prof,
-        invoice.payments,
-        offline_replay=offline_replay,
-        offline_approval=offline_approval,
-        offline_reason=offline_reason,
-        consume_token=bool(submit_invoice),
-        _frappe=frappe,
-    )
-    rc_outcome = room_charge.enforce_room_charge_settlement(
-        invoice,
-        pos_prof,
-        invoice.payments,
-        room_number=incoming_room or None,
-        room_charge_stay=room_charge_stay,
-        room_charge_approval=room_charge_approval,
-        room_charge_reason=room_charge_reason,
-        consume_token=bool(submit_invoice),
-        _frappe=frappe,
-    )
+        # Serialize bill settlement with till closing (FOR UPDATE on open shift) and refuse
+        # offline replays arriving after the shift closed.
+        from ury.ury_pos.till_controls import lock_open_shift_for_settlement, validate_offline_settlement_shift
 
-    invoice.set_paid_amount()
-    if not target:
-        _enforce_on_account(
-            invoice,
-            pos_prof,
-            customer_disabled,
-            on_account_approval=on_account_approval,
-            on_account_reason=on_account_reason,
-            consume_token=bool(submit_invoice),
+        raw_offline_captured = invoice.get("ury_offline_captured_at")
+        offline_captured_at = (
+            raw_offline_captured
+            if isinstance(raw_offline_captured, (str, date, datetime)) and raw_offline_captured
+            else None
         )
-    invoice.set_outstanding_amount()
-    if not invoice.get("is_return"):
-        due_total = flt(invoice.rounded_total or invoice.grand_total)
-        paid_total = flt(invoice.paid_amount)
-        if paid_total > due_total:
-            with with_currency_precision(invoice):
-                if callable(getattr(invoice, "calculate_change_amount", None)):
-                    invoice.calculate_change_amount()
-                if flt(invoice.get("change_amount")) <= 0:
-                    invoice.change_amount = flt(paid_total - due_total, invoice.precision("change_amount"))
-                ensure_local_change_payment_row(invoice, pos_profile=pos_prof)
-    if client_order_id:
-        invoice.ury_client_order_id = client_order_id
-        if round_id is not None:
-            _record_round(invoice, round_id)
-    # Consume optional Manager PIN token for Over-HALO tenders before invoice.save() triggers before_validate
-    if halo_approval_token:
-        from ury.ury_pos.till_controls import apply_halo_approval_token
+        if client_order_id or offline_captured_at:
+            validate_offline_settlement_shift(
+                pos_profile,
+                offline_captured_at=offline_captured_at,
+                client_order_id=client_order_id,
+            )
+        else:
+            lock_open_shift_for_settlement(pos_profile)
 
-        apply_halo_approval_token(invoice, halo_approval_token, reason=halo_approval_reason)
-
-    # invoice.owner = owner
-    prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
-    prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
-    prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
-    if existing_received_tenders:
-        frappe.flags.ury_server_tender_received = True
-    frappe.flags.pos_server_override_fields = True
-    if discount_spec["has_any_arg"]:
-        frappe.flags.ury_server_discount_write = True
-    try:
-        with with_currency_precision(invoice):
-            invoice.save()
-    finally:
-        frappe.flags.ury_server_tender_received = prev_tender_flag
-        frappe.flags.pos_server_override_fields = prev_override_flag
-        frappe.flags.ury_server_discount_write = prev_disc_flag
-
-    if not submit_invoice:
-        return {"name": invoice.name, "status": "Draft"}
-
-    # Serialize bill settlement with till closing (FOR UPDATE on open shift) and refuse
-    # offline replays arriving after the shift closed.
-    from ury.ury_pos.till_controls import lock_open_shift_for_settlement, validate_offline_settlement_shift
-
-    raw_offline_captured = invoice.get("ury_offline_captured_at")
-    offline_captured_at = (
-        raw_offline_captured
-        if isinstance(raw_offline_captured, (str, date, datetime)) and raw_offline_captured
-        else None
-    )
-    if client_order_id or offline_captured_at:
-        validate_offline_settlement_shift(
-            pos_profile,
-            offline_captured_at=offline_captured_at,
-            client_order_id=client_order_id,
-        )
-    else:
-        lock_open_shift_for_settlement(pos_profile)
-
-    tx_mod.validate_efris_readiness(invoice, throw=True)
-    if target:
-        # Saving the primary runs on_update, which saves a separate copy of the partner.
-        target.reload()
-        tx_mod.validate_efris_readiness(target, throw=True)
-    prev_rc_flag = getattr(frappe.flags, "kamra_room_charge_override", None)
-    if rc_outcome and rc_outcome.get("override_approver"):
-        frappe.flags.kamra_room_charge_override = {
-            "reservation": rc_outcome.get("reservation"),
-            "room": rc_outcome.get("room_number"),
-            "amount": rc_outcome.get("amount"),
-            "currency": rc_outcome.get("currency"),
-            "approver": rc_outcome.get("override_approver"),
-            "reason": rc_outcome.get("override_reason"),
-        }
-    try:
-        _submit_and_release_tables(invoice, pos_prof, customer_disabled, target,
-                                   fiscal_receipt_requested=frappe.utils.cint(fiscal_receipt_requested))
-    finally:
-        frappe.flags.kamra_room_charge_override = prev_rc_flag
-    return {"name": invoice.name, "status": "Submitted"}
+        tx_mod.validate_efris_readiness(invoice, throw=True)
+        if target:
+            # Saving the primary runs on_update, which saves a separate copy of the partner.
+            target.reload()
+            tx_mod.validate_efris_readiness(target, throw=True)
+        prev_rc_flag = getattr(frappe.flags, "kamra_room_charge_override", None)
+        if rc_outcome and rc_outcome.get("override_approver"):
+            frappe.flags.kamra_room_charge_override = {
+                "reservation": rc_outcome.get("reservation"),
+                "room": rc_outcome.get("room_number"),
+                "amount": rc_outcome.get("amount"),
+                "currency": rc_outcome.get("currency"),
+                "approver": rc_outcome.get("override_approver"),
+                "reason": rc_outcome.get("override_reason"),
+            }
+        try:
+            _submit_and_release_tables(invoice, pos_prof, customer_disabled, target,
+                                       fiscal_receipt_requested=frappe.utils.cint(fiscal_receipt_requested))
+        finally:
+            frappe.flags.kamra_room_charge_override = prev_rc_flag
+        return {"name": invoice.name, "status": "Submitted"}
 
 
 def _check_held_before_settlement(invoice, preserve_resolved=False):

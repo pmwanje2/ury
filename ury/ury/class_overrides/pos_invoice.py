@@ -1,4 +1,3 @@
-from contextlib import nullcontext
 from html import escape
 
 import frappe
@@ -327,8 +326,8 @@ class CustomPOSInvoice(POSInvoice):
 			from ury.ury_pos.scoped_split_taxes import calculate_scoped_split_taxes
 
 			base_calculate = lambda: calculate_scoped_split_taxes(self)
-		# Repricing and later saves must use the same minor unit as the split.
-		with with_currency_precision(self) if snapshot else nullcontext():
+		# Preserve original item rates when creating a draft as well as when repricing a split.
+		with with_currency_precision(self):
 			result = calculate_taxes_and_totals_for_service_charge(
 				self,
 				lambda: calculate_taxes_and_totals_excluding_tip(self, base_calculate),

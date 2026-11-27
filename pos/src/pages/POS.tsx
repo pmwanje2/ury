@@ -3,6 +3,7 @@ import { t } from '../i18n';
 import { Sparkles, Star, TrendingUp } from 'lucide-react';
 import { PLUKeypad } from '../components/PLUKeypad';
 import TillCashDialog from '../components/TillCashDialog';
+import { repeatComboChoices } from '../lib/combo-choice';
 import { workstation } from '../lib/workstation';
 import { isUnavailable } from '../lib/availability-api';
 import Sidebar from '../components/Sidebar';
@@ -195,8 +196,16 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
         showToast.error(t('menu.unavailable'));
         return;
       }
-      const children: OrderItem[] = [];
-      for (const child of lastRound.lines.filter(line => line.parentLineKey && line.parentLineKey === row.reservationLineKey)) {
+      const linked = lastRound.lines.filter(line => line.parentLineKey && line.parentLineKey === row.reservationLineKey);
+      const combo = repeatComboChoices(row, item, linked.filter(line => line.lineRole === 'Combo Upcharge'));
+      if (!combo) {
+        setSelectedItem(item);
+        setDialogQuantity(row.quantity);
+        setIsDialogOpen(true);
+        return;
+      }
+      const children = combo.fees;
+      for (const child of linked.filter(line => line.lineRole !== 'Combo Upcharge')) {
         const option = item.modifier_groups?.find(group => group.name === child.modifierGroup)
           ?.options.find(option => option.option_code === child.modifierOption);
         if (!option || option.available === false || option.price_mode === 'Unpriced Prep') {
@@ -207,6 +216,7 @@ export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetai
         children.push(repeatedLine(child, price));
       }
       const parent = repeatedLine(row, item.price, item);
+      parent.bundleOverrides = combo.overrides;
       parent.modifier_groups = item.modifier_groups;
       if (row.selectedVariant) {
         parent.selectedVariant = item.variants?.find(variant => variant.id === row.selectedVariant?.id);
