@@ -115,3 +115,33 @@ test('repeat prices a linked condiment from its current parent option', async ()
   const [base, extra] = usePOSStore.getState().activeOrders;
   expect(extra).toMatchObject({price: 50, parentLineKey: base.reservationLineKey});
 });
+
+test.each([
+  { oldFee: 0, fee: 2, available: true }, { oldFee: 1, fee: 2, available: true },
+  { oldFee: 1, fee: 0, available: true }, { oldFee: 0, fee: 2, available: false },
+])('repeat rebuilds a saved combo side when its fee changes from $oldFee to $fee (available: $available)', async ({ oldFee, fee, available }) => {
+  const meal = { ...usePOSStore.getState().menuItems[0], id: 'meal', item: 'meal', price: 10, is_combo_meal: true };
+  const choice = { group: 'Sides', slot_item: 'side', chosen_item: 'chips', option_code: 'CHIPS', label: 'Chips', qty: 1 };
+  const parent = { ...meal, quantity: 1, lineRole: 'Combo Header' as const, reservationLineKey: 'old', bundleOverrides: [choice] };
+  const option = { option_code: 'CHIPS', label: 'Chips', item: 'chips', replaces_bundle_item: 'side', available,
+    price_mode: 'Combo Upcharge' as const, upcharge_item: 'side-fee', upcharge_amount: fee, unit_price: fee };
+  const group = { name: 'Sides', display_title: 'Sides', group_type: 'Combo Choice' as const, required: true,
+    prompt_on_add: true, min_selections: 1, max_selections: 1, allow_prefixes: false, allowed_prefixes: [],
+    inherit_parent_routing: true, hide_unpriced_on_receipt: false, options: [option] };
+  const oldChild = { ...meal, id: 'old-fee', item: 'old-fee', quantity: 1, price: oldFee, parentLineKey: 'old',
+    isModifier: true, lineRole: 'Combo Upcharge' as const, modifierGroup: 'Sides', modifierOption: 'CHIPS' };
+  usePOSStore.setState({ orderId: 'A', menuItems: [{ ...meal, modifier_groups: [group] }] });
+  await act(async () => root.render(<POS lastRound={{ invoice: 'A', lines: oldFee ? [parent, oldChild] : [parent] }} />));
+  await act(async () => screen.getByRole('button', { name: 'Repeat round' }).click());
+  const lines = usePOSStore.getState().activeOrders;
+  if (!available) {
+    expect(lines).toHaveLength(0);
+    expect(usePOSStore.getState().selectedItem?.item).toBe('meal');
+    expect(await screen.findByRole('dialog')).toBeVisible();
+    return;
+  }
+  expect(lines).toHaveLength(fee ? 2 : 1);
+  expect(lines[0]).toMatchObject({ item: 'meal', price: 10, bundleOverrides: [expect.objectContaining(choice)] });
+  if (fee) expect(lines[1]).toMatchObject({ item: 'side-fee', price: fee, quantity: 1,
+    lineRole: 'Combo Upcharge', modifierOption: 'CHIPS', parentLineKey: lines[0].reservationLineKey });
+});
