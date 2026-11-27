@@ -1061,14 +1061,14 @@ def _seated_reservations_moving_with_check(from_table, pos_invoice):
         for res in frappe.db.get_all(
             "URY Table Reservation",
             filters={"branch": branch, "status": "Seated", "pos_invoice": inv_name},
-            fields=["name", "reserved_table", "pos_invoice"],
+            fields=["name", "reserved_table", "pos_invoice", "requested_room"],
         ):
             candidates[res.name] = res
     if from_table:
         for res in frappe.db.get_all(
             "URY Table Reservation",
             filters={"branch": branch, "status": "Seated", "reserved_table": from_table},
-            fields=["name", "reserved_table", "pos_invoice"],
+            fields=["name", "reserved_table", "pos_invoice", "requested_room"],
         ):
             candidates.setdefault(res.name, res)
 
@@ -1096,10 +1096,11 @@ def _seated_reservations_moving_with_check(from_table, pos_invoice):
 
 
 def validate_seated_reservation_transfer(from_table, to_table, pos_invoice):
-    """Refuse transferring a Seated party onto a table (or merged cluster) that already seats another party."""
+    """Check that the destination accepts reservations and has room for this seated party."""
     moving = _seated_reservations_moving_with_check(from_table, pos_invoice)
     if not moving:
         return []
+    ensure_reservations_enabled(frappe.db.get_value("URY Table", to_table, "branch"))
     moving_names = {res.name for res in moving}
     target_tables = _table_with_merged_partners(to_table)
     existing_on_target = frappe.db.get_all(
@@ -1119,12 +1120,14 @@ def transfer_seated_reservation(from_table, to_table, pos_invoice, *, moving=Non
         moving = validate_seated_reservation_transfer(from_table, to_table, pos_invoice)
     if not moving:
         return []
-    destination_branch = frappe.db.get_value("URY Table", to_table, "branch")
+    destination_branch, destination_room = frappe.db.get_value("URY Table", to_table, ["branch", "restaurant_room"])
     inv_name = _doc_field(pos_invoice, "name")
     moved_names = []
     for res in moving:
         old_table = res.get("reserved_table")
         updates = {"reserved_table": to_table, "branch": destination_branch}
+        if res.get("requested_room"):
+            updates["requested_room"] = destination_room or None
         if not res.get("pos_invoice") or _is_discarded_or_cancelled_check(res.get("pos_invoice")):
             if inv_name:
                 updates["pos_invoice"] = inv_name

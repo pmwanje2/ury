@@ -17,7 +17,7 @@ function isTableInvoice(check, occupied) {
   if (check.doctype != null && check.doctype !== "POS Invoice") return false;
   if (check.name != null) {
     return typeof check.name === "string" && check.name.trim() !== "" && check.items.every(row =>
-      typeof row?.item_code === "string" && row.item_code.trim() !== "" && Number.isFinite(row.qty)
+      typeof row?.item_code === "string" && row.item_code.trim() !== "" && Number.isFinite(row.qty) && row.qty > 0
     );
   }
 
