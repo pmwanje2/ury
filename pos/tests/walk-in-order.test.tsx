@@ -181,3 +181,18 @@ it.each([['USD', '1.20'], ['KWD', '1.200'], ['UGX', '1']])(
     } finally { state.posProfile = previous; state.activeOrders[0].price = price; }
   },
 );
+
+it('retains the check and round for the assigned operator on an unrestricted till', async () => {
+  const user = state.user!;
+  Object.assign(user, {roles: ['Banquet operator']});
+  const previous = state.posProfile;
+  const assigned = {...previous, assigned_billing_user: user.name, role_allowed_for_billing: []};
+  state.posProfile = assigned;
+  try {
+    const check = vi.fn(), round = vi.fn();
+    await act(async () => root.render(<OrderPanel onCashierCheck={check} onRoundSent={round} />));
+    await act(async () => submitButton().click());
+    expect(check).toHaveBeenCalledWith(invoice);
+    expect(round).toHaveBeenCalledWith(invoice.name, expect.arrayContaining([expect.objectContaining({ id: 'SOUP' })]));
+  } finally { state.posProfile = previous; }
+});

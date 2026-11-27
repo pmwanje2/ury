@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { createRoot, type Root } from 'react-dom/client';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -68,4 +69,49 @@ test.each([[10, 1], [0, 0]])('repeat round respects manual price entry at price 
   expect(key).toBeDefined();
   await act(async () => key!.click());
   expect(usePOSStore.getState().activeOrders).toHaveLength(expected);
+});
+
+test.each([null, 900])('repeat uses the current price and promotion (%s)', async promo => {
+  const current = {...usePOSStore.getState().menuItems[0], price: 1200, promo_rate: promo, promo_label: promo ? 'Lunch' : null};
+  const previous = {...current, price: 800, promo_rate: 700, promo_label: 'Breakfast', quantity: 2};
+  usePOSStore.setState({orderId: 'Check A', menuItems: [current]});
+  await act(async () => root.render(<POS lastRound={{invoice: 'Check A', lines: [previous]}} />));
+  await act(async () => screen.getByRole('button', {name: 'Repeat round'}).click());
+  expect(usePOSStore.getState().activeOrders[0]).toMatchObject({
+    price: 1200, promo_rate: promo, promo_label: current.promo_label, quantity: 2,
+  });
+});
+
+test('a separate Open Item starts at one after a multiplied PLU', async () => {
+  const regular = {...usePOSStore.getState().menuItems[0], item: '001'};
+  usePOSStore.setState({menuItems: [regular, {...regular, item: '002', id: '002', price: 0, custom_is_open_priced: 1}]});
+  await act(async () => root.render(<POS />));
+  await act(async () => screen.getByRole('button', {name: 'PLU'}).click());
+  const entry = container.querySelector('input[inputmode=numeric]')!;
+  fireEvent.change(entry, {target: {value: '3×001'}});
+  fireEvent.keyDown(entry, {key: 'Enter'});
+  expect(usePOSStore.getState().activeOrders[0].quantity).toBe(3);
+  await act(async () => screen.getByTestId('register-open-item-btn').click());
+  expect(document.querySelector<HTMLInputElement>('#open-item-qty')?.value).toBe('1');
+});
+
+test.each(['All', 'Drinks'])('%s clears the current handheld category', async action => {
+  vi.stubGlobal('innerWidth', 390);
+  usePOSStore.setState({categories: [{name: 'Drinks', label: 'Drinks'}], selectedCategory: 'Drinks', quickFilter: 'all'});
+  await act(async () => root.render(<POS />));
+  await act(async () => within(container).getByRole('button', {name: action, exact: true}).click());
+  expect(usePOSStore.getState().selectedCategory).toBe('');
+});
+
+test('repeat prices a linked condiment from its current parent option', async () => {
+  const parent = {...usePOSStore.getState().menuItems[0], quantity: 1, reservationLineKey: 'base'};
+  const option = {label: 'Extra', upcharge_amount: 0, option_code: 'extra', item: 'extra', price_mode: 'Menu Item Price' as const, unit_price: 50, available: true};
+  const menu = {...parent, modifier_groups: [{name: 'Extras', display_title: 'Extras', group_type: 'Condiment' as const, required: false, prompt_on_add: false, min_selections: 0, max_selections: 1, allow_prefixes: false, allowed_prefixes: [], inherit_parent_routing: true, hide_unpriced_on_receipt: false, options: [option]}]};
+  const child = {...parent, item: 'extra', isModifier: true, parentLineKey: 'base', reservationLineKey: 'old-extra',
+    modifierGroup: 'Extras', modifierOption: 'extra', price: 10};
+  usePOSStore.setState({orderId: 'Check A', menuItems: [menu]});
+  await act(async () => root.render(<POS lastRound={{invoice: 'Check A', lines: [parent, child]}} />));
+  await act(async () => screen.getByRole('button', {name: 'Repeat round'}).click());
+  const [base, extra] = usePOSStore.getState().activeOrders;
+  expect(extra).toMatchObject({price: 50, parentLineKey: base.reservationLineKey});
 });

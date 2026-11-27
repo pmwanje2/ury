@@ -90,6 +90,21 @@ class TestFloorSignoutProfile(unittest.TestCase):
         result = api.getPosProfileFull("Floor POS")
         self.assertEqual(result.get("custom_floor_stay_signed_in_roles"), [{"role": "URY Manager"}])
 
+    def test_assigned_billing_user_follows_profile_assignment_and_billing_roles(self):
+        self.framework.session.user = "cashier@example.com"
+        self.framework.get_roles.return_value = ["Banquet Operator"]
+        for user, roles, admitted in (
+            ("cashier@example.com", [], True),
+            ("cashier@example.com", ["Banquet Operator"], True),
+            ("cashier@example.com", ["Other Role"], False),
+            ("other@example.com", [], False),
+        ):
+            with self.subTest(user=user, roles=roles):
+                self.profile.applicable_for_users = [Row(user=user)]
+                self.profile.role_allowed_for_billing = [Row(role=role) for role in roles]
+                result = api.getPosProfileFull("Floor POS")
+                self.assertEqual(result.get("assigned_billing_user"), self.framework.session.user if admitted else None)
+
     def test_full_profile_exposes_hold_fire_switch_to_staff(self):
         for enabled in (0, 1):
             with self.subTest(enabled=enabled):

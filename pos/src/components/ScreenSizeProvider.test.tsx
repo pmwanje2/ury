@@ -41,7 +41,7 @@ describe("ScreenSizeProvider", () => {
     });
   });
 
-  it("shows dialog when screen is too small", () => {
+  it("keeps the desktop gate for settings", () => {
     const originalInnerWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", {
       value: 500,
@@ -50,7 +50,7 @@ describe("ScreenSizeProvider", () => {
     });
 
     render(
-      <ScreenSizeProvider>
+      <ScreenSizeProvider pathname="/settings">
         <div>Test Content</div>
       </ScreenSizeProvider>
     );
@@ -139,4 +139,16 @@ it('opens the online register on a 390px handheld', () => {
     window.history.replaceState(null, '', previous);
     vi.unstubAllGlobals();
   }
+});
+
+it.each([[390, 844], [768, 1024]])('allows online till entry and the floor plan at %i × %i', (width, height) => {
+  vi.stubGlobal('innerWidth', width);
+  vi.stubGlobal('innerHeight', height);
+  try {
+    for (const pathname of ['/pos', '/', '/tables', '/pos/tables', '/register']) {
+      const view = render(<ScreenSizeProvider pathname={pathname}><main>{pathname}</main></ScreenSizeProvider>);
+      expect(screen.getByRole('main')).toHaveTextContent(pathname);
+      view.unmount();
+    }
+  } finally { vi.unstubAllGlobals(); }
 });

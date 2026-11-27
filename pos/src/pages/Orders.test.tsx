@@ -82,7 +82,8 @@ vi.mock("react-router-dom", () => ({
 }));
 
 // Mock core functions
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@ury/core")>()),
   getSessionUser: () => "cashier@example.com",
   formatCurrency: (amount: number) => `Rs. ${amount}`,
   normalizeFrappeTime: (time: any) => time || "2026-11-03 12:00:00",
@@ -341,6 +342,22 @@ describe("Orders guest label", () => {
       fireEvent.click(screen.getByRole('button', {name: 'workstation.menu'}));
       expect(onRegister).toHaveBeenCalledOnce();
     } finally { mockRootStoreState.ordersOffline = false; }
+  });
+
+  it.each([
+    ['gateway', () => Promise.resolve(new Response(null, { status: 503 }))],
+    ['dropped connection', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ] as const)('returns from Check Detail after a %s with an online browser', async (_, fetchOrder) => {
+    mockRootStoreState.selectedOrder = {...order, invoice_printed: 0};
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    vi.stubGlobal('fetch', vi.fn(fetchOrder));
+    try {
+      const onRegister = vi.fn();
+      render(<Orders onRegister={onRegister} />);
+      fireEvent.click(screen.getByRole('button', {name: 'workstation.menu'}));
+      await waitFor(() => expect(onRegister).toHaveBeenCalledOnce());
+      expect(navigateMock).not.toHaveBeenCalled();
+    } finally { online.mockRestore(); vi.unstubAllGlobals(); }
   });
 
   it('restores the saved aggregator when reopening its check from Menu', async () => {
