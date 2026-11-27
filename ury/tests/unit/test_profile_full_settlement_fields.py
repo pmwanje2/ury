@@ -44,6 +44,11 @@ class ProfileFullSettlementFieldsTest(unittest.TestCase):
 				self.assertIn("allow_partial_payment", payload)
 				self.assertEqual(payload["allow_partial_payment"], expected)
 
+	def test_workstation_configuration_is_profile_scoped(self):
+		config = '{"pages":[{"label":"Terrace","items":["001"]}]}'
+		self.assertEqual(self.full(_profile(custom_workstation_layout=config))["custom_workstation_layout"], config)
+		self.assertIsNone(self.full(_profile()).get("custom_workstation_layout"))
+
 	def test_configured_void_reasons_are_returned(self):
 		payload = self.full(_profile(custom_void_reasons="Kitchen error\nGuest changed mind"))
 		self.assertEqual(payload.get("custom_void_reasons"), "Kitchen error\nGuest changed mind")
