@@ -67,6 +67,10 @@ class PricedCheck(Check):
 class TestSettlementChange(SettlementFixture):
     def setUp(self):
         super().setUp()
+        # These local-change cases model a company using its till currency.
+        self.frappe.get_cached_value.side_effect = lambda dt, name, field: (
+            self.profile.currency if (dt, field) == ("Company", "default_currency") else None
+        )
         # Supply field metadata locally. Frappe's actual round_floats_in and flt
         # use the 2dp site precision unless the settlement context is active.
         item_meta = Mock(_table_doctypes={}, _non_computed_table_doctypes={})

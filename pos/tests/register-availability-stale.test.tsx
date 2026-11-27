@@ -103,9 +103,9 @@ test.each(['All', 'Drinks'])('%s clears the current handheld category', async ac
   expect(usePOSStore.getState().selectedCategory).toBe('');
 });
 
-test('repeat prices a linked condiment from its current parent option', async () => {
+test('repeat rebuilds a remapped condiment using the current paired serving and unit price', async () => {
   const parent = {...usePOSStore.getState().menuItems[0], quantity: 1, reservationLineKey: 'base'};
-  const option = {label: 'Extra', upcharge_amount: 0, option_code: 'extra', item: 'extra', price_mode: 'Menu Item Price' as const, unit_price: 50, available: true};
+  const option = {label: 'Extra pair', upcharge_amount: 0, option_code: 'extra', item: 'replacement', qty: 2, price_mode: 'Menu Item Price' as const, unit_price: 50, available: true};
   const menu = {...parent, modifier_groups: [{name: 'Extras', display_title: 'Extras', group_type: 'Condiment' as const, required: false, prompt_on_add: false, min_selections: 0, max_selections: 1, allow_prefixes: false, allowed_prefixes: [], inherit_parent_routing: true, hide_unpriced_on_receipt: false, options: [option]}]};
   const child = {...parent, item: 'extra', isModifier: true, parentLineKey: 'base', reservationLineKey: 'old-extra',
     modifierGroup: 'Extras', modifierOption: 'extra', price: 10};
@@ -113,7 +113,7 @@ test('repeat prices a linked condiment from its current parent option', async ()
   await act(async () => root.render(<POS lastRound={{invoice: 'Check A', lines: [parent, child]}} />));
   await act(async () => screen.getByRole('button', {name: 'Repeat round'}).click());
   const [base, extra] = usePOSStore.getState().activeOrders;
-  expect(extra).toMatchObject({price: 50, parentLineKey: base.reservationLineKey});
+  expect(extra).toMatchObject({id: 'replacement', item: 'replacement', item_name: 'Extra pair', quantity: 2, price: 50, parentLineKey: base.reservationLineKey});
 });
 
 test.each([
@@ -144,4 +144,29 @@ test.each([
   expect(lines[0]).toMatchObject({ item: 'meal', price: 10, bundleOverrides: [expect.objectContaining(choice)] });
   if (fee) expect(lines[1]).toMatchObject({ item: 'side-fee', price: fee, quantity: 1,
     lineRole: 'Combo Upcharge', modifierOption: 'CHIPS', parentLineKey: lines[0].reservationLineKey });
+});
+
+test.each(['unavailable', 'removed', 'available'])('repeat checks every saved prep choice when one is %s', async state => {
+  const tea = usePOSStore.getState().menuItems[0];
+  const hot = { option_code: 'hot', label: 'Hot', price_mode: 'Unpriced Prep' as const,
+    available: true, item: null, unit_price: 0, upcharge_amount: 0 };
+  const group = { name: 'Prep', display_title: 'Preparation', group_type: 'Condiment' as const,
+    required: false, prompt_on_add: false, min_selections: 0, max_selections: 2, allow_prefixes: false,
+    allowed_prefixes: [], inherit_parent_routing: true, hide_unpriced_on_receipt: true,
+    options: state === 'removed' ? [hot] : [hot, { ...hot, option_code: 'milk', label: 'With milk', available: state === 'available' }] };
+  const parent = { ...tea, quantity: 2, selectedModifiers: [
+    { group: 'Prep', option_code: 'hot', label: 'Hot' },
+    { group: 'Prep', option_code: 'milk', label: 'Milk' },
+  ] };
+  usePOSStore.setState({ orderId: 'A', menuItems: [{ ...tea, modifier_groups: [group] }] });
+  await act(async () => root.render(<POS lastRound={{ invoice: 'A', lines: [parent] }} />));
+  await act(async () => screen.getByRole('button', { name: 'Repeat round' }).click());
+  const lines = usePOSStore.getState().activeOrders;
+  if (state === 'available') {
+    expect(lines).toHaveLength(1);
+    expect(lines[0].selectedModifiers?.[1]).toMatchObject({ option_code: 'milk', label: 'With milk', hide_on_receipt: 1 });
+  } else {
+    expect(lines).toHaveLength(0);
+    expect(await screen.findByRole('dialog')).toBeVisible();
+  }
 });

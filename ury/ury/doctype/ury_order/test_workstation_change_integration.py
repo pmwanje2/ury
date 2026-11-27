@@ -9,6 +9,7 @@ from frappe.core.doctype.system_settings.system_settings import clear_system_set
 from frappe.utils import getdate, now_datetime, random_string
 
 from ury.ury.doctype.ury_order.ury_order import make_invoice
+from ury.ury_pos.discount import with_currency_precision
 
 
 def insert(doctype, **fields):
@@ -29,12 +30,13 @@ class TestWorkstationChangePersistence(unittest.TestCase):
         frappe.db.set_single_value("Global Defaults", "disable_rounded_total", 1)
         frappe.db.set_single_value("POS Settings", "invoice_type", "POS Invoice")
 
-    def open_till(self, currency, rates):
+    def open_till(self, currency, rates, company_currency=None):
         tag = f"Change {currency} {random_string(6)}"
-        frappe.db.set_value("Currency", currency, {"enabled": 1, "fraction_units": 1000,
-                                                  "smallest_currency_fraction_value": 0.001})
+        units = {"UGX": 1, "USD": 100}.get(currency, 1000)
+        frappe.db.set_value("Currency", currency, {"enabled": 1, "fraction_units": units,
+                                                  "smallest_currency_fraction_value": 1 / units})
         company = insert("Company", company_name=tag, abbr=random_string(5),
-                         default_currency=currency, country="Kuwait")
+                         default_currency=company_currency or currency, country="Kuwait")
         self.company = company
         year = getdate().year
         if not frappe.db.exists("Fiscal Year", {"year_start_date": ("<=", getdate()),
@@ -80,10 +82,10 @@ class TestWorkstationChangePersistence(unittest.TestCase):
                period_start_date=now_datetime(), posting_date=getdate(), branch=self.branch, restaurant=self.restaurant,
                balance_details=[{"mode_of_payment": self.cash, "opening_amount": 0}]).submit()
 
-    def draft(self, rate):
+    def draft(self, rate, conversion_rate=1):
         return insert(
             "POS Invoice", company=self.company.name, pos_profile=self.profile.name, restaurant=self.restaurant,
-            branch=self.branch, customer=self.customer, currency=self.profile.currency, is_pos=1,
+            branch=self.branch, customer=self.customer, currency=self.profile.currency, conversion_rate=conversion_rate, is_pos=1,
             cashier="Administrator", waiter="Administrator", invoice_printed=1, order_type="Take Away",
             selling_price_list=self.profile.selling_price_list, disable_rounded_total=1,
             account_for_change_amount=self.company.default_cash_account,
@@ -133,3 +135,34 @@ class TestWorkstationChangePersistence(unittest.TestCase):
 
     def test_omr_linked(self):
         self.check_settlement("OMR", True)
+
+    def test_ugx_check_posts_usd_company_totals(self):
+        self.open_till("UGX", [1000], company_currency="USD")
+        insert("Currency Exchange", date=getdate(), from_currency="UGX", to_currency="USD",
+               exchange_rate=0.00027, for_selling=1)
+        name = self.draft(1000, conversion_rate=0.00027)
+        for stage in (0, 1):
+            if stage:
+                make_invoice(customer=self.customer, payments=[{"mode_of_payment": self.cash, "amount": 1000}],
+                             cashier="Administrator", pos_profile=self.profile.name, owner="Administrator",
+                             invoice=name, submit_invoice=1)
+            with self.subTest(docstatus=stage):
+                doc = frappe.get_doc("POS Invoice", name)
+                self.assertEqual((doc.docstatus, doc.currency, doc.conversion_rate), (stage, "UGX", 0.00027))
+                self.assertEqual((doc.grand_total, doc.base_grand_total), (1000, 0.27))
+                self.assertEqual((doc.items[0].rate, doc.items[0].base_rate), (1000, 0.27))
+                if stage:
+                    self.assertEqual((doc.paid_amount, doc.base_paid_amount), (1000, 0.27))
+
+    def test_usd_check_keeps_three_decimal_company_fields(self):
+        self.open_till("USD", [1], company_currency="KWD")
+        insert("Currency Exchange", date=getdate(), from_currency="USD", to_currency="KWD",
+               exchange_rate=0.3074, for_selling=1)
+        name = self.draft(1, conversion_rate=0.3074)
+        doc = frappe.get_doc("POS Invoice", name)
+        with with_currency_precision(doc):
+            self.assertEqual(doc.precision("grand_total"), 2)
+            self.assertEqual(doc.precision("loyalty_amount"), 3)
+            self.assertEqual(doc.items[0].precision("incoming_rate"), 3)
+            self.assertEqual(doc.precision("incoming_rate", "items"), 3)
+        self.assertEqual((doc.grand_total, doc.base_grand_total), (1, 0.307))
