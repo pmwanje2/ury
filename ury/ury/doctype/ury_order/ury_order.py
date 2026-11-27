@@ -3748,6 +3748,41 @@ def _previous_line_snapshot(invoice_items):
     return snapshot
 
 
+def _allocate_issued_quantities(items, priced_items, saved_rows, default_warehouse):
+    """Keep fired portions at their issuer. A receiving kitchen gets its own line key."""
+    new_parents = {}
+    # Link modifiers to the new parent portion even if the cart sends children first.
+    lines = sorted(zip(items, priced_items, saved_rows, strict=True),
+                   key=lambda line: bool(line[0].get("custom_parent_line_key")))
+    for source, priced, saved in lines:
+        new_parent = new_parents.get(source.get("custom_parent_line_key"))
+        if not saved:
+            if new_parent:
+                source["custom_parent_line_key"] = priced["custom_parent_line_key"] = new_parent
+            continue
+        if (cint(saved.get("ury_held")) or saved.get("item_code") != priced["item_code"]
+                or not saved.get("warehouse") or flt(saved.get("qty")) <= 0):
+            continue
+        receiving_warehouse = priced.get("warehouse") or default_warehouse
+        priced["warehouse"] = saved.get("warehouse")
+        if (flt(source.get("qty")) <= flt(saved.get("qty"))
+                or (not new_parent and receiving_warehouse == priced["warehouse"])):
+            continue
+
+        extra = Decimal(str(source["qty"])) - Decimal(str(saved.get("qty")))
+        new_key = frappe.generate_hash(length=20)
+        added = dict(source, qty=float(extra), reservation_line_key=new_key)
+        added.pop("name", None)
+        added_price = dict(priced, qty=float(extra), warehouse=receiving_warehouse, reservation_line_key=new_key)
+        if new_parent:
+            added["custom_parent_line_key"] = added_price["custom_parent_line_key"] = new_parent
+        elif source.get("reservation_line_key") and not source.get("custom_parent_line_key"):
+            new_parents[source["reservation_line_key"]] = new_key
+        source["qty"] = priced["qty"] = saved.get("qty")
+        items.append(added)
+        priced_items.append(added_price)
+
+
 def _normalize_current_line_keys(items):
     """Promote whatever stable line identity the client sent into
     `reservation_line_key`, so it is (a) used by the diff and (b) persisted
@@ -5188,13 +5223,15 @@ def sync_order(
                     if prev_row.get(tax_field) is not None:
                         item_dict[tax_field] = prev_row.get(tax_field)
     prior_placements = defaultdict(set)
-    unkeyed_issued = defaultdict(list)
+    unkeyed_issued = defaultdict(lambda: defaultdict(Decimal))
     for saved, row in zip(invoice.items, past_item, strict=True):
         if not row.get("reservation_line_key"):
             placement = (row["item_code"], row.get("comments") or "", cint(row.get("custom_seat_no")))
             prior_placements[placement].add(row.get("custom_course"))
             if not append and saved.get("name") not in requested_names and not row.get("ury_held"):
-                unkeyed_issued[(*placement, row.get("custom_course"))].append(saved.get("warehouse"))
+                stock = unkeyed_issued[(*placement, row.get("custom_course"))]
+                stock[saved.get("warehouse")] += Decimal(str(saved.get("qty") or 0))
+    saved_rows = []
     for src, priced in zip(items, priced_items, strict=True):
         previous = previous_rows.get(src.get("name")) or previous_by_key.get(src.get("reservation_line_key"))
         if previous and not src.get("custom_course") and previous.get("custom_course"):
@@ -5203,8 +5240,21 @@ def sync_order(
             matches = prior_placements[(src.get("item"), src.get("comment") or "", cint(src.get("custom_seat_no")))]
             if len(matches) == 1:
                 src["custom_course"] = next(iter(matches))
+        if not previous and not src.get("reservation_line_key") and not cint(src.get("ury_held")):
+            placement = (src["item"], src.get("comment") or "", cint(src.get("custom_seat_no")),
+                         src.get("custom_course"))
+            stock = unkeyed_issued.get(placement)
+            if stock:
+                if len(stock) > 1:
+                    _ambiguous_issued_lines()
+                warehouse, remaining = next(iter(stock.items()))
+                # Legacy carts can regroup identical rows. Consume the issued total once.
+                previous = dict(item_code=src["item"], warehouse=warehouse, qty=remaining)
+                stock[warehouse] -= min(remaining, max(Decimal(0), Decimal(str(src.get("qty") or 0))))
+        saved_rows.append(previous)
     if not append:
         _assert_shared_kitchen_lines_unchanged(past_item, items)
+        _allocate_issued_quantities(items, priced_items, saved_rows, posprofile.get("warehouse"))
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
         anchored = {_line_ref(row) for row in past_item if row.get("custom_kitchen_anchor")}
         accepted = past_item + items if append else items
@@ -5222,21 +5272,6 @@ def sync_order(
     for source, item_dict in zip(items, priced_items, strict=True):
         old_row = previous_rows.get(source.get("name")) if source.get("name") else None
         origin_row = old_row or previous_by_key.get(source.get("reservation_line_key"))
-        # Closing issues this saved portion from the kitchen that fired it.
-        if (origin_row and origin_row.get("item_code") == item_dict["item_code"]
-                and not cint(origin_row.get("ury_held")) and origin_row.get("warehouse")):
-            item_dict["warehouse"] = origin_row.get("warehouse")
-        elif unkeyed_issued and not origin_row and not source.get("reservation_line_key") and not cint(source.get("ury_held")):
-            # Older carts identify a portion by dish, note, seat and course.
-            placement = (source["item"], source.get("comment") or "", cint(source.get("custom_seat_no")),
-                         source.get("custom_course"))
-            warehouses = unkeyed_issued.get(placement)
-            if warehouses:
-                if len(set(warehouses)) > 1:
-                    _ambiguous_issued_lines()
-                warehouse = warehouses.pop()
-                if warehouse:
-                    item_dict["warehouse"] = warehouse
         if origin_row and origin_row.get("custom_origin_invoice_item"):
             item_dict["custom_origin_invoice_item"] = origin_row.get("custom_origin_invoice_item")
             item_dict["custom_kitchen_anchor"] = origin_row.get("custom_kitchen_anchor")
