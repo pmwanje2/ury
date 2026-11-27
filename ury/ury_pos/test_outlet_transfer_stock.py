@@ -164,3 +164,75 @@ class TestOutletTransferStock(unittest.TestCase):
                 last_modified_time=doc.modified, invoice=doc.name, order_type=doc.order_type,
             )
         self.close(doc.reload(), [(self.dish, self.east.warehouse, -1), (self.extra, self.west.warehouse, -1)])
+
+    def transferred_captain_check(self):
+        from ury.tests.till_money_fixtures import assign_branch_user
+        from ury.ury_pos.floor_actions import transfer_check_outlet
+        from ury.ury_pos.outlet_context import set_active_outlet
+
+        captain = frappe.db.get_value("POS Opening Entry", {"pos_profile": self.east.name}, "user")
+        frappe.get_doc("User", captain).add_roles("URY Captain")
+        for outlet in (self.east, self.west):
+            assign_branch_user(outlet.branch, captain)
+            outlet.append("applicable_for_users", {"user": captain})
+            outlet.save()
+        frappe.get_doc({
+            "doctype": "POS Privilege Rule", "company": self.company, "pos_profile": self.east.name,
+            "privilege": "transfer_check", "role": "URY Captain", "may_perform": 1,
+        }).insert()
+        doc = self.invoice()
+        doc.db_set("waiter", captain)
+        self.fire(doc)
+        frappe.set_user(captain)
+        self.addCleanup(frappe.set_user, "Administrator")
+        transfer_check_outlet(doc.name, self.west.name)
+        set_active_outlet(self.west.name)
+        return doc.reload()
+
+    def edit_soup_quantity(self, doc, quantity):
+        ury_order.sync_order(
+            items=[{"item": self.dish, "qty": quantity, "reservation_line_key": "soup",
+                    "name": doc.items[0].name},
+                   {"item": self.extra, "qty": 1, "reservation_line_key": "pie"}],
+            cashier=doc.cashier, owner=doc.owner, mode_of_payment="Cash", customer=doc.customer,
+            no_of_pax=1, last_invoice=doc.name, waiter=doc.waiter, pos_profile=self.west.name,
+            last_modified_time=doc.modified, invoice=doc.name, order_type=doc.order_type,
+        )
+        doc.reload()
+
+    def test_increased_fired_line_closes_against_both_issuing_kitchens(self):
+        doc = self.transferred_captain_check()
+        self.edit_soup_quantity(doc, 2)
+        frappe.set_user("Administrator")
+        reservations = frappe.get_all("URY Stock Reservation", filters={
+            "order_ref": doc.name, "status": "Reserved",
+        }, fields=["top_level_item", "warehouse", "qty"])
+        tickets = frappe.get_all("URY KOT", filters={"invoice": doc.name, "docstatus": 1},
+                                 fields=["name", "branch"])
+        self.close(doc, [(self.dish, self.east.warehouse, -1), (self.dish, self.west.warehouse, -1),
+                         (self.extra, self.west.warehouse, -1)])
+        self.assertCountEqual([(r.top_level_item, r.warehouse, r.qty) for r in reservations],
+                              [(self.dish, self.east.warehouse, 1), (self.dish, self.west.warehouse, 1),
+                               (self.extra, self.west.warehouse, 1)])
+        issued = [(t.branch, r.item, r.quantity) for t in tickets
+                  for r in frappe.get_doc("URY KOT", t.name).kot_items]
+        self.assertCountEqual(issued, [(self.east.branch, self.dish, 1),
+                                       (self.west.branch, self.dish, 1), (self.west.branch, self.extra, 1)])
+
+    def test_west_capacity_only_charges_the_extra_portions(self):
+        from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
+
+        make_stock_entry(item_code=self.dish, source=self.west.warehouse, qty=4, company=self.company)
+        doc = self.transferred_captain_check()
+        # One West soup remains. An increment of two must fail; a retry for one must fit.
+        frappe.db.savepoint("captain_edit")
+        with self.assertRaisesRegex(frappe.ValidationError, "Insufficient capacity"):
+            self.edit_soup_quantity(doc, 3)
+        frappe.db.rollback(save_point="captain_edit")
+        self.assertEqual([(r.qty, r.warehouse) for r in doc.reload().items], [(1, self.east.warehouse)])
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": doc.name, "branch": self.west.branch}), 0)
+        self.edit_soup_quantity(doc, 2)
+        self.assertCountEqual([(r.item_code, r.qty, r.warehouse) for r in doc.items], [
+            (self.dish, 1, self.east.warehouse), (self.dish, 1, self.west.warehouse),
+            (self.extra, 1, self.west.warehouse),
+        ])
