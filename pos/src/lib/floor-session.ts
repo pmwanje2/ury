@@ -94,7 +94,7 @@ async function rotateGeneration(current: string): Promise<string> {
   return generation;
 }
 
-function announceSessionChange(type: 'logout' | 'login', generation?: string): void {
+function announceSessionChange(type: 'logout' | 'login' | 'invalidate', generation?: string): void {
   const channel = openFloorLogoutChannel();
   try { channel?.postMessage({ type, generation }); } catch { /* Mounted guards also poll. */ }
   finally { channel?.close(); }
@@ -143,6 +143,25 @@ export async function clearFloorLogoutFailureMarker(): Promise<void> {
 // A login POST may replace the shared cookie even when its response never arrives.
 export async function beginFloorLogin(): Promise<string> {
   return rotateGeneration(await currentFloorGeneration());
+}
+
+// Check at the HTTP boundary, including OTP challenges and rejected responses.
+// The browser can apply Set-Cookie before JavaScript gets to inspect the result.
+export async function requestFloorLogin<T>(request: () => Promise<T>): Promise<{ result: T; generation: string }> {
+  const generation = await beginFloorLogin();
+  const result = await request().finally(async () => {
+    const current = await currentFloorGeneration().catch(() => undefined);
+    if (current === generation) return;
+
+    let fence: string | undefined;
+    try {
+      fence = await rotateGeneration(current ?? newestGeneration(generation));
+    } finally {
+      announceSessionChange('invalidate', fence);
+    }
+    throw new Error('Sign-in was superseded');
+  });
+  return { result, generation };
 }
 
 export async function confirmVerifiedLogin(user: string, recovery: boolean, generation: string): Promise<void> {

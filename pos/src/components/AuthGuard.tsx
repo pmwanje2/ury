@@ -183,14 +183,19 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
       if (!active || locked) return;
       try {
         const bound = boundTabGeneration();
-        if (bound !== undefined && (data?.type === 'logout' || (data?.type === 'login' && bound !== data.generation))) {
+        const generationChanged = (data?.type === 'login' || data?.type === 'invalidate') && bound !== data.generation;
+        if (bound !== undefined && (data?.type === 'logout' || generationChanged)) {
           lockTab();
           return;
         }
       } catch { lockTab(); return; }
       void check();
     };
+    const onGenerationChange = (event: StorageEvent) => {
+      if (event.key === 'ury_floor_generation') void check();
+    };
     const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
+    window.addEventListener('storage', onGenerationChange);
     window.addEventListener(FLOOR_TAB_LOCKED, closeWorkspace);
     window.addEventListener('focus', check);
     document.addEventListener('visibilitychange', check);
@@ -198,6 +203,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     return () => {
       active = false;
       channel?.close();
+      window.removeEventListener('storage', onGenerationChange);
       window.removeEventListener(FLOOR_TAB_LOCKED, closeWorkspace);
       window.clearInterval(timer);
       window.removeEventListener('focus', check);

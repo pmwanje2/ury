@@ -3,7 +3,7 @@ import { auth, call, parseFrappeError } from '@ury/core';
 import { Button, Input } from '@ury/ui';
 import { t } from '../i18n';
 import { withOutboxLogin } from '../offline/outbox';
-import { beginFloorLogin, confirmVerifiedLogin, getFloorPad } from '../lib/floor-session';
+import { confirmVerifiedLogin, getFloorPad, requestFloorLogin } from '../lib/floor-session';
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
@@ -62,10 +62,9 @@ export default function FloorPinPad({ offline = false, usernameOnly = false, rec
     try {
       await withOutboxLogin(recoveryOwner ?? null, async () => {
         try {
-          const generation = await beginFloorLogin();
-          const result = await call.post<{ message?: { user?: string; csrf_token?: string } }>(
+          const { result, generation } = await requestFloorLogin(() => call.post<{ message?: { user?: string; csrf_token?: string } }>(
             'ury.ury_pos.floor_pin.sign_in', recoveryOwner ? { pin: value, expected_user: recoveryOwner } : { pin: value },
-          );
+          ));
           if (result?.message?.csrf_token) window.csrf_token = result.message.csrf_token;
           const user = result?.message?.user;
           if (recoveryOwner && user !== recoveryOwner) throw new Error(t('floor_pin.login_failed'));
@@ -116,15 +115,17 @@ export default function FloorPinPad({ offline = false, usernameOnly = false, rec
       await withOutboxLogin(identity, async (pending) => {
         // Keep the recovery gate across reloads, even if session verification loses connectivity.
         if (pending) sessionStorage.setItem('ury_floor_reconcile', 'pending');
-        const generation = await beginFloorLogin();
-        const result = await auth.loginWithUsernamePassword(
+        const { result, generation } = await requestFloorLogin(() => auth.loginWithUsernamePassword(
           challenge ? { tmp_id: challenge.tmp_id, otp } : { username: identity, password },
-        );
+        ));
         if (result?.verification || result?.tmp_id) {
           if (!result.tmp_id || !result.verification) throw new Error(t('floor_pin.login_failed'));
           setChallenge({ tmp_id: result.tmp_id, username: identity, verification: result.verification });
         } else if (result?.message === 'Logged In' || result?.message === 'No App') {
-          await signedIn(identity, pending, generation);
+          const user = 'authenticated_user' in result && typeof result.authenticated_user === 'string'
+            ? result.authenticated_user : identity;
+          if (pending && user !== identity) throw new Error(t('floor_pin.owner_required'));
+          await signedIn(user, pending, generation);
         } else {
           throw new Error(t('floor_pin.login_failed'));
         }

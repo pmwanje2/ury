@@ -136,6 +136,10 @@ def on_session_creation(login_manager=None):
     home_page to a full URL path causes the Desk SPA to attempt a
     Frappe Page DocType lookup which raises DoesNotExistError.
     """
+    # Bind the API response to the account Frappe authenticated after alias and OTP resolution.
+    request = getattr(frappe.local, "request", None)
+    if login_manager and request and request.path == "/api/method/login" and login_manager.user != "Guest":
+        frappe.local.response["authenticated_user"] = login_manager.user
     if not is_ury_setup_complete():
         frappe.local.response["message"] = "Logged In"
         frappe.local.response["home_page"] = _setup_wizard_target()
