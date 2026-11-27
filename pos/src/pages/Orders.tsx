@@ -5,6 +5,7 @@ import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerg
 import { Badge, Button, Card, CardContent, Select, SelectItem } from '@ury/ui';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@ury/ui';
 import { showToast } from '@ury/ui';
+import { workstation } from '../lib/workstation';
 import OrderStatusSidebar from '../components/OrderStatusSidebar';
 import { useRootStore } from '../store/root-store';
 import { formatCurrency, normalizeFrappeTime } from '@ury/core';
@@ -164,14 +165,14 @@ function LinkTag({ icon: Icon, children }: { icon: React.ComponentType<{ classNa
   );
 }
 
-export default function Orders() {
+export default function Orders({ onRegister }: { onRegister?: () => void } = {}) {
   const owner = useSessionOwner();
   const { pathname } = useLocation();
   if (pathname.replace(/\/$/, '') === '/orders/settled') return <SettledBills key={owner} />;
-  return <OwnerOrders key={owner} owner={owner} />;
+  return <OwnerOrders key={owner} owner={owner} onRegister={onRegister} />;
 }
 
-function OwnerOrders({ owner }: { owner: string | null }) {
+function OwnerOrders({ owner, onRegister }: { owner: string | null; onRegister?: () => void }) {
   const { 
     orders: list, ordersOwner, ordersBranch, ordersOffline,
     orderLoading,
@@ -204,6 +205,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   );
   const posStore = usePOSStore();
   const profileCurrency = posStore.posProfile?.currency;
+  const enabledKeys = workstation(posStore.posProfile?.custom_workstation_layout, profileCurrency || '').keys;
   const selectedOrderCurrency = selectedOrder?.currency || profileCurrency;
   const printWarningMinutes = posStore.posProfile?.custom_invoice_warning_time ?? 0;
   const [clockNow, setClockNow] = React.useState(() => Date.now());
@@ -625,7 +627,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         await posStore.addToOrder(cartItem);
       }
       // Redirect to POS page
-      navigate('/register');
+      if (onRegister) onRegister();
+      else navigate('/register');
     } catch (err) {
       showToast.error(parseFrappeError(err, t('errors.failed_edit_order')));
     } finally {
@@ -984,7 +987,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48">
+    <div className={onRegister ? "flex h-full flex-col overflow-y-auto p-2" : "flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48"}>
+      {onRegister && <button className="min-h-11 self-start rounded border bg-background px-3" disabled={editLoading} onClick={() => {
+        if (selectedOrder && isOrderEditable(selectedOrder.status) && !Number(selectedOrder.invoice_printed)) void handleEditOrder();
+        else onRegister();
+      }}>{t('workstation.menu')}</button>}
+      {!onRegister && <>
       {/* Left Sidebar - Order Types */}
       <div className="flex min-w-0 flex-col bg-white">
       <Link className="p-3 text-blue-700 underline" to="/orders/settled">{t('orders.settled_closed')}</Link>
@@ -1140,8 +1148,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         </div>
       </div>
 
+      </>}
       {/* Right Section - Order Details */}
-      <div className="flex min-h-96 min-w-0 flex-col rounded-lg border border-border bg-white lg:min-h-0 lg:w-[38%]">
+      <div className="flex min-h-96 min-w-0 flex-col rounded-lg border border-border bg-white lg:min-h-0 lg:w-[38%]" style={onRegister ? {flex: 1, width: "100%"} : undefined}>
         {!selectedOrder ? (
           <div className="text-center h-full flex flex-col items-center justify-center text-gray-500 p-6">
             <p className="text-lg font-medium mb-2">{t('order.select_to_view')}</p>
@@ -1163,6 +1172,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               <div className="flex items-center justify-between gap-2">
                 <h2 className="min-w-0 flex-1 break-words text-lg font-semibold text-gray-900">
                   {selectedOrder.name}
+                  {onRegister && posStore.posProfile?.active_business_date &&
+                    <time className="block text-xs">{posStore.posProfile.active_business_date}</time>}
                 </h2>
                 <div className="flex shrink-0 items-center gap-2">
                   {isOrderEditable(selectedOrder.status) && (
@@ -1396,6 +1407,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             : 'py-2 border-b border-gray-100'
                         }
                       >
+                        {item.custom_course && !isModifierRow && <h4 className="text-xs font-semibold">{item.custom_course}</h4>}
                         <div className="flex justify-between items-start gap-3">
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
@@ -1404,6 +1416,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                   ? `+ ${item.custom_modifier_prefix ? `${item.custom_modifier_prefix} ` : ''}${item.item_name}`
                                   : item.item_name}
                               </p>
+                              {item.custom_seat_no ? <Badge>{t('floor.seat_short', {seat: item.custom_seat_no})}</Badge> : null}
                               {discountPercentage !== null && (
                                 <Badge className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50 text-xs">
                                   -{discountPercentage}%
@@ -1426,7 +1439,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                       <Minus className="w-3 h-3" />
                                     )}
                                   </button>
-                                  <button
+                                  {(!onRegister || enabledKeys.includes('void')) && <button
                                     type="button"
                                     onClick={() => setVoidDialogItem(item)}
                                     disabled={isReducingThisItem}
@@ -1434,7 +1447,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                     className="text-xs font-medium text-red-700 hover:underline px-1.5 py-0.5 rounded border border-red-200 bg-red-50 disabled:opacity-50"
                                   >
                                     {t('void_return.confirm_void')}
-                                  </button>
+                                  </button>}
                                 </>
                               )}
                               <p className="text-xs text-gray-500">{t('orders.qty_label', { qty: item.qty })}</p>
@@ -1677,7 +1690,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     ? 'order.print_bill' : displayedRetry ? 'order.retry_copy' : 'order.print_receipt')}
                 </Button>
                 {/* Open-Check Discount Key (Simphony/SAP: sits on the open check, not in PaymentDialog) */}
-                {isOrderEditable(selectedOrder.status) && (
+                {isOrderEditable(selectedOrder.status) && (!onRegister || enabledKeys.includes('discount')) && (
                   <Button
                     type="button"
                     variant="outline"

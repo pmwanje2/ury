@@ -1556,6 +1556,7 @@ def getPosProfileFull(pos_profile):
         "custom_tax_exempt_category": profile.get("custom_tax_exempt_category") or "",
         "custom_tips_payable_account": profile.get("custom_tips_payable_account") or "",
         # one configured void reason per line; None on sites without the field
+        "custom_workstation_layout": profile.get("custom_workstation_layout"),
         "custom_void_reasons": profile.get("custom_void_reasons"),
         "require_over_short_reason": cint(profile.get("custom_require_over_short_reason")),
         "over_short_reason_tolerance": frappe.utils.flt(profile.get("custom_over_short_reason_tolerance")),
@@ -5217,6 +5218,7 @@ def preview_order_totals(
     efris_warnings = validate_efris_readiness(doc, throw=False)
 
     return {
+        "subtotal": flt(doc.get("total"), prec),
         "net_total": flt(doc.get("net_total"), prec),
         "discount_amount": flt(doc.get("discount_amount"), prec),
         "tax_rows": _build_preview_tax_rows(doc, prec),

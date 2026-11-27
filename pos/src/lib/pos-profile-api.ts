@@ -159,6 +159,7 @@ export interface PosProfileFull extends CoversProfile {
   custom_enable_payment_without_printing?: number;
   custom_blind_cash_count?: number;
   /** One configured void reason per line. Absent on sites without the field. */
+  custom_workstation_layout?: string | null;
   custom_void_reasons?: string | null;
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;

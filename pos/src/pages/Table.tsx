@@ -4,7 +4,7 @@ import { AlertTriangle, Layout, Square } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
 import {
-  getRooms,
+  getRoomServers, getRooms,
   markTableClean,
   getTables,
   getTableCount,
@@ -743,6 +743,19 @@ const TableView = () => {
 
   const [isLayoutView, setIsLayoutView] = useState(false);
 
+  const [overlay, setOverlay] = useState(false);
+  const [servers, setServers] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let current = true;
+    setServers({});
+    if (isLayoutView && overlay && branch) {
+      getRoomServers(branch, tables.filter(table => table.occupied).map(table => table.name))
+        .then(result => { if (current) setServers(result); })
+        .catch(() => { if (current) showToast.error(t('tables.no_active_order')); });
+    }
+    return () => { current = false; };
+  }, [isLayoutView, overlay, branch, tables]);
+
   const handleLayoutView = () => {
     if (selectedRoom) {
       loadTables(selectedRoom, { useCache: false });
@@ -750,9 +763,25 @@ const TableView = () => {
     setIsLayoutView(true);
   };
 
-  if (isLayoutView && selectedRoom) {
+  if (isLayoutView && selectedRoom && !heldReservation) {
     return (
+      <div className="flex h-full min-h-0 flex-col">
+        <nav className="flex flex-wrap items-center gap-1 bg-background p-2">
+          {[...new Set(rooms.map(room => room.room_type).filter(Boolean))].map(area =>
+            <Button key={area} variant="tab" data-selected={rooms.find(room => room.name === selectedRoom)?.room_type === area}
+              onClick={() => handleRoomChange(rooms.find(room => room.room_type === area)!.name)}>{area}</Button>)}
+          {rooms.filter(room => room.room_type === rooms.find(r => r.name === selectedRoom)?.room_type).map(room =>
+            <Button key={room.name} variant="outline" onClick={() => handleRoomChange(room.name)}>{room.name}</Button>)}
+          <Button variant="outline" aria-pressed={overlay} onClick={() => setOverlay(!overlay)}>{t('workstation.overlay')}</Button>
+        </nav>
       <LayoutView
+        servers={overlay ? servers : {}}
+        reserved={lockActiveReservationsByTable}
+        onOpen={table => {
+          if (table.custom_table_state === 'Dirty' && branchSettings?.block_dirty_table_seating !== 0) return;
+          if (table.custom_table_state === 'Check Printed') void payTable(table);
+          else void handleNavigateToPOS(table.name);
+        }}
         selectedRoom={selectedRoom}
         tables={tablesToDisplay}
         onBackToGrid={() => setIsLayoutView(false)}
@@ -760,6 +789,7 @@ const TableView = () => {
         onPay={(table) => void payTable(table)}
         onRefresh={() => loadTables(selectedRoom, { useCache: false })}
       />
+      </div>
     );
   }
 

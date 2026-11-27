@@ -5,6 +5,7 @@ import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
 import { call } from '@ury/core';
 import { t } from '../i18n';
+import { workstation } from '../lib/workstation';
 import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
 import { canSettleOffline } from '../offline/outbox';
 import { useRootStore } from '../store/root-store';
@@ -885,6 +886,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     }
   },[balanceDue,receivedTotal,paymentModes,defaultPaymentMode])
 
+  const layout = workstation(storePosProfile?.custom_workstation_layout, currencyCode);
   const clearAutoFilledDefaultIfOther = (activeModeId: string) => {
     const autoMode = autoFilledDefaultRef.current;
     if (autoMode && autoMode !== activeModeId) {
@@ -1262,6 +1264,19 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                         />
                       )}
                     </div>
+
+                    {!fxCurr && isCashMode(id) && (
+                      <div className="flex flex-wrap gap-1">
+                        {layout.keys.flatMap(key => key === 'exact' ? ['exact'] : key === 'cash' ? layout.cash.map(String) : []).map(key =>
+                          <Button key={key} type="button" variant="outline" disabled={isProcessing} onClick={() => {
+                            const other = newPayments.filter(row => row.mode_of_payment !== id &&
+                              row.mode_of_payment !== autoFilledDefaultRef.current).reduce((sum, row) => sum + row.amount, 0);
+                            clearAutoFilledDefaultIfOther(id);
+                            const amount = key === 'exact' ? Math.max(0, roundToCurrency(balanceDue - other, currencyCode)) : Number(key);
+                            setPaymentInputs(prev => ({ ...prev, [id]: String(amount) }));
+                          }}>{key === 'exact' ? t('workstation.exact') : formatMoney(Number(key))}</Button>)}
+                      </div>
+                    )}
 
                     {fxCurr && fxRate && (
                       <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-gray-600 ps-1">

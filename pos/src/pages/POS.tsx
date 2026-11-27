@@ -1,12 +1,16 @@
 import { useState, useRef, useMemo } from 'react';
 import { t } from '../i18n';
 import { Sparkles, Star, TrendingUp } from 'lucide-react';
+import { PLUKeypad } from '../components/PLUKeypad';
+import TillCashDialog from '../components/TillCashDialog';
+import { workstation } from '../lib/workstation';
+import { isUnavailable } from '../lib/availability-api';
 import Sidebar from '../components/Sidebar';
 import OrderPanel from '../components/OrderPanel';
 import ProductDialog from '../components/ProductDialog';
 import MenuList from '../components/MenuList';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
-import { usePOSStore } from '../store/pos-store';
+import { usePOSStore, type OrderItem } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import InitialLoader from '../components/InitialLoader';
@@ -21,12 +25,13 @@ import { showToast } from '@ury/ui';
 
 const EMPTY_MENU: Array<{ item: string }> = [];
 
-export default function POS({ onCashierCheck }: React.ComponentProps<typeof OrderPanel>) {
+export default function POS({ onRoundSent, onCashierCheck, lastRound, checkDetail }: React.ComponentProps<typeof OrderPanel> & { checkDetail?: React.ReactNode; lastRound?: { invoice: string; lines: OrderItem[] } }) {
   const {
+    categories, selectedCategory, setSelectedCategory, isOrderInteractionDisabled,
     quickFilter,
     setQuickFilter,
     setSelectedItem,
-    addToOrder,
+    addToOrder, addConfiguredItems,
     loading,
     error,
     isMenuInteractionDisabled,
@@ -41,6 +46,12 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
     currency,
     loadTableOrder,
   } = usePOSStore();
+  const layout = useMemo(() => workstation(posProfile?.custom_workstation_layout, currency || ''), [posProfile, currency]);
+  const [page, setPage] = useState('');
+  const [quantity, setQuantity] = useState(1);
+  const [dialogQuantity, setDialogQuantity] = useState(1);
+  const [noSale, setNoSale] = useState(false);
+  const activePage = layout.pages.find(p => p.label === page);
   const openMenuItems = useMemo(
     () =>
       (menuItems ?? [])
@@ -106,9 +117,11 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
   const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
   const clickCountRef = useRef(0);
 
-  const handleItemClick = (item: any) => {
+  const handleItemClick = (item: any, count = quantity, direct = false) => {
     if (isMenuInteractionDisabled() || item?.unavailable_daypart) return;
 
+    setQuantity(1);
+    setDialogQuantity(count);
     if (
       Number(item?.custom_is_open_priced || 0) === 1 ||
       (Number(item?.custom_allow_zero_price || 0) === 1 && Number(item?.price || 0) === 0)
@@ -138,6 +151,10 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
       return;
     }
 
+    if (direct || count > 1) {
+      void addToOrder({ ...item, quantity: count });
+      return;
+    }
     clickCountRef.current += 1;
     
     if (clickTimerRef.current) {
@@ -155,6 +172,25 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
       }
       clickCountRef.current = 0;
     }, 250); // 250ms threshold for double click
+  };
+
+  const repeatRound = () => {
+    if (!lastRound || lastRound.invoice !== orderId || isMenuInteractionDisabled() || isOrderInteractionDisabled()) return;
+    const parents = lastRound.lines.filter(row => !row.isModifier && !row.parentLineKey);
+    if (parents.some(row => {
+      const item = menuItems.find(it => it.item === row.item);
+      return !item || item.unavailable_daypart || isUnavailable(availabilityMap?.[row.item]) ||
+        item.custom_is_open_priced || item.custom_allow_zero_price;
+    })) {
+      showToast.error(t('menu.unavailable'));
+      return;
+    }
+    const newLine = (row: OrderItem) => ({ ...row, uniqueId: undefined, invoiceItemName: undefined,
+      reservationLineKey: undefined, parentLineKey: undefined, fireAt: undefined, fireConfirmationPending: false });
+    for (const row of parents) {
+      const children = lastRound.lines.filter(child => child.parentLineKey && child.parentLineKey === row.reservationLineKey);
+      void addConfiguredItems(newLine(row), children.map(newLine));
+    }
   };
 
   const QuickFilterButton = ({ filter, icon: Icon, label }: { 
@@ -220,11 +256,31 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
 
   return (
     <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden lg:flex-row">
-      <div className="hidden lg:contents">
+      <div className={layout.pages.length || checkDetail ? 'hidden' : 'hidden lg:contents'}>
         <Sidebar disabled={isMenuInteractionDisabled()} />
       </div>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="p-4 bg-white border-b border-border">
+      <div inert={checkDetail ? true : undefined} className={cn("flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden", checkDetail && "hidden opacity-60 lg:flex")}>
+        <div className="p-2 bg-background text-foreground border-b border-border">
+          <div className="flex items-center gap-2">
+            <PLUKeypad disabled={isMenuInteractionDisabled() || isOrderInteractionDisabled?.()} multiplier={quantity} onQuantity={layout.keys.includes('quantity') ? setQuantity : undefined}
+              onLookup={(code, count) => {
+                const item = menuItems?.find(row => row.item === code);
+                if (!item || count > 99 || isMenuInteractionDisabled() || isOrderInteractionDisabled?.() ||
+                    item.unavailable_daypart || isUnavailable(availabilityMap?.[code])) return false;
+                handleItemClick(item, count, true);
+                return true;
+              }} />
+            {layout.keys.includes('repeat') && lastRound && lastRound.invoice === orderId &&
+              <button className="min-h-11 rounded border px-2" onClick={repeatRound}>{t('workstation.repeat')}</button>}
+            {layout.keys.includes('noSale') && !!posProfile?.enable_cash_movements &&
+              <button className="min-h-11 rounded border px-2" onClick={() => setNoSale(true)}>{t('till_cash.no_sale')}</button>}
+            <div className={cn('flex gap-1 overflow-x-auto', !layout.pages.length && 'lg:hidden')}>
+              {(layout.pages.length ? layout.pages.map(p => ({ name: p.label, label: p.label })) : categories || []).map(p =>
+                <button key={p.name} className="min-h-11 shrink-0 rounded border px-2 aria-pressed:bg-muted"
+                  aria-pressed={layout.pages.length ? page === p.name : selectedCategory === p.name}
+                  onClick={() => layout.pages.length ? setPage(page === p.name ? '' : p.name) : setSelectedCategory(p.name)}>{p.label}</button>)}
+            </div>
+          </div>
           <div className="max-w-screen-xl mx-auto space-y-3">
             <div className="flex items-center gap-2 overflow-x-auto overflow-y-hidden">
               {/* <SearchBar
@@ -263,11 +319,13 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
           </div>
         </div>
 
-        <MenuList onItemClick={handleItemClick} availabilityMap={availabilityMap} availabilityStale={availabilityStale}
+        <MenuList pageItems={layout.pages.length ? (activePage?.items ?? menuItems?.map(row => row.item)) : undefined} onItemClick={handleItemClick} availabilityMap={availabilityMap} availabilityStale={availabilityStale}
           itemAvailabilityActions={itemAvailabilityActions} />
       </div>
-      <OrderPanel onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />
-      {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}
+      {checkDetail ? <section className="h-full w-full overflow-y-auto bg-background lg:w-1/2">{checkDetail}</section>
+        : <OrderPanel onRoundSent={onRoundSent} onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />}
+      {noSale && <TillCashDialog initialTab="No Sale" open onOpenChange={setNoSale} />}
+      {isDialogOpen && <ProductDialog initialQuantity={dialogQuantity} onClose={() => setIsDialogOpen(false)} />}
       {openItemDialog && posProfile && (
         <PriceOverrideDialog
           open
@@ -277,6 +335,7 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
           invoiceName={orderId || ''}
           itemCode={openItemDialog.itemCode}
           itemName={openItemDialog.itemName}
+          initialQuantity={dialogQuantity}
           currentRate={0}
           currency={currency || posProfile.currency || 'UGX'}
           openItems={openMenuItems}

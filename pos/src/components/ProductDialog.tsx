@@ -173,7 +173,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
   useEffect(() => {
     if (!editMode && selectedItem) {
       if (isConfigurable) {
-        setQuantity('1');
+        setQuantity(String(initialQuantity || 1));
       } else if (existingCartItem) {
         setQuantity(existingCartItem.quantity.toString());
         setComments(existingCartItem.comment || '');
@@ -181,7 +181,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         setQuantity(getItemQuantityFromCart(selectedItem).toString());
       }
     }
-  }, [selectedItem, editMode, isConfigurable, getItemQuantityFromCart, existingCartItem]);
+  }, [initialQuantity, selectedItem, editMode, isConfigurable, getItemQuantityFromCart, existingCartItem]);
 
   const addonDetails = useMemo(() => {
     const rows = Array.isArray(itemDoc?.custom_pos_add_on_items)

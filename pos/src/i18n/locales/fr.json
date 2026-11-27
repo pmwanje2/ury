@@ -1,4 +1,12 @@
 {
+  "workstation": {
+    "exact": "Espèces exactes",
+    "repeat": "Répéter la tournée",
+    "overlay": "Afficher les serveurs",
+    "check": "Addition",
+    "menu": "Carte",
+    "plu": "Code article"
+  },
   "notifications": {
     "kitchen": "Cuisine",
     "new_food_ready": "Nouvelle commande prête en cuisine"

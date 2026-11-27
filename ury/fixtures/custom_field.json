@@ -1,5 +1,16 @@
 [
  {
+  "doctype": "Custom Field",
+  "dt": "POS Profile",
+  "fieldname": "custom_workstation_layout",
+  "fieldtype": "Code",
+  "options": "JSON",
+  "label": "Workstation Layout",
+  "name": "POS Profile-custom_workstation_layout",
+  "insert_after": "currency",
+  "description": "Optional JSON. Example: {\"pages\":[{\"label\":\"Bar\",\"items\":[\"001\"]}],\"keys\":[\"repeat\",\"quantity\",\"void\",\"discount\",\"noSale\",\"exact\",\"cash\"],\"cash\":{\"USD\":[1,5,10,20]}}"
+ },
+ {
   "alignment": null,
   "allow_bulk_edit": 0,
   "allow_in_quick_entry": 0,

@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import AppLayout from './components/AppLayout';
 import Orders from './pages/Orders';
 import POS from './pages/POS';
@@ -18,7 +18,7 @@ import CaptainOrder from './captain/pages/CaptainOrder';
 import { ToastProvider } from '@ury/ui';
 import { homePath } from './lib/home-route';
 import { useRootStore } from './store/root-store';
-import { usePOSStore } from './store/pos-store';
+import { usePOSStore, type OrderItem } from './store/pos-store';
 import { useEffect, useRef, useState } from 'react';
 import { installDrawerKickListener } from './lib/drawer-kick';
 import { getActiveLanguage, getActiveDirection } from './i18n';
@@ -61,11 +61,27 @@ function useAiSettings() {
 
 
 function RegisterRoute() {
-  const navigate = useNavigate();
-  return <POS onCashierCheck={(invoice) => {
-    void useRootStore.getState().selectOrder(invoice);
-    navigate('/orders');
-  }} />;
+  const user = useRootStore(s => s.user?.name);
+  const profile = usePOSStore().posProfile?.name;
+  const context = user + '/' + profile;
+  return <RegisterWorkstation key={context} />;
+}
+
+function RegisterWorkstation() {
+  const [round, setRound] = useState<{ invoice: string; lines: OrderItem[] }>();
+  const [check, setCheck] = useState(false);
+  const detail = check ? <Orders onRegister={() => setCheck(false)} /> : null;
+  return (
+    <POS
+      checkDetail={detail}
+      lastRound={round}
+      onRoundSent={(invoice, lines) => setRound({ invoice, lines })}
+      onCashierCheck={invoice => {
+        setCheck(true);
+        void useRootStore.getState().selectOrder(invoice);
+      }}
+    />
+  );
 }
 
 function App() {
