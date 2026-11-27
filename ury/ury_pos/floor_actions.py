@@ -192,6 +192,19 @@ def rebind_outlet(inv, target, *, table_branch=None):
     from ury.ury.doctype.ury_order.ury_order import _dayparts_mod, invoice_pricing_date, price_items_for_invoice
     from ury.ury_pos.tax_determination import apply_order_type_tax
 
+    destination_branch = table_branch or target.branch
+    if destination_branch != inv.branch:
+        held = [row for row in inv.get("items") or [] if cint(row.get("ury_held"))
+                and not row.get("custom_kitchen_anchor") and flt(row.qty) > 0]
+        if held:
+            from ury.ury.api.ury_stock_policy import get_branch_stock_policy
+
+            reserve = get_branch_stock_policy(branch=destination_branch, company=inv.company).reservation_control_enabled
+            if reserve or frappe.db.exists("URY Stock Reservation", {"order_ref": inv.name, "status": "Reserved"}):
+                from ury.ury.api.ury_order_reservation_service import transfer_held_reservations
+
+                transfer_held_reservations(inv, held, destination_branch, reserve)
+
     # Remove the source outlet's liability row before the invoice save hook
     # rebuilds it using the destination account.
     if flt(inv.get("custom_charged_tip")):
@@ -199,7 +212,7 @@ def rebind_outlet(inv, target, *, table_branch=None):
         if old_account:
             inv.set("taxes", [row for row in inv.get("taxes") or [] if row.account_head != old_account])
     inv.pos_profile = target.name
-    inv.branch = table_branch or target.branch
+    inv.branch = destination_branch
     inv.restaurant = target.get("restaurant")
     resolved = _dayparts_mod().resolve_menu_and_price_list(
         inv.branch, restaurant=inv.restaurant, table=inv.get("restaurant_table"),

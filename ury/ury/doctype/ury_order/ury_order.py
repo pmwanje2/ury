@@ -5145,9 +5145,9 @@ def sync_order(
     apply_count_delta(invoice.branch, past_item, past_item + items if append else items, invoice=invoice)
 
     previous_by_key = {
-        row.get("reservation_line_key"): row
-        for row in (invoice.items or [])
-        if row.get("reservation_line_key")
+        snapshot["reservation_line_key"]: row
+        for row, snapshot in zip(invoice.items, past_item, strict=True)
+        if snapshot.get("reservation_line_key")
     }
     period_crossed = (
         bool(invoice.name and past_item)
@@ -5188,11 +5188,13 @@ def sync_order(
                     if prev_row.get(tax_field) is not None:
                         item_dict[tax_field] = prev_row.get(tax_field)
     prior_placements = defaultdict(set)
-    for row in past_item:
+    unkeyed_issued = defaultdict(list)
+    for saved, row in zip(invoice.items, past_item, strict=True):
         if not row.get("reservation_line_key"):
-            prior_placements[(row.get("item_code"), row.get("comments") or "", cint(row.get("custom_seat_no")))].add(
-                row.get("custom_course")
-            )
+            placement = (row["item_code"], row.get("comments") or "", cint(row.get("custom_seat_no")))
+            prior_placements[placement].add(row.get("custom_course"))
+            if not append and saved.get("name") not in requested_names and not row.get("ury_held"):
+                unkeyed_issued[(*placement, row.get("custom_course"))].append(saved.get("warehouse"))
     for src, priced in zip(items, priced_items, strict=True):
         previous = previous_rows.get(src.get("name")) or previous_by_key.get(src.get("reservation_line_key"))
         if previous and not src.get("custom_course") and previous.get("custom_course"):
@@ -5220,6 +5222,21 @@ def sync_order(
     for source, item_dict in zip(items, priced_items, strict=True):
         old_row = previous_rows.get(source.get("name")) if source.get("name") else None
         origin_row = old_row or previous_by_key.get(source.get("reservation_line_key"))
+        # Closing issues this saved portion from the kitchen that fired it.
+        if (origin_row and origin_row.get("item_code") == item_dict["item_code"]
+                and not cint(origin_row.get("ury_held")) and origin_row.get("warehouse")):
+            item_dict["warehouse"] = origin_row.get("warehouse")
+        elif unkeyed_issued and not origin_row and not source.get("reservation_line_key") and not cint(source.get("ury_held")):
+            # Older carts identify a portion by dish, note, seat and course.
+            placement = (source["item"], source.get("comment") or "", cint(source.get("custom_seat_no")),
+                         source.get("custom_course"))
+            warehouses = unkeyed_issued.get(placement)
+            if warehouses:
+                if len(set(warehouses)) > 1:
+                    _ambiguous_issued_lines()
+                warehouse = warehouses.pop()
+                if warehouse:
+                    item_dict["warehouse"] = warehouse
         if origin_row and origin_row.get("custom_origin_invoice_item"):
             item_dict["custom_origin_invoice_item"] = origin_row.get("custom_origin_invoice_item")
             item_dict["custom_kitchen_anchor"] = origin_row.get("custom_kitchen_anchor")
