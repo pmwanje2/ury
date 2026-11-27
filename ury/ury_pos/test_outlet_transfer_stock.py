@@ -82,14 +82,15 @@ class TestOutletTransferStock(unittest.TestCase):
             write_off_cost_center="Main - _TC",
         )
 
-    def invoice(self, qty=1):
+    def invoice(self, qty=1, table=None):
         for item in (self.dish, self.extra):
             frappe.get_doc({"doctype": "Item Price", "item_code": item,
                             "price_list": "Standard Selling", "price_list_rate": 10}).insert()
         doc = frappe.get_doc({
             "doctype": "POS Invoice", "company": self.company, "customer": self.customer,
             "pos_profile": self.east.name, "restaurant": self.east.restaurant, "branch": self.east.branch,
-            "waiter": "Administrator", "order_type": "Take Away", "is_pos": 1, "no_of_pax": 1,
+            "waiter": "Administrator", "order_type": "Dine In" if table else "Take Away",
+            "restaurant_table": table, "is_pos": 1, "no_of_pax": 1,
             "items": [{"item_code": self.dish, "qty": qty, "ury_held": 1, "warehouse": self.east.warehouse,
                        "rate": 10, "reservation_line_key": "soup"}],
             "payments": [{"mode_of_payment": "Cash", "amount": 0}],
@@ -125,6 +126,49 @@ class TestOutletTransferStock(unittest.TestCase):
             "voucher_type": "Sales Invoice", "voucher_no": voucher, "is_cancelled": 0,
         }, fields=["item_code", "warehouse", "actual_qty"])
         self.assertCountEqual([(r.item_code, r.warehouse, r.actual_qty) for r in rows], expected)
+
+    def test_seated_reservation_moves_with_its_check_across_branches(self):
+        from ury.tests.till_money_fixtures import assign_branch_user
+
+        captain = frappe.db.get_value("POS Opening Entry", {"pos_profile": self.east.name}, "user")
+        frappe.get_doc("User", captain).add_roles("URY Captain")
+        tables = []
+        for outlet in (self.east, self.west):
+            assign_branch_user(outlet.branch, captain)
+            outlet.append("applicable_for_users", {"user": captain})
+            outlet.save()
+            frappe.db.set_value("Branch", outlet.branch, "custom_enable_reservation", 1)
+            room = frappe.get_doc({"doctype": "URY Room", "branch": outlet.branch}).insert(
+                set_name=outlet.name + " Dining Room")
+            table = frappe.get_doc({
+                "doctype": "URY Table", "restaurant": outlet.restaurant, "branch": outlet.branch,
+                "restaurant_room": room.name,
+            }).insert(set_name=outlet.name + " Table", ignore_mandatory=True)
+            tables.append(table.name)
+        source, destination = tables
+        party = frappe.get_doc({
+            "doctype": "URY Table Reservation", "customer": self.customer, "customer_phone": "0700000000",
+            "no_of_pax": 3, "branch": self.east.branch, "reserved_table": source,
+        }).insert()
+        party.status = "Seated"
+        party.save()
+        check = self.invoice(table=source)
+        self.assertEqual(party.reload().pos_invoice, check.name)
+
+        frappe.get_doc({
+            "doctype": "POS Privilege Rule", "company": self.company, "pos_profile": self.east.name,
+            "privilege": "transfer_check", "role": "URY Captain", "may_perform": 1,
+        }).insert()
+        check.db_set("waiter", captain)
+        frappe.set_user(captain)
+        self.addCleanup(frappe.set_user, "Administrator")
+        ury_order.table_transfer(source, destination, check.name, target_pos_profile=self.west.name)
+
+        check.reload()
+        self.assertEqual((check.branch, check.restaurant_table), (self.west.branch, destination))
+        party.reload()
+        self.assertEqual((party.branch, party.reserved_table, party.pos_invoice, party.status),
+                         (self.west.branch, destination, check.name, "Seated"))
 
     def test_floor_lookup_matches_whole_merged_table_names(self):
         t1, t9, t10 = [self.prefix + suffix for suffix in (" T1", " T9", " T10")]

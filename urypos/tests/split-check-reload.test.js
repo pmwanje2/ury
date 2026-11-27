@@ -270,3 +270,39 @@ it.each([
   await useInvoiceDataStore().invoiceCreation();
   expect(api.post).not.toHaveBeenCalled();
 });
+
+it('sends the seated walk-in’s covers on its first check without a customer record', async () => {
+  setActivePinia(createPinia());
+  const floor = useTableStore();
+  vi.spyOn(floor, 'fetchTable').mockImplementation(() => {});
+  api.get.mockResolvedValueOnce({ message: { __islocal: 1, name: null, items: [], customer: null, no_of_pax: 3 } });
+  api.post.mockClear().mockResolvedValueOnce({ message: { name: 'First-check' } });
+
+  await floor.loadSelectedTable({ name: 'T1', occupied: 1 });
+  expect.soft(floor.customers.numberOfPax).toBe(3);
+  floor.menu.addToCart({ item: 'Pie', rate: 5 });
+  await useInvoiceDataStore().invoiceCreation();
+  expect(api.post).toHaveBeenCalledWith(expect.stringMatching(/\.sync_order$/), expect.objectContaining({
+    table: 'T1', invoice: null, no_of_pax: 3,
+  }));
+});
+
+it.each([
+  ['empty row', {}],
+  ['blank item code', { item_code: '  ', qty: 1 }],
+  ['missing quantity', { item_code: 'Pie' }],
+  ['nonnumeric quantity', { item_code: 'Pie', qty: 'invalid' }],
+])('blocks Send when any saved invoice child is malformed (%s)', async (_, row) => {
+  setActivePinia(createPinia());
+  const floor = useTableStore();
+  vi.spyOn(floor, 'fetchTable').mockImplementation(() => {});
+  api.get.mockResolvedValueOnce({ message: { name: 'Check', waiter: 'captain',
+    items: [{ item_code: 'Soup', qty: 1, rate: 10 }, row] } });
+  api.post.mockClear().mockResolvedValueOnce({ message: { name: 'Unexpected' } });
+
+  await floor.loadSelectedTable({ name: 'T1', occupied: 1 });
+  floor.customers.numberOfPax = 2;
+  floor.menu.addToCart({ item: 'Tea', rate: 3 });
+  await useInvoiceDataStore().invoiceCreation();
+  expect(api.post).not.toHaveBeenCalled();
+});
