@@ -442,7 +442,7 @@ describe('floor session isolation', () => {
     'retries failed logout and locks the surviving session to password sign-in on %j', async (pad) => {
     setFloorPad(pad);
     boundary.logout.mockResolvedValue(false);
-    boundary.state.user = { name: 'captain@example.test', roles: ['URY Captain'] };
+    boundary.state.user = { name: 'waiter@example.test', roles: ['URY Captain'] };
     boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [] };
     localStorage.setItem('ury_floor_logout_failed', 'waiter@example.test');
     await render();

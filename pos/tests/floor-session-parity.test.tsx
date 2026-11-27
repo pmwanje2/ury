@@ -67,6 +67,7 @@ let root: Root | undefined;
 let replacement: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  document.cookie = 'user_id=waiter%40example.com; Path=/';
   vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   vi.useFakeTimers();
   vi.clearAllMocks();
@@ -89,6 +90,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.cookie = 'user_id=; Max-Age=0; Path=/';
   if (root) act(() => root!.unmount());
   root = undefined;
   container?.remove();

@@ -629,7 +629,7 @@ class TestFloorPin(unittest.TestCase):
 				if session_user == self.user:
 					setup_redirect.guard_floor_request_user()
 				else:
-					with self.assertRaisesRegex(Unauthenticated, "URY_FLOOR_SESSION_MISMATCH"):
+					with self.assertRaisesRegex(Denied, "URY_FLOOR_SESSION_MISMATCH"):
 						setup_redirect.guard_floor_request_user()
 			self.frappe.local.request.headers = {}
 			self.frappe.session.user = "Guest"

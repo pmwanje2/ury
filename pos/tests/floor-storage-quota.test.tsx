@@ -33,6 +33,7 @@ const capture = () => cashierOutbox(state.posProfile, state.user).capture({
 }, 10);
 
 beforeEach(() => {
+  document.cookie = 'user_id=' + encodeURIComponent(state.user.name) + '; Path=/';
   sessionStorage.clear();
   localStorage.clear();
   vi.stubGlobal('indexedDB', new IDBFactory());
@@ -48,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  document.cookie = 'user_id=; Max-Age=0; Path=/';
   document.cookie = 'ury_floor_generation=; Max-Age=0; Path=/pos; SameSite=Strict; Secure';
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -98,7 +100,7 @@ it('sends and receives cross-tab membership notifications despite localStorage q
 
 it.each(['server logout', 'owner login'])('keeps a failed till logout across tab closure until successful %s', async (resolution) => {
   const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
-  await expect(clearCashierStorage(true)).rejects.toThrow();
+  await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
   expect(localStorage.getItem('ury_floor_logout_failed')).toBeNull();
   sessionStorage.clear();
   window.name = '';
@@ -109,7 +111,7 @@ it.each(['server logout', 'owner login'])('keeps a failed till logout across tab
   expect(logout).toHaveBeenCalledTimes(2);
   if (resolution === 'server logout') {
     logout.mockResolvedValue(true);
-    await clearCashierStorage(true);
+    await clearCashierStorage(true, state.user.name);
   } else {
     vi.spyOn(core.auth, 'loginWithUsernamePassword').mockResolvedValue({ message: 'Logged In' } as never);
     vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(state.user.name);
@@ -162,7 +164,7 @@ it('broadcasts a logout across tabs when the storage signal is unavailable', asy
   const received = vi.fn();
   sibling.onmessage = received;
   try {
-    await expect(clearCashierStorage(true)).rejects.toThrow();
+    await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
     await waitFor(() => expect(received).toHaveBeenCalled());
   } finally { sibling.close(); }
 });
@@ -229,7 +231,7 @@ it('sets and expires the fallback cookie with Secure on HTTPS', async () => {
   const blocked = refuseMarkerTransactions('readwrite');
   const cookies = vi.spyOn(document, 'cookie', 'set');
   vi.spyOn(core, 'logout').mockResolvedValue(false);
-  await expect(clearCashierStorage(true)).rejects.toThrow();
+  await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
   blocked.mockRestore();
   await clearFloorLogoutFailureMarker();
   for (const prefix of ['ury_floor_logout_failed=1;', 'ury_floor_logout_failed=;']) {
@@ -285,7 +287,7 @@ it.each(['logout broadcast', 'login broadcast', 'poll', 'focus', 'visibility', '
     await screen.findByText('Other cashier workspace');
     otherTab.unmount();
     const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
-    await expect(clearCashierStorage(true)).rejects.toThrow();
+    await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
     const logoutEvent = messages.at(-1);
     messages.length = 0;
     window.name = '';
@@ -328,7 +330,7 @@ it('rotates the persistent generation on logout and verified login and binds con
   expect(first).toBeTruthy();
   expect(String(JSON.parse(sessionStorage.getItem('userAuth')!).generation)).toBe(first);
   vi.spyOn(core, 'logout').mockResolvedValue(false);
-  await expect(clearCashierStorage(true)).rejects.toThrow();
+  await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
   const revoked = generation();
   expect(revoked).toBeTruthy();
   expect(revoked).not.toBe(first);
@@ -368,7 +370,7 @@ it.each(['quota still full', 'quota recovered', 'retry already scheduled'])(
   'keeps a replacement cashier signed in when the failed tab returns (%s)', async scenario => {
     await passwordLogin(state.user.name);
     const logout = vi.spyOn(core, 'logout').mockResolvedValueOnce(false).mockResolvedValue(true);
-    await expect(clearCashierStorage(true)).rejects.toThrow();
+    await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
     expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeTruthy();
     const restoreFailedTab = saveTab();
 
@@ -410,7 +412,7 @@ it.each(['quota still full', 'quota recovered', 'retry already scheduled'])(
 
 it('binds a private logout retry to its generation and retries while it matches', async () => {
   const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
-  await expect(clearCashierStorage(true)).rejects.toThrow();
+  await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
   expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe(await currentFloorGeneration());
   render(<AuthGuard><main>Cashier workspace</main></AuthGuard>);
   await screen.findByLabelText('Password');
@@ -420,7 +422,7 @@ it('binds a private logout retry to its generation and retries while it matches'
 
 it('withholds a scheduled private retry when the durable generation cannot be read', async () => {
   const logout = vi.spyOn(core, 'logout').mockResolvedValue(false);
-  await expect(clearCashierStorage(true)).rejects.toThrow();
+  await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
   refuseMarkerTransactions('readonly');
   await floorSignOut(() => true, true);
   expect(logout).toHaveBeenCalledTimes(1);
@@ -472,7 +474,7 @@ it.each([
     restoreA(); // The queued operation runs with A's private storage.
   });
   await acquired;
-  const attempt = action === 'Switch Waiter' ? floorSignOut() : clearCashierStorage(true);
+  const attempt = action === 'Switch Waiter' ? floorSignOut() : clearCashierStorage(true, state.user.name);
   const completed = Promise.allSettled([attempt]);
   expect(lockRequests).toHaveBeenCalledTimes(2);
   expect(lockRequests.mock.calls[0][0]).toBe(lockRequests.mock.calls[1][0]);
@@ -533,7 +535,7 @@ it.each(['till logout', 'Switch Waiter'])('locks locally on %s during replacemen
     await writeMarker(owner);
   });
 
-  const attempt = action === 'till logout' ? clearCashierStorage(true) : floorSignOut();
+  const attempt = action === 'till logout' ? clearCashierStorage(true, state.user.name) : floorSignOut();
   const finished = Promise.allSettled([attempt]);
   await Promise.race([writing, finished]);
   const restoreA = saveTab();
@@ -575,7 +577,7 @@ it.each(['till logout', 'Switch Waiter'])('locks locally on %s during replacemen
 it('locks a private retry without Web Locks until verified sign-in', async () => {
   await passwordLogin(state.user.name);
   const logout = vi.spyOn(core, 'logout').mockResolvedValueOnce(false).mockResolvedValue(true);
-  await expect(clearCashierStorage(true)).rejects.toThrow();
+  await expect(clearCashierStorage(true, state.user.name)).rejects.toThrow();
   expect(logout).toHaveBeenCalledTimes(1);
   const generation = await currentFloorGeneration();
   expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe(generation);
@@ -606,7 +608,7 @@ it.each(['', '0000000000000001:previous'])('permits stay-role logout at its unch
   await screen.findByText('Stay-role workspace');
   expect(isFloorSessionConfirmedForTab(state.user.name)).toBe(false);
   const logout = vi.spyOn(core, 'logout').mockResolvedValue(true);
-  await clearCashierStorage(true);
+  await clearCashierStorage(true, state.user.name);
   expect(logout).toHaveBeenCalledOnce();
 });
 

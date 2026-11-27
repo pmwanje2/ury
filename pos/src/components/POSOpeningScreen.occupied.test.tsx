@@ -10,7 +10,7 @@ import { initI18n } from '../i18n';
 import { getPOSOpeningContext, type POSOpeningContext } from '../lib/pos-opening-api';
 import POSOpeningScreen from './POSOpeningScreen';
 
-vi.mock('../store/root-store', () => ({ useRootStore: () => ({ user: null }) }));
+vi.mock('../store/root-store', () => ({ useRootStore: () => ({ user: { name: context.user } }) }));
 vi.mock('../lib/pos-opening-api', async (importOriginal) => ({
   ...await importOriginal<typeof import('../lib/pos-opening-api')>(),
   getPOSOpeningContext: vi.fn(),
@@ -46,6 +46,7 @@ const context: Context = {
 };
 
 beforeEach(async () => {
+  document.cookie = 'user_id=' + encodeURIComponent(context.user) + '; Path=/';
   vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   localStorage.clear();
   sessionStorage.clear();
@@ -62,6 +63,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  document.cookie = 'user_id=; Max-Age=0; Path=/';
   await act(async () => root.unmount());
   container.remove();
   Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
