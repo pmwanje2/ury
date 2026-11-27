@@ -1,6 +1,7 @@
 import { loadQz } from './qz-runtime';
 import { connectQz, withQzDeadline } from '../../../../ury/public/js/qz-signing.js';
 import axios from 'axios';
+import { floorRequestUser, FLOOR_USER_HEADER } from '../frappe/floor-request';
 import { call } from '../frappe/client';
 import { runSignedQz } from './qz-signing';
 
@@ -43,8 +44,10 @@ export async function loadQzPrinter(host: string, signal?: AbortSignal): Promise
   const qz = await loadQz();
   await connectQz(qz, async requestSignal => {
     const endpoint = '/api/method/ury.ury.api.ury_print.qz_certificate';
-    const { data } = signal
-      ? await axios.get(endpoint, { signal: requestSignal })
+    const user = floorRequestUser();
+    const headers = user ? { [FLOOR_USER_HEADER]: user } : undefined;
+    const { data } = signal || headers
+      ? await axios.get(endpoint, { signal: requestSignal, headers })
       : await axios.get(endpoint);
     return data.message;
   }, host, signal);

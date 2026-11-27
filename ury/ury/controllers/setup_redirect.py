@@ -128,6 +128,26 @@ def _role_based_home_page():
     return None
 
 
+def guard_floor_request_user():
+    """Reject a POS request if its workspace belongs to a different server session."""
+    request = frappe.local.request
+    expected = request.headers.get("X-URY-Floor-User")
+    if not expected and (request.path == "/printview" or request.path.startswith("/api/method/ury.ury.api.ury_print.")):
+        expected = request.args.get("ury_floor_print_user")
+    if isinstance(expected, str) and expected and (expected != frappe.session.user or expected == "Guest"):
+        frappe.local.response_headers["X-URY-Floor-Error"] = "URY_FLOOR_SESSION_MISMATCH"
+        # Session resume may already have queued Set-Cookie headers. A late
+        # mismatch response must not overwrite a newer login in another tab.
+        manager = frappe.local.cookie_manager
+        identity_cookies = {"sid", "user_id", "full_name", "user_image", "user_lang", "system_user"}
+        for key in identity_cookies:
+            manager.cookies.pop(key, None)
+        manager.to_delete = [key for key in manager.to_delete if key not in identity_cookies]
+        # AuthenticationError would requeue deletions in Frappe's error handler.
+        frappe.local.response["floor_error"] = "URY_FLOOR_SESSION_MISMATCH"
+        raise frappe.PermissionError("URY_FLOOR_SESSION_MISMATCH")
+
+
 def on_session_creation(login_manager=None):
     """Hint login toward the wizard on incomplete sites.
 
@@ -136,6 +156,10 @@ def on_session_creation(login_manager=None):
     home_page to a full URL path causes the Desk SPA to attempt a
     Frappe Page DocType lookup which raises DoesNotExistError.
     """
+    # Bind the API response to the account Frappe authenticated after alias and OTP resolution.
+    request = getattr(frappe.local, "request", None)
+    if login_manager and request and request.path == "/api/method/login" and login_manager.user != "Guest":
+        frappe.local.response["authenticated_user"] = login_manager.user
     if not is_ury_setup_complete():
         frappe.local.response["message"] = "Logged In"
         frappe.local.response["home_page"] = _setup_wizard_target()

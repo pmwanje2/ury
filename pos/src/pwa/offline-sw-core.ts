@@ -86,7 +86,7 @@ export function createOfflineWorker({ origin }: OfflineWorkerOptions) {
   }
 
   const sessionPlugin: WorkboxPlugin = {
-    handlerWillStart: async ({ state }) => {
+    handlerWillStart: async ({ state, request }) => {
       await ready;
       const user = await signedInUser();
       if (state) {
@@ -94,13 +94,20 @@ export function createOfflineWorker({ origin }: OfflineWorkerOptions) {
         // Serve and store only for the signed-in user, and store only once the
         // worker is bound to that same user. Client timing cannot widen this.
         state.user = user;
-        state.store = user !== null && user === session.user;
+        const expected = request.headers.get("X-URY-Floor-User");
+        state.store = user !== null && user === session.user && (expected === null || expected === user);
       }
     },
-    cachedResponseWillBeUsed: async ({ cachedResponse, state }) => (
-      cachedResponse && state?.user && state.generation === session.generation
-        && cachedResponse.headers.get(OWNER_HEADER) === state.user ? cachedResponse : null
-    ),
+    cachedResponseWillBeUsed: async ({ request, cachedResponse, state }) => {
+      const expected = request.headers.get("X-URY-Floor-User");
+      const owner = cachedResponse?.headers.get(OWNER_HEADER);
+      const live = await signedInUser();
+      if (expected !== null && (!usableUser(expected) || live !== expected || (cachedResponse && owner !== expected))) {
+        const code = "URY_FLOOR_SESSION_MISMATCH";
+        return Response.json({ floor_error: code }, { status: 409, headers: { "X-URY-Floor-Error": code } });
+      }
+      return state?.user && state.generation === session.generation && owner === state.user && owner === live ? cachedResponse : null;
+    },
     cacheWillUpdate: async ({ response, state }) => (
       response.status === 200 && state?.store && state.generation === session.generation
         ? ownedBy(response, state.user as string) : null
@@ -111,7 +118,8 @@ export function createOfflineWorker({ origin }: OfflineWorkerOptions) {
     },
     fetchDidSucceed: async ({ response }) => {
       // The server answered for this session: never serve its cache again.
-      if (response.status === 401 || response.status === 403) await endSession();
+      if ((response.status === 401 || response.status === 403)
+        && response.headers.get("X-URY-Floor-Error") !== "URY_FLOOR_SESSION_MISMATCH") await endSession();
       // A live proxy can answer 502/503/504/520-524 while the ERP is down.
       // That is the same as fetch rejecting. 4xx and 500 stay the answer.
       if (isGatewayUnreachableStatus(response.status)) {

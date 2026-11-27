@@ -1,7 +1,6 @@
 import { StateCreator } from 'zustand';
 import { readLoggedUser, getSessionUser, getUserRoles } from '@ury/core';
 import { offlineShellActive, cachedOfflineProfile } from '../../pwa/register-offline';
-import { isFloorPadActive } from '../../lib/floor-session';
 
 export interface User {
   name: string; // This stores the user ID
@@ -54,9 +53,6 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, get) => ({
 
       if (!userName) {
         set({ user: null, isLoading: false });
-        if (isFloorPadActive()) return;
-        // If no user is logged in, redirect to login
-        window.location.href = '/login?redirect-to=%2Fpos';
         return;
       }
 
@@ -83,8 +79,6 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, get) => ({
         isLoading: false,
         user: null,
       });
-      // Redirect to login on error
-      window.location.href = '/login?redirect-to=%2Fapp';
     }
   },
 

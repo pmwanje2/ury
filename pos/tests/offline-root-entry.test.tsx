@@ -17,6 +17,7 @@ import { testLocks } from './offline-locks';
 import { usePOSStore } from '../src/store/pos-store';
 import { useRootStore } from '../src/store/root-store';
 import App from '../src/App';
+import { setFloorSessionMarker } from '../src/lib/floor-session';
 
 const axios = (auth as unknown as { axios: AxiosInstance }).axios;
 const cashier = 'alice@example.test';
@@ -129,6 +130,7 @@ beforeEach(async () => {
   document.cookie = 'user_id=' + encodeURIComponent(cashier) + '; Path=/';
   sessionStorage.clear();
   localStorage.clear();
+  setFloorSessionMarker(cashier, false);
   sessionStorage.setItem('posProfile:' + cashier, JSON.stringify(profile));
   sessionStorage.setItem('menuCategories', JSON.stringify([]));
   sessionStorage.setItem('payment_modes:' + cashier, JSON.stringify(['Cash']));
@@ -176,6 +178,18 @@ async function openRoot(path: string, settled: (text: string) => boolean) {
     expect(settled(text), text.slice(0, 400) + ' @ ' + window.location.pathname).toBe(true);
   }, { timeout: 4000 });
 }
+
+test('a new tab with the same cashier cookie requires the outbox owner before opening the till', async () => {
+  // Same-origin opener tabs copy sessionStorage but have a distinct browsing context.
+  window.name = '';
+  mode = 'gateway';
+  gatewayStatus = 502;
+  await openRoot('/pos/', (text) => text.includes('Sign in with the account that owns the queued orders'));
+  expect(container.querySelector('input[type="password"]')).not.toBeNull();
+  expect(container.querySelector('[data-testid="offline-banner"]')).toBeNull();
+  expect(container.querySelector('[data-testid="settle-cash"]')).toBeNull();
+  expect(container.querySelector('[data-testid="order-panel"]')).toBeNull();
+});
 
 test.each(['network', ...gatewayStatuses] as const)(
   'opening /pos during %s lands on the till with navigation and pending controls',
@@ -242,6 +256,7 @@ test('an outage starting on the orders screen after online sign-in is not an acc
 test('v16 merge candidates read the active user’s branch rather than an unscoped previous profile', async () => {
   const { db } = await import('@ury/core');
   const { getMergeBillCandidates } = await import('../src/lib/invoice-api');
+  setFloorSessionMarker(cashier, false);
   sessionStorage.setItem('posProfile:' + cashier, JSON.stringify({...profile, branch: 'Branch A'}));
   sessionStorage.setItem('posProfile', JSON.stringify({branch: 'Other'}));
   const read = vi.spyOn(db, 'getDocList').mockResolvedValue([]);

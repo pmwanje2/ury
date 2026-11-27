@@ -1,3 +1,4 @@
+import { floorFetch } from '@ury/core/floor-request';
 import { purgeOfflineSession, tellOfflineWorker } from "@ury/core";
 import { offlineCaptureEnabled, type OfflineCaptureProfile } from "./runtime-caching";
 
@@ -67,7 +68,7 @@ export async function syncOfflineCapture(
   if (serviceWorker.controller !== controller || typeof fetch !== "function") return;
   // Not awaited: a slow or failed warm-up must not hold boot. The next
   // controlled load caches the shell.
-  void fetch("/pos", { credentials: "same-origin", cache: "reload" }).catch(() => undefined);
+  void floorFetch("/pos", { credentials: "same-origin", cache: "reload" }).catch(() => undefined);
 }
 
 function posController(): ServiceWorker | null {

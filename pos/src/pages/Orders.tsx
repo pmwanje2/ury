@@ -1,3 +1,4 @@
+import { floorFetch } from '@ury/core/floor-request';
 import { qtyReductionMessage } from '../lib/qty-reduction-message';
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge, Minus, Users, Utensils, Percent } from 'lucide-react';
@@ -551,7 +552,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     if (!selectedOrder) return;
     setEditLoading(true);
     try {
-      const res = await fetch(`/api/method/frappe.client.get?doctype=POS+Invoice&name=${selectedOrder.name}`);
+      const res = await floorFetch(`/api/method/frappe.client.get?doctype=POS+Invoice&name=${selectedOrder.name}`);
       if (!res.ok) throw new Error('Failed to fetch order details');
       const data = await res.json();
       const order = data.message;

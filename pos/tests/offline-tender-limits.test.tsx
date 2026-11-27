@@ -1,3 +1,4 @@
+import { setFloorSessionMarker } from '../src/lib/floor-session';
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { act } from "react";
@@ -39,6 +40,7 @@ let root: Root;
 
 beforeEach(async () => {
   sessionStorage.clear();
+  setFloorSessionMarker(user.name, false);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("indexedDB", new IDBFactory());
   vi.stubGlobal("navigator", {
@@ -368,4 +370,17 @@ describe("Offline tender eligibility comes from Mode of Payment data, never tend
       expect(checked, `Vendor leak in ${loc}.json`).not.toMatch(/\b(ury|huf|kamra|heykoala)\b/i);
     }
   });
+});
+
+it('opens existing owner rows on a disabled outlet without enabling new settlement', async () => {
+  const profile = makeProfile();
+  const q = new OfflineOutbox({ profile, user, print: async () => false });
+  const row = await q.capture({ pos_profile: profile.name, customer: 'Walk In', no_of_pax: 1,
+    order_type: 'Take Away', invoice: null, last_invoice: null, items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 10 }] }, 10);
+  usePOSStore.setState({ posProfile: { ...profile, ury_offline_capture: 0 } as any });
+  useRootStore.setState({ user });
+  await act(async () => root.render(<OfflineBanner />));
+  await vi.waitFor(() => expect(container.querySelector('[data-client-order="' + row.client_order_id + '"]')).not.toBeNull());
+  expect(container.querySelector<HTMLButtonElement>('[data-client-order] button')?.disabled).toBe(false);
+  expect(container.querySelector('[data-testid=settle-cash]')).toBeNull();
 });

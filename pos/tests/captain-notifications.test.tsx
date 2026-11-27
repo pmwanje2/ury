@@ -86,7 +86,7 @@ vi.mock('../src/captain/components/CaptainTableCard', () => ({
     <Button onClick={onTap}>{table.name}</Button>
   ),
 }));
-vi.mock('../src/lib/floor-session', () => ({ floorSignOut: vi.fn(async () => {}) }));
+vi.mock('../src/lib/floor-session', () => ({ isFloorPadActive: () => window.floor_pad?.paired && window.floor_pad?.till_open, floorSignOut: vi.fn(async () => {}) }));
 
 let container: HTMLDivElement;
 let root: Root;

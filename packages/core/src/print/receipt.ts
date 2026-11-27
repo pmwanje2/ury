@@ -1,8 +1,9 @@
+import { floorPrintUrl } from '../frappe/floor-request';
 export { prepareReceipt, completeReceipt, dispatchReceipt } from '../../../../ury/public/js/receipt-delivery.js';
 
 export async function confirmBrowserDelivery(url: string, authorizeUrl?: () => Promise<string>): Promise<void> {
-  const initialUrl = authorizeUrl ? 'about:blank' : url;
-  let popup = window.open(initialUrl, '_blank');
+  const initialUrl = () => authorizeUrl ? 'about:blank' : floorPrintUrl(url);
+  let popup = window.open(initialUrl(), '_blank');
   if (!popup) {
     // The QZ attempt may have outlived browser user activation. An actual click
     // opens printview without repeating the receipt authorization.
@@ -21,7 +22,7 @@ export async function confirmBrowserDelivery(url: string, authorizeUrl?: () => P
       cancel.onclick = dismiss;
       dialog.oncancel = dismiss;
       open.onclick = () => {
-        const receipt = window.open(initialUrl, '_blank');
+        const receipt = window.open(initialUrl(), '_blank');
         if (!receipt) {
           open.textContent = 'Allow pop-ups, then open receipt';
           return;
@@ -35,7 +36,7 @@ export async function confirmBrowserDelivery(url: string, authorizeUrl?: () => P
   popup.opener = null;
   if (authorizeUrl) {
     try {
-      popup.location.replace(await authorizeUrl());
+      popup.location.replace(floorPrintUrl(await authorizeUrl()));
     } catch (error) {
       popup.close();
       throw error;

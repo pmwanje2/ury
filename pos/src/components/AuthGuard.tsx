@@ -1,14 +1,25 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useLayoutEffect, useState } from 'react';
+import { bindFloorRequestUser, disposeFloorRequests } from '@ury/core/floor-request';
 import { useRootStore } from '../store/root-store';
 import { Button } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import { RefreshCw } from 'lucide-react';
 import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
+import OutboxPanel from './OutboxPanel';
+import { assertOutboxEmpty, onOutboxMembershipChange, queuedProfilesFor, type OfflineProfile, type OfflineUser } from '../offline/outbox';
+import { FLOOR_TAB_LOCKED, boundTabGeneration, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation } from '../lib/floor-tab';
+import { getPosProfileFull } from '../lib/pos-profile-api';
 import {
-  floorSignOut,
+  retryFloorSignOut,
+  needsFloorReconciliation,
   hasFloorLogoutFailureMarker,
+  readFloorLogoutFailureMarker,
+  revokeStaleLogoutRetry,
+  currentFloorGeneration,
+  openFloorLogoutChannel,
   hasFloorSessionMarker,
+  hasRecoveryConfirmation,
   isFloorPadActive,
   isStaySignedIn,
   useFloorIdle,
@@ -18,8 +29,110 @@ const LazyOutletPickerDialog = React.lazy(() =>
   import('./OutletSwitcher').then((mod) => ({ default: mod.OutletPickerDialog })),
 );
 
+const SESSION_CHECK_INTERVAL_MS = 5000;
+
 interface Props {
   children: React.ReactNode;
+}
+
+// Install the identity before mounting children: even their first request must be bound.
+function CashierWorkspace({ user, children }: Props & { user: string }) {
+  const [bound, setBound] = useState<string>();
+  useLayoutEffect(() => {
+    const release = bindFloorRequestUser(user, () => {
+      revokeTabConfirmation();
+      window.dispatchEvent(new Event(FLOOR_TAB_LOCKED));
+    });
+    setBound(user);
+    return release;
+  }, [user]);
+  return bound === user ? <>{children}</> : null;
+}
+
+function RecoveryOutbox({ profile, user }: { profile: OfflineProfile | null; user: OfflineUser }) {
+  const [otherProfiles, setOtherProfiles] = useState<OfflineProfile[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const names = await queuedProfilesFor(user.name);
+      const others = await Promise.allSettled(names.filter((name) => name !== profile?.name).map(getPosProfileFull));
+      if (active) {
+        setOtherProfiles(others.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+        setLoadFailed(others.some((result) => result.status === 'rejected'));
+      }
+    };
+    void load().catch(() => { if (active) setLoadFailed(true); });
+    return () => { active = false; };
+  }, [profile?.name, user.name, attempt]);
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-6">
+      <p role="status">{t('floor_pin.pending_signout')}</p>
+      {profile && <OutboxPanel posProfile={profile} user={user} />}
+      {otherProfiles.map((outlet) => <OutboxPanel key={outlet.name} posProfile={outlet} user={user} />)}
+      {loadFailed && <Button variant="outline" onClick={() => setAttempt(attempt + 1)}>{t('floor_pin.retry_outbox')}</Button>}
+    </div>
+  );
+}
+
+function OwnerSignIn({ user, passwordOnly }: { user: OfflineUser; passwordOnly: boolean }) {
+  return (
+    <>
+      <p role="status" className="px-6 py-3 text-center">{t('floor_pin.owner_required')}</p>
+      <FloorPinPad recoveryOwner={user.name} usernameOnly={passwordOnly} />
+    </>
+  );
+}
+
+function UnconfirmedWorkspace({ user, children }: Props & { user: OfflineUser }) {
+  const [empty, setEmpty] = useState<boolean | null>(null);
+  useEffect(() => {
+    let revision = 0;
+    const check = async () => {
+      const current = ++revision;
+      try {
+        await assertOutboxEmpty();
+        if (current === revision) setEmpty(true);
+      } catch {
+        if (current === revision) setEmpty(false);
+      }
+    };
+    const stop = onOutboxMembershipChange(() => {
+      setEmpty((previous) => previous === true ? null : previous);
+      void check();
+    });
+    const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
+    window.addEventListener('focus', check);
+    void check();
+    return () => {
+      revision++;
+      window.clearInterval(timer);
+      stop();
+      window.removeEventListener('focus', check);
+    };
+  }, []);
+
+  if (empty === null) return <Spinner message={t('common.loading')} />;
+  if (!empty) return <OwnerSignIn user={user} passwordOnly={!isFloorPadActive()} />;
+  return <CashierWorkspace user={user.name}>{children}</CashierWorkspace>;
+}
+
+function ColdBootSignOut({ profile, user, passwordOnly, failedLogout }: { failedLogout: boolean; profile: OfflineProfile | null; user: OfflineUser; passwordOnly: boolean }) {
+  const [state, setState] = useState<'checking' | 'blocked' | 'signed_out' | 'logout_failed'>('checking');
+
+  useEffect(() => retryFloorSignOut((result) => {
+    if (result !== 'cancelled') setState(result);
+  }, failedLogout, user.name), [failedLogout, user.name]);
+
+  if (state === 'signed_out' || state === 'logout_failed') return <FloorPinPad usernameOnly={passwordOnly || state === 'logout_failed'} />;
+  if (state === 'checking') return <Spinner message={t('common.loading')} />;
+  if (failedLogout || !hasRecoveryConfirmation(user.name) || hasFloorLogoutFailureMarker()) {
+    return <OwnerSignIn user={user} passwordOnly={passwordOnly} />;
+  }
+  return <CashierWorkspace user={user.name}><RecoveryOutbox profile={profile} user={user} /></CashierWorkspace>;
 }
 
 const AuthGuard: React.FC<Props> = ({ children }) => {
@@ -39,22 +152,100 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
-  const [isColdBootSigningOut, setIsColdBootSigningOut] = useState(false);
+  useLayoutEffect(() => disposeFloorRequests, []);
   const floorPadActive = isFloorPadActive();
-  const logoutFailed = hasFloorLogoutFailureMarker();
+  const [gate, setGate] = useState<'checking' | 'ready' | 'failed' | 'revoked'>('checking');
+  useEffect(() => {
+    let active = true;
+    let locked = false;
+    let admitted = false;
+    const closeWorkspace = () => {
+      locked = true;
+      setGate('revoked');
+    };
+    const lockTab = () => {
+      closeWorkspace();
+      revokeTabConfirmation();
+    };
+    const check = async () => {
+      if (locked) return;
+      try {
+        const [failed, generation] = await Promise.all([readFloorLogoutFailureMarker(), currentFloorGeneration()]);
+        if (!active || locked) return;
+        const bound = boundTabGeneration();
+        if (revokeStaleLogoutRetry(generation)) {
+          locked = true;
+          setGate('revoked');
+        } else if (bound === undefined ? admitted : bound !== generation) {
+          // Another tab can already own the server cookie. Only lock this workspace.
+          lockTab();
+        } else if (failed) {
+          locked = true;
+          setGate('failed');
+          clearTabConfirmation();
+          observeTabGeneration(generation);
+        } else {
+          // Bind before mounting any workspace control, including an unconfirmed stay-role layout.
+          if (bound === undefined) observeTabGeneration(generation);
+          admitted = true;
+          setGate('ready');
+        }
+      } catch {
+        if (active) lockTab();
+      }
+    };
+    const channel = openFloorLogoutChannel();
+    if (channel) channel.onmessage = ({ data }) => {
+      if (!active || locked) return;
+      try {
+        const bound = boundTabGeneration();
+        const generationChanged = (data?.type === 'login' || data?.type === 'invalidate') && bound !== data.generation;
+        if (bound !== undefined && (data?.type === 'logout' || generationChanged)) {
+          lockTab();
+          return;
+        }
+      } catch { lockTab(); return; }
+      void check();
+    };
+    const onGenerationChange = (event: StorageEvent) => {
+      if (event.key === 'ury_floor_generation') void check();
+    };
+    const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
+    window.addEventListener('storage', onGenerationChange);
+    window.addEventListener(FLOOR_TAB_LOCKED, closeWorkspace);
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    void check();
+    return () => {
+      active = false;
+      channel?.close();
+      window.removeEventListener('storage', onGenerationChange);
+      window.removeEventListener(FLOOR_TAB_LOCKED, closeWorkspace);
+      window.clearInterval(timer);
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, []);
+  const logoutFailed = gate === 'failed' || hasFloorLogoutFailureMarker();
+  const recovery = needsFloorReconciliation();
 
   // A surviving cookie on a paired tablet must not admit the previous waiter.
   const coldBoot = Boolean(
     floorPadActive && user && !user.provisional && posProfile
-      && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
+      && !hasFloorSessionMarker(user.name) && !logoutFailed && !isStaySignedIn(user, posProfile),
   );
 
-  const showFloorPad = floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut || logoutFailed);
-  useFloorIdle(showFloorPad ? null : user, posProfile);
+  const showFloorPad = floorPadActive && (!user || user.provisional || coldBoot || logoutFailed);
+  useFloorIdle(gate === 'revoked' || showFloorPad || logoutFailed || recovery ? null : user, posProfile);
 
   useEffect(() => {
+    const onLogoutMarker = (event: StorageEvent) => {
+      if (event.key === 'ury_floor_logout_failed') window.location.reload();
+    };
+    window.addEventListener('storage', onLogoutMarker);
     // Start auth check
     checkAuth();
+    return () => window.removeEventListener('storage', onLogoutMarker);
   }, [checkAuth]);
 
   // Once we have a user, fetch POS profile
@@ -74,20 +265,22 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     return () => window.removeEventListener('pos:outlet-switched', handleOutletSwitched);
   }, [user, posProfile, fetchPosProfile]);
 
-  useEffect(() => {
-    if (!coldBoot || isColdBootSigningOut) return;
-    setIsColdBootSigningOut(true);
-    void floorSignOut();
-  }, [coldBoot, isColdBootSigningOut]);
-
   // Show loading state while either auth or config is loading
-  if (authLoading || (user && configLoading) || isRechecking) {
+  if (gate === 'checking' || authLoading || (user && configLoading) || isRechecking) {
     return (
       <div className="min-h-screen">
         <Spinner  message={t('common.loading')} />
       </div>
     );
   }
+
+  if (gate === 'revoked') return <FloorPinPad usernameOnly offline={user?.provisional} />;
+
+  if ((coldBoot || logoutFailed || recovery) && user && !user.provisional) {
+    return <ColdBootSignOut key={JSON.stringify([posProfile?.name, user.name])} profile={posProfile} user={user} failedLogout={!!logoutFailed} passwordOnly={!!logoutFailed || !floorPadActive} />;
+  }
+
+  if (logoutFailed || recovery) return <FloorPinPad usernameOnly offline={user?.provisional} />;
 
   if (authError || configError) {
     return (
@@ -106,13 +299,12 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   }
 
   if (!user) {
-    // The checkAuth function will handle the redirect to login
-    return null;
+    return <FloorPinPad usernameOnly />;
   }
 
   if (requiresOutletSelection && !posProfile) {
     return (
-      <Suspense
+      <CashierWorkspace user={user.name}><Suspense
         fallback={
           <div className="min-h-screen">
             <Spinner message={t('common.loading')} />
@@ -128,7 +320,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
             await fetchPosProfile(true);
           }}
         />
-      </Suspense>
+      </Suspense></CashierWorkspace>
     );
   }
 
@@ -171,7 +363,10 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     );
   }
 
-  return <>{children}</>;
+  if (!hasFloorSessionMarker(user.name)) {
+    return <UnconfirmedWorkspace key={user.name} user={user}>{children}</UnconfirmedWorkspace>;
+  }
+  return <CashierWorkspace user={user.name}>{children}</CashierWorkspace>;
 };
 
 export default AuthGuard; 

@@ -340,3 +340,37 @@ class TestRepairIsSingleFlight(FrappeTestCase):
 	)
 	def test_unreachable_cache_means_no_claim(self, _mock_set):
 		self.assertFalse(_claim_repair())
+
+
+class TestFloorSessionHTTP(FrappeTestCase):
+	def test_mismatch_preserves_session_cookies(self):
+		from contextvars import Context
+		from http.cookies import SimpleCookie
+
+		import frappe.app
+		from frappe.auth import LoginManager
+		from frappe.utils import get_test_client
+
+		def check(client):
+			response = client.get("/api/method/ping", headers={"X-URY-Floor-User": "other@example.test"})
+			for line in response.headers.getlist("Set-Cookie"):
+				for key in SimpleCookie(line):
+					self.assertNotIn(key, ("sid", "user_id"), f"mismatch rewrote {key}")
+			self.assertEqual(response.status_code, 403)
+			self.assertEqual(response.headers.get("X-URY-Floor-Error"), "URY_FLOOR_SESSION_MISMATCH")
+			self.assertEqual(response.json.get("floor_error"), "URY_FLOOR_SESSION_MISMATCH")
+
+		def exercise():
+			client = get_test_client()
+			with patch.object(LoginManager, "authenticate", lambda manager, **kwargs: setattr(manager, "user", "Administrator")):
+				self.assertEqual(client.post("/api/method/login", data={"usr": "Administrator"}).status_code, 200)
+			try:
+				check(client)
+				result = client.get("/api/method/frappe.auth.get_logged_user", headers={"X-URY-Floor-User": "Administrator"})
+				self.assertEqual(result.json.get("message"), "Administrator")
+				check(get_test_client())
+			finally:
+				client.get("/api/method/logout")
+
+		with patch.object(frappe.app, "_site", frappe.local.site), patch.object(frappe.app, "_sites_path", frappe.local.sites_path):
+			Context().run(exercise)

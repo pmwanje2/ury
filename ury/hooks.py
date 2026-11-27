@@ -552,6 +552,7 @@ website_path_resolver = [
 # Sets Service-Worker-Allowed + JS content-type for the Serve PWA worker.
 before_request = [
     "ury.ury_pos.override.scrub_pin_request",
+    "ury.ury.controllers.setup_redirect.guard_floor_request_user",
     "ury.ury.api.wa_signature.guard_whatsapp_webhook",
     "ury.ury.api.chairman_link.guard_brief_only_session",
 ]
@@ -608,6 +609,9 @@ extend_bootinfo = [
 
 # Authentication and authorization
 # --------------------------------
+
+# Also check the effective identity after Frappe processes any Authorization header.
+auth_hooks = ["ury.ury.controllers.setup_redirect.guard_floor_request_user"]
 
 # auth_hooks = [
 # 	"ury.auth.validate"

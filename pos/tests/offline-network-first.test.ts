@@ -2,7 +2,7 @@
 // Real workbox-strategies 7.4.1 NetworkFirst through the worker's routes.
 import { beforeEach, expect, test, vi } from 'vitest';
 import { lazyModule } from './helpers/lazy';
-import { installWorkerGlobals, ORIGIN, ownedResponse, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
+import { deferred, installWorkerGlobals, ORIGIN, setCookieUser, ownedResponse, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
 
 let storage: MemoryCacheStorage;
 const PROFILE = ORIGIN + '/api/method/ury.ury_pos.api.getPosProfile';
@@ -18,8 +18,8 @@ async function worker() {
   await (await storage.open('ury-pos-reads')).put(PROFILE, ownedResponse('Alice prior cached profile', 'alice@ury.com'));
   return {
     instance,
-    async get(href: string) {
-      const request = new Request(href);
+    async get(href: string, headers?: HeadersInit) {
+      const request = new Request(href, { headers });
       const url = new URL(href);
       const event = new TestExtendableEvent('fetch');
       const { route } = router.findMatchingRoute({ url, request, sameOrigin: true, event: event as unknown as ExtendableEvent });
@@ -102,6 +102,24 @@ test('a gateway 502 for the POS shell falls back to the cached shell', async () 
   expect(await response.text()).toBe('cached shell');
 });
 
+test.each(['bob@ury.com', 'Guest', null])('withholds the headerless POS shell if the live user becomes %s during fetch', async nextUser => {
+  const { get } = await worker();
+  const url = ORIGIN + '/pos';
+  await (await storage.open('ury-pos-shell')).put(url, ownedResponse('Alice cached shell', 'alice@ury.com'));
+  const dispatched = deferred<Request>();
+  const network = deferred<Response>();
+  vi.stubGlobal('fetch', (request: Request) => {
+    dispatched.resolve(request);
+    return network.promise;
+  });
+
+  const navigation = get(url);
+  expect((await dispatched.promise).headers.has('X-URY-Floor-User')).toBe(false);
+  setCookieUser(nextUser);
+  network.reject(new TypeError('Offline'));
+  await expect(navigation).rejects.toThrow();
+});
+
 test.each([400, 401, 403, 404, 500])('HTTP %i is returned and is never the cached read', async (code) => {
   vi.stubGlobal('fetch', reply(code, `answer ${code}`));
   const { get } = await worker();
@@ -115,4 +133,24 @@ test('HTTP 500 does not purge the cached read', async () => {
   const { get } = await worker();
   expect((await get(PROFILE)).status).toBe(500);
   expect(await storage.body('ury-pos-reads', PROFILE)).toBe('Alice prior cached profile');
+});
+
+
+test.each([
+  ['alice@ury.com', 'alice@ury.com', 200],
+  ['bob@ury.com', 'alice@ury.com', 409],
+  ['bob@ury.com', 'bob@ury.com', 409],
+  ['alice@ury.com', 'bob@ury.com', 409],
+  ['Guest', 'alice@ury.com', 409],
+  [null, 'alice@ury.com', 409],
+] as const)('offline fallback checks live %s and cached owner against expected %s', async (live, expected, status) => {
+  const { get } = await worker();
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Offline')));
+  setCookieUser(live);
+  const response = await get(PROFILE, { 'X-URY-Floor-User': expected });
+  expect(response.status).toBe(status);
+  if (status === 409) {
+    expect(response.headers.get('X-URY-Floor-Error')).toBe('URY_FLOOR_SESSION_MISMATCH');
+    expect(await response.text()).toContain('URY_FLOOR_SESSION_MISMATCH');
+  } else expect(await response.text()).toBe('Alice prior cached profile');
 });

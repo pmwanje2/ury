@@ -21,7 +21,7 @@ import {
   type UpcomingBooking,
 } from '../lib/captain-table-api';
 import { useOpenServiceRequestTables } from '../../components/ServiceRequestAlert';
-import { floorSignOut } from '../../lib/floor-session';
+import { floorSignOut, isFloorPadActive } from '../../lib/floor-session';
 import { useRootStore } from '../../store/root-store';
 import { useOutbox } from '../../offline/use-outbox';
 import { createOfflinePeerSync, type OfflinePeerTableSummary } from '../../offline/peer-sync';
@@ -478,9 +478,9 @@ export default function CaptainTables() {
             <Button variant="ghost" size="sm" onClick={refresh}>
               {t('common.refresh')}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void floorSignOut()}>
+            {isFloorPadActive() && <Button variant="outline" size="sm" onClick={() => void floorSignOut()}>
               {t('header.switch_waiter')}
-            </Button>
+            </Button>}
           </div>
         </div>
 

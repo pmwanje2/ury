@@ -1,7 +1,10 @@
+import { testLocks } from './offline-locks';
 import { MemoryRouter } from 'react-router-dom';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as logoutStore from '../src/lib/logout-store';
+import { hasFloorLogoutFailureMarker } from '../src/lib/floor-session';
 import { showToast } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 import { checkPOSOpening, validatePOSClose } from '../src/lib/pos-opening-api';
@@ -37,14 +40,15 @@ const checklist = {
 };
 let container: HTMLDivElement;
 let root: Root;
-let location: { href: string };
+let location: { href: string; origin: string; replace: ReturnType<typeof vi.fn> };
 let request: ReturnType<typeof vi.fn>;
 
 beforeEach(async () => {
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.clearAllMocks();
   await initI18n('en');
-  location = { href: '/pos' };
+  location = { href: '/pos', origin: window.location.origin, replace: vi.fn() };
   const browserWindow = window;
   vi.stubGlobal('window', new Proxy(browserWindow, {
     get(target, key) {
@@ -53,7 +57,9 @@ beforeEach(async () => {
       return Reflect.get(target, key, target);
     },
   }));
-  request = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+  document.cookie = 'user_id=' + encodeURIComponent(state.user.name) + '; Path=/';
+  request = vi.fn().mockResolvedValue(new Response());
+  vi.stubGlobal('fetch', request);
   vi.spyOn((await import('../../packages/core/src/frappe/client')).auth, 'logout').mockImplementation(async () => { const response = await request(); if (!response.ok) throw Error('Logout refused'); });
   localStorage.clear();
   sessionStorage.clear();
@@ -77,6 +83,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  document.cookie = 'user_id=; Max-Age=0; path=/';
   localStorage.clear();
   sessionStorage.clear();
   vi.restoreAllMocks();
@@ -96,7 +103,7 @@ function button(label: string): HTMLButtonElement {
 async function logout() {
   await act(async () => button('Logout').click());
   expect(request).toHaveBeenCalledTimes(1);
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('/pos/order');
 }
 
 describe('pre-session logout', () => {
@@ -107,6 +114,11 @@ describe('pre-session logout', () => {
     expect(container.textContent).toContain('Start Checklist');
     expect(container.textContent).not.toContain('POS workspace');
     await logout();
+    const [url, init] = request.mock.calls[0];
+    expect(url).toBe('/api/method/logout');
+    const headers = new Headers(init.headers);
+    expect(headers.get('X-URY-Floor-User')).toBe(state.user.name);
+    expect(headers.get('X-Frappe-CSRF-Token')).toBe('fixture-csrf');
     for (const key of ['posOrderTabsData', 'posOrderTabsData:cashier@example.com', 'ury_active_branch_id']) {
       expect(localStorage.getItem(key)).toBeNull();
     }
@@ -122,26 +134,49 @@ describe('pre-session logout', () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['desk@example.com', 'Guest', null])('locks locally when the live cashier becomes %s', async live => {
+    await render();
+    document.cookie = live ? 'user_id=' + encodeURIComponent(live) + '; Path=/' : 'user_id=; Max-Age=0; Path=/';
+    await act(async () => button('Logout').click());
+    expect(request).not.toHaveBeenCalled();
+    expect(location.replace).toHaveBeenCalledWith('/pos/order');
+    expect(hasFloorLogoutFailureMarker()).toBe(false);
+  });
+
   it.each(['HTTP', 'network'])('keeps storage and allows retry after %s logout failure', async (failure) => {
+    // The durable read succeeds; this fixture persists generations in local storage.
+    vi.spyOn(logoutStore, 'readGeneration').mockResolvedValue(undefined);
     const toast = vi.spyOn(showToast, 'error');
     await render();
-    if (failure === 'HTTP') request.mockResolvedValueOnce({ ok: false, status: 403 });
+    if (failure === 'HTTP') request.mockResolvedValueOnce(new Response(null, { status: 403 }));
     else request.mockRejectedValueOnce(new Error('Offline'));
+    document.cookie = 'user_id=cashier%40example.com; path=/';
     const localBefore = { ...localStorage };
     const sessionBefore = { ...sessionStorage };
     await act(async () => button('Logout').click());
     expect(location.href).toBe('/pos');
-    expect({ ...localStorage }).toEqual(localBefore);
-    expect({ ...sessionStorage }).toEqual(sessionBefore);
+    expect({ ...localStorage }).toEqual({
+      ...localBefore, ury_floor_logout_failed: state.user.name, ury_floor_generation: expect.any(String),
+    });
+    expect({ ...sessionStorage }).toEqual({
+      ...sessionBefore,
+      ury_floor_observed_generation: JSON.stringify({ tabId: window.name, generation: localStorage.getItem('ury_floor_generation') }),
+    });
+    const failedTab = Object.entries(sessionStorage);
+    sessionStorage.clear(); // A new tab has no copy of the failed tab's session storage.
+    expect(hasFloorLogoutFailureMarker()).toBe(true);
+    // Retry from the original control with the failed tab's own state.
+    for (const [key, value] of failedTab) sessionStorage.setItem(key, value);
     expect(toast).toHaveBeenCalledWith('Failed to logout. Please try again.');
     expect(button('Logout').disabled).toBe(false);
     await act(async () => button('Logout').click());
     expect(request).toHaveBeenCalledTimes(2);
-    expect(location.href).toBe('/login?redirect-to=%2Fpos');
+    expect(hasFloorLogoutFailureMarker()).toBe(false);
+    expect(location.href).toBe('/pos/order');
   });
 
   it('ignores double clicks and keeps storage until logout is confirmed', async () => {
-    let complete!: (value: { ok: boolean }) => void;
+    let complete!: (value: Response) => void;
     request.mockReturnValue(new Promise((resolve) => { complete = resolve; }));
     await render();
     await act(async () => {
@@ -152,8 +187,10 @@ describe('pre-session logout', () => {
     expect(button('Logout').disabled).toBe(true);
     expect(localStorage.getItem('posOrderTabsData')).toBe('cart');
     expect(location.href).toBe('/pos');
-    await act(async () => complete({ ok: true }));
-    expect(location.href).toBe('/login?redirect-to=%2Fpos');
+    expect(hasFloorLogoutFailureMarker()).toBe(true);
+    await act(async () => complete(new Response()));
+    expect(hasFloorLogoutFailureMarker()).toBe(false);
+    expect(location.href).toBe('/pos/order');
   });
 
   it('preserves checked items and remarks when logout fails', async () => {

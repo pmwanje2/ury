@@ -1,4 +1,5 @@
-import { clearAppStorage, logout, purgeOfflineSession } from '@ury/core';
+import { clearAppStorage, purgeOfflineSession } from '@ury/core';
+import { logoutWithFloorMarker } from '../lib/floor-session';
 import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
 import {
@@ -47,9 +48,9 @@ export async function assertOfflineActionAllowed(action: string): Promise<void> 
 }
 
 // Sign-out is refused while the outbox holds pending or Needs review orders.
-export async function clearCashierStorage(signOut = false): Promise<void> {
+export async function clearCashierStorage(signOut = false, admittedUser?: string): Promise<void> {
   await withEmptyOutbox(async () => {
-    if (signOut && await logout() === false) throw new Error(t('errors.failed_logout'));
+    if (signOut && !(await logoutWithFloorMarker(undefined, admittedUser))) throw new Error(t('errors.failed_logout'));
     await purgeEmptyOutbox();
     if (!signOut) {
       clearAppStorage();

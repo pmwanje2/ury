@@ -2,9 +2,29 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as core from '@ury/core';
+import { IDBFactory } from 'fake-indexeddb';
+import { testLocks } from './offline-locks';
+import { OfflineOutbox } from '../src/offline/outbox';
+import { hasFloorSessionMarker, setFloorSessionMarker } from '../src/lib/floor-session';
+import OutboxPanel from '../src/components/OutboxPanel';
 import AuthGuard from '../src/components/AuthGuard';
 
 // Theme T4 (fork #70): idle sign-out on a paired floor tablet, configured on POS Profile.
+
+const reprint = vi.hoisted(() => vi.fn());
+vi.mock('../src/offline/use-outbox', () => ({
+  useOutbox: (profile: { name?: string } | null, user: { name: string }) => ({
+    queue: { reprint }, offline: false, replaying: false,
+    rows: profile?.name === 'Till' && user.name === 'waiter@example.com' ? [{
+      sequence: 1, client_order_id: 'queued', order: { customer: 'Guest' }, rounds: [{ expected_total: 12, offline_printed: 0 }], state: 'pending',
+    }] : [],
+  }),
+}));
+
+const guard = vi.hoisted(() => vi.fn(async (run: () => Promise<void>) => run()));
+vi.mock('../src/offline/outbox', async (original) => ({
+  ...await original<typeof import('../src/offline/outbox')>(), withEmptyOutbox: guard,
+}));
 
 const boundary = vi.hoisted(() => ({
   logout: vi.fn(),
@@ -47,13 +67,15 @@ let root: Root | undefined;
 let replacement: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  document.cookie = 'user_id=waiter%40example.com; Path=/';
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
   vi.useFakeTimers();
   vi.clearAllMocks();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   Object.defineProperty(window, 'floor_pad', { configurable: true, value: { paired: true, till_open: true } });
   localStorage.clear();
   sessionStorage.clear();
-  localStorage.setItem('userAuth', 'true');
+  setFloorSessionMarker('waiter@example.com', false);
   boundary.auth.user = { name: 'waiter@example.com', roles: ['URY Captain'] };
   boundary.auth.posProfile = { floor_idle_signout_seconds: 60, custom_floor_stay_signed_in_roles: [] };
   boundary.logout.mockResolvedValue(undefined);
@@ -61,13 +83,14 @@ beforeEach(() => {
   const browserWindow = window;
   vi.stubGlobal('window', new Proxy(browserWindow, {
     get(target, key) {
-      if (key === 'location') return { replace: replacement };
+      if (key === 'location') return { replace: replacement, reload: vi.fn() };
       return Reflect.get(target, key, target);
     },
   }));
 });
 
 afterEach(() => {
+  document.cookie = 'user_id=; Max-Age=0; Path=/';
   if (root) act(() => root!.unmount());
   root = undefined;
   container?.remove();
@@ -87,6 +110,7 @@ function render(node: React.ReactNode) {
 describe('paired floor idle sign-out', () => {
   it('AuthGuard signs out a non-stay user after the configured idle period', async () => {
     render(<AuthGuard><div>POS</div></AuthGuard>);
+    await act(async () => {});
     expect(container.textContent).toContain('POS');
 
     await act(async () => vi.advanceTimersByTimeAsync(59999));
@@ -165,4 +189,101 @@ describe('POS Profile floor-session settings', () => {
     expect(profile.floor_idle_signout_seconds).toBe(0);
     expect(profile.floor_signout_after_send).toBe(0);
   });
+});
+
+it('preserves the session while offline orders await sync', async () => {
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>POS</div></AuthGuard>);
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(boundary.logout).not.toHaveBeenCalled();
+  expect(hasFloorSessionMarker('waiter@example.com')).toBe(true);
+  expect(replacement).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('retries deferred idle sign-out unless activity resumes (activity=%s)', async (active) => {
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>POS</div></AuthGuard>);
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(boundary.logout).not.toHaveBeenCalled();
+  if (active) window.dispatchEvent(new Event('pointerdown'));
+  // Replay has drained the queue. The next guarded attempt can proceed.
+  await act(async () => vi.advanceTimersByTimeAsync(10000));
+  expect(boundary.logout).toHaveBeenCalledTimes(active ? 0 : 1);
+  if (active) {
+    await act(async () => vi.advanceTimersByTimeAsync(50000));
+    expect(boundary.logout).toHaveBeenCalledOnce();
+  }
+});
+
+it('locks identity switching on cold boot until the existing outbox drains', async () => {
+  sessionStorage.removeItem('userAuth');
+  boundary.auth.posProfile = { name: 'Till', ury_offline_capture: 1 };
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>Protected POS</div></AuthGuard>);
+  await act(async () => {});
+  expect(container.querySelector('[data-client-order]')).toBeNull();
+  expect(reprint).not.toHaveBeenCalled();
+  expect(container.querySelector('[aria-label="4-digit PIN"]')).not.toBeNull();
+  const login = vi.spyOn(core.call, 'post').mockResolvedValue({ message: { user: boundary.auth.user.name } });
+  vi.spyOn(core.auth, 'getLoggedInUser').mockResolvedValue(boundary.auth.user.name);
+  for (const digit of '1234') {
+    const button = [...container.querySelectorAll('button')].find((el) => el.textContent === digit)!;
+    await act(async () => button.click());
+  }
+  expect(login).toHaveBeenCalledWith('ury.ury_pos.floor_pin.sign_in', {
+    pin: '1234', expected_user: boundary.auth.user.name,
+  });
+  // Remount the gate as the browser does after successful authentication.
+  act(() => root!.unmount());
+  guard.mockRejectedValueOnce(new Error('Offline outbox has pending items'));
+  render(<AuthGuard><div>Protected POS</div></AuthGuard>);
+  await act(async () => {});
+  expect(container.textContent).not.toContain('Protected POS');
+  expect(container.querySelector('[role=status]')).not.toBeNull();
+  const print = container.querySelector<HTMLButtonElement>('[data-client-order="queued"] button');
+  expect(print).not.toBeNull();
+  await act(async () => print!.click());
+  expect(reprint).toHaveBeenCalledWith('queued', 'kot');
+  expect(boundary.logout).not.toHaveBeenCalled();
+  await act(async () => vi.advanceTimersByTimeAsync(10000));
+  expect(boundary.logout).toHaveBeenCalledOnce();
+});
+
+it.each(['owner', 'other user'])('holds the stay-role layout on cold boot with queued rows for %s', async (source) => {
+  vi.useRealTimers();
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  vi.stubGlobal('navigator', { onLine: true, locks: testLocks() });
+  sessionStorage.removeItem('userAuth');
+  const profile = { name: 'Till', custom_floor_stay_signed_in_roles: [{ role: 'URY Captain' }], ury_offline_capture: 1 };
+  boundary.auth.posProfile = profile;
+  const queue = new OfflineOutbox({
+    profile, user: { ...boundary.auth.user, name: source === 'owner' ? boundary.auth.user.name : 'other@example.com' },
+  });
+  await queue.capture({ pos_profile: 'Till', no_of_pax: 1, invoice: null, last_invoice: null, order_type: 'Take Away',
+    items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 10 }] }, 10);
+  const Layout = vi.fn(() => <button>Reprint queued order</button>);
+  render(<AuthGuard><Layout /></AuthGuard>);
+  expect(Layout).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="4-digit PIN"]')).not.toBeNull());
+  expect(Layout).not.toHaveBeenCalled();
+  expect(boundary.logout).not.toHaveBeenCalled();
+});
+
+it('admits a stay-signed-in user once the cold-boot outbox check finds no rows', async () => {
+  vi.useRealTimers();
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  sessionStorage.removeItem('userAuth');
+  boundary.auth.posProfile = { name: 'Till', custom_floor_stay_signed_in_roles: [{ role: 'URY Captain' }] };
+  render(<AuthGuard><div>Stay-signed-in workspace</div></AuthGuard>);
+  await vi.waitFor(() => expect(container.textContent).toContain('Stay-signed-in workspace'));
+  expect(boundary.logout).not.toHaveBeenCalled();
+});
+
+vi.mock('../src/lib/logout-store', () => ({ readLogoutMarker: async () => false, writeLogoutMarker: async () => {}, readGeneration: async () => 0, writeGeneration: async () => {} }));
+
+it('withholds stale hook rows from the panel when the current tab belongs to another user', () => {
+  setFloorSessionMarker('other@example.com', false);
+  render(<OutboxPanel posProfile={{ name: 'Till', ury_offline_capture: 1 }} user={boundary.auth.user} />);
+  expect(container.querySelector('[data-client-order]')).toBeNull();
+  expect(container.textContent).not.toContain('queued');
 });

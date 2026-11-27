@@ -24,6 +24,7 @@ const json = (message: unknown, status = 200) => new Response(JSON.stringify({ m
 });
 
 beforeEach(async () => {
+  document.cookie = 'user_id=' + encodeURIComponent(user.name) + '; Path=/';
   sessionStorage.clear();
   await initI18n('en');
   vi.stubGlobal('indexedDB', new IDBFactory());
@@ -32,7 +33,11 @@ beforeEach(async () => {
   const { cashierOutbox } = await lazyModule('src/offline/cashier.ts', 'the cashier offline submission seam');
   cashierOutbox(profile, user).reachable = true;
 });
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  document.cookie = 'user_id=; Max-Age=0; Path=/';
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 async function captureModule() {
   return lazyModule('src/offline/cashier.ts', 'the cashier offline submission seam');

@@ -1,3 +1,4 @@
+import { floorFetch } from '@ury/core/floor-request';
 /**
  * Cross-tab & optional LAN relay peer synchronization for offline waiter/cashier outboxes (G46).
  *
@@ -146,7 +147,7 @@ export function createOfflinePeerSync(options: OfflinePeerSyncOptions): OfflineP
           posProfile: options.posProfile,
           ...payload,
         });
-        await fetch(safeRelay, {
+        await floorFetch(safeRelay, {
           method: 'POST',
           ...(crossOrigin
             ? { mode: 'no-cors' as const, headers: { 'Content-Type': 'text/plain;charset=UTF-8' } }
@@ -171,7 +172,7 @@ export function createOfflinePeerSync(options: OfflinePeerSyncOptions): OfflineP
       const url = new URL(safeRelay);
       url.searchParams.set('branch', options.branch);
       url.searchParams.set('posProfile', options.posProfile);
-      const res = await fetch(url.toString(), {
+      const res = await floorFetch(url.toString(), {
         method: 'GET',
         headers: { Accept: 'application/json' },
         ...(controller ? { signal: controller.signal } : {}),

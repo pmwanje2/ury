@@ -1,9 +1,15 @@
+import { admittedFloorRequestUser } from '@ury/core/floor-request';
+import { v4 as uuid } from 'uuid';
+import { readGeneration, writeGeneration, readLogoutMarker, readLogoutOwner, writeLogoutMarker } from './logout-store';
+import { hasWebLocks, withEmptyOutbox } from '../offline/outbox';
+import { showToast } from '@ury/ui';
+import { FLOOR_TAB_LOCKED, boundTabGeneration, confirmedTabUser, clearTabConfirmation, observeTabGeneration, revokeTabConfirmation, setFloorSessionMarker } from './floor-tab';
+export { hasFloorSessionMarker, hasRecoveryConfirmation, needsFloorReconciliation, setFloorSessionMarker } from './floor-tab';
 import { useEffect } from 'react';
-import { disconnectQzPrinter, logout, watchIdle } from '@ury/core';
+import { disconnectQzPrinter, getSessionUser, logout, watchIdle } from '@ury/core';
 
-// Tab marker: this tab signed in through the floor pad (PIN or username).
-const FLOOR_SESSION_MARKER = 'userAuth';
-// Same-tab marker: the last server logout failed, so do not loop sign-outs.
+const LEGACY_FLOOR_SESSION_MARKER = 'userAuth';
+// Origin-wide because all tabs share the server session cookie.
 const FLOOR_LOGOUT_FAILED_MARKER = 'ury_floor_logout_failed';
 const FLOOR_HOME = '/pos/order';
 // Cleared on sign-out: the previous user's cached profile and lookups.
@@ -42,29 +48,132 @@ export function isFloorPadActive(): boolean {
   return pad.paired === true && pad.till_open === true;
 }
 
-export function hasFloorSessionMarker(): boolean {
-  try {
-    return localStorage.getItem(FLOOR_SESSION_MARKER) === 'true';
-  } catch {
-    return false;
-  }
+export function openFloorLogoutChannel(): BroadcastChannel | undefined {
+  try { return new BroadcastChannel('ury-floor-logout'); } catch { return undefined; }
 }
 
-export function setFloorSessionMarker(): void {
-  localStorage.setItem(FLOOR_SESSION_MARKER, 'true');
+const GENERATION_KEY = 'ury_floor_generation';
+
+function cookieValue(key: string): string {
+  return document.cookie.split('; ').find(pair => pair.startsWith(key + '='))?.slice(key.length + 1) ?? '';
+}
+
+function writePosCookie(key: string, value: string): void {
+  const secure = location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = key + '=' + value + '; Path=/pos; SameSite=Strict' + secure;
+}
+
+function writeLogoutCookie(failed: boolean): void {
+  writePosCookie(FLOOR_LOGOUT_FAILED_MARKER, failed ? '1; Max-Age=34560000' : '; Max-Age=0');
+}
+
+// A read-only store can retain an older token. The logical timestamp orders the
+// replicas, and the UUID distinguishes simultaneous writers without Web Locks.
+function newestGeneration(durable: string | undefined): string {
+  let local = '';
+  try { local = localStorage.getItem(GENERATION_KEY) || ''; } catch { /* Other replicas remain readable. */ }
+  let cookie = '';
+  try { cookie = cookieValue(GENERATION_KEY); } catch { /* A cookie policy can disable the mirror. */ }
+  return [durable || '', local, cookie].sort().pop()!;
+}
+
+export async function currentFloorGeneration(): Promise<string> {
+  return newestGeneration(await readGeneration());
+}
+
+async function rotateGeneration(current: string): Promise<string> {
+  const time = Math.max(Date.now(), Number(current.split(':')[0]) + 1);
+  const generation = String(time).padStart(16, '0') + ':' + uuid();
+  let saved = false;
+  try { await writeGeneration(generation); saved = true; } catch { /* A full database can remain readable. */ }
+  try { localStorage.setItem(GENERATION_KEY, generation); saved = true; } catch { /* Quota or storage policy. */ }
+  try {
+    writePosCookie(GENERATION_KEY, generation + '; Max-Age=34560000');
+    saved ||= cookieValue(GENERATION_KEY) === generation;
+  } catch { /* Cookie storage may be disabled. */ }
+  if (!saved) throw new Error('Unable to persist POS session generation');
+  return generation;
+}
+
+function announceSessionChange(type: 'logout' | 'login' | 'invalidate', generation?: string): void {
+  const channel = openFloorLogoutChannel();
+  try { channel?.postMessage({ type, generation }); } catch { /* Mounted guards also poll. */ }
+  finally { channel?.close(); }
+}
+
+function hasLogoutCookie(): boolean {
+  return document.cookie.split('; ').includes(FLOOR_LOGOUT_FAILED_MARKER + '=1');
 }
 
 export function hasFloorLogoutFailureMarker(): boolean {
   try {
-    return sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) === 'true';
+    return !!(hasLogoutCookie() || localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)
+      || sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER));
   } catch {
-    // Keep a paired tablet at the sign-in pad when its logout marker cannot be read.
-    return isFloorPadActive();
+    return true;
   }
 }
 
-export function clearFloorLogoutFailureMarker(): void {
+// A private retry survives another tab clearing the shared failure markers.
+export function revokeStaleLogoutRetry(generation: string, retry = sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER)): boolean {
+  if (retry === null || (generation !== '' && retry === generation)) return false;
+  revokeTabConfirmation();
   sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER);
+  return true;
+}
+
+export async function readFloorLogoutFailureMarker(): Promise<boolean> {
+  try { return await readLogoutMarker() || hasFloorLogoutFailureMarker(); } catch { return true; }
+}
+
+function clearLogoutMirrors(): void {
+  try {
+    if (hasLogoutCookie()) writeLogoutCookie(false);
+  } finally {
+    try { localStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
+    finally { sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER); }
+  }
+}
+
+export async function clearFloorLogoutFailureMarker(): Promise<void> {
+  // A verified login can clear a cookie-only failure even when IndexedDB is read-only.
+  if (await readLogoutMarker()) await writeLogoutMarker(null);
+  clearLogoutMirrors();
+}
+
+// A login POST may replace the shared cookie even when its response never arrives.
+export async function beginFloorLogin(): Promise<string> {
+  return rotateGeneration(await currentFloorGeneration());
+}
+
+// Check at the HTTP boundary, including OTP challenges and rejected responses.
+// The browser can apply Set-Cookie before JavaScript gets to inspect the result.
+export async function requestFloorLogin<T>(request: () => Promise<T>): Promise<{ result: T; generation: string }> {
+  const generation = await beginFloorLogin();
+  const result = await request().finally(async () => {
+    const current = await currentFloorGeneration().catch(() => undefined);
+    if (current === generation) return;
+
+    let fence: string | undefined;
+    try {
+      fence = await rotateGeneration(current ?? newestGeneration(generation));
+    } finally {
+      announceSessionChange('invalidate', fence);
+    }
+    throw new Error('Sign-in was superseded');
+  });
+  return { result, generation };
+}
+
+export async function confirmVerifiedLogin(user: string, recovery: boolean, generation: string): Promise<void> {
+  const requireCurrentAttempt = async () => {
+    if (generation !== await currentFloorGeneration()) throw new Error('Sign-in was superseded');
+  };
+  await requireCurrentAttempt();
+  await clearFloorLogoutFailureMarker();
+  await requireCurrentAttempt();
+  setFloorSessionMarker(user, recovery, generation);
+  announceSessionChange('login', generation);
 }
 
 export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
@@ -81,35 +190,156 @@ export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | 
     const seconds = profile.floor_idle_signout_seconds ?? 0;
     if (seconds <= 0) return;
 
-    return watchIdle(() => {
-      void floorSignOut();
-    }, seconds * 1000);
+    let cancelSignOut: (() => void) | undefined;
+    return watchIdle(
+      () => { cancelSignOut = retryFloorSignOut(); },
+      seconds * 1000,
+      () => cancelSignOut?.(),
+    );
   }, [profile, user]);
+}
+
+type SignOutResult = 'signed_out' | 'logout_failed' | 'blocked' | 'cancelled';
+
+// Recheck under the outbox lock, including when replay ran in a different tab.
+export function retryFloorSignOut(onResult?: (result: SignOutResult) => void, retryingFailedLogout = false, admittedUser?: string): () => void {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const attempt = async () => {
+    const result = await floorSignOut(() => !cancelled, retryingFailedLogout, admittedUser);
+    if (cancelled) return;
+    onResult?.(result);
+    if (result === 'blocked') timer = setTimeout(attempt, 5000);
+  };
+  void attempt();
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
 }
 
 /**
  * End a shared-tablet session even when the server cannot answer, so the next
  * waiter never inherits the previous user's tab state.
  */
-export async function floorSignOut(): Promise<void> {
-  let logoutFailed = false;
+export async function floorSignOut(stillRequested?: () => boolean, retryingFailedLogout = false, admittedUser?: string): Promise<SignOutResult> {
+  let outcome: SignOutResult = 'cancelled';
   try {
-    // @ury/core logout() resolves false when the server logout failed.
-    logoutFailed = (await logout()) === false;
-  } catch {
-    logoutFailed = true;
+    await withEmptyOutbox(async () => {
+      if (stillRequested) {
+        if (retryingFailedLogout && !await readFloorLogoutFailureMarker()) {
+          outcome = 'signed_out';
+          return;
+        }
+        if (!stillRequested()) return;
+      }
+      outcome = await endFloorSession(retryingFailedLogout, stillRequested, admittedUser);
+    });
+    return outcome;
+  } catch (error) {
+    if (!stillRequested) showToast.error(error instanceof Error ? error.message : String(error));
+    return 'blocked';
+  }
+}
+
+function lockLogoutTab(): false {
+  try {
+    revokeTabConfirmation();
   } finally {
-    try {
-      if (logoutFailed) sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true');
-      else clearFloorLogoutFailureMarker();
-    } catch {
-      // A blocked marker must not interrupt sign-out.
-    }
-    for (const key of SESSION_KEYS) {
-      try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
-    }
-    try { localStorage.removeItem(FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
-    disconnectQzPrinter();
+    window.dispatchEvent(new Event(FLOOR_TAB_LOCKED));
     window.location.replace(FLOOR_HOME);
   }
+  return false;
+}
+
+export async function logoutWithFloorMarker(stillRequested?: () => boolean, admittedUser?: string, retry = false): Promise<boolean | undefined> {
+  // Check the caller after acquiring the same lock used by verified login.
+  if (!hasWebLocks()) return lockLogoutTab();
+  const bound = boundTabGeneration();
+  if (bound === null) return lockLogoutTab();
+  const privateRetry = sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER);
+
+  // Without a snapshot, only a pristine origin (or a matching private retry) can log out.
+  const expected = bound ?? privateRetry ?? '';
+  const current = await currentFloorGeneration().catch(() =>
+    expected === '' && typeof indexedDB === 'undefined' ? newestGeneration(undefined) : undefined,
+  );
+  if (privateRetry !== null) {
+    if (current === undefined) return lockLogoutTab();
+    if (revokeStaleLogoutRetry(current, privateRetry)) return false;
+  }
+  if (expected !== current) return lockLogoutTab();
+
+  // Desk logins can replace the cookie without advancing the POS generation.
+  const owner = confirmedTabUser() ?? admittedFloorRequestUser() ?? admittedUser;
+  if (!owner || owner === 'Guest' || (admittedUser && admittedUser !== owner) || getSessionUser() !== owner) {
+    return lockLogoutTab();
+  }
+  if (retry || privateRetry !== null) {
+    let failedOwner: string | null | undefined;
+    try { failedOwner = localStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER); } catch { /* Try IndexedDB. */ }
+    if (!failedOwner) failedOwner = await readLogoutOwner().catch(() => undefined);
+    if (failedOwner !== owner) return lockLogoutTab();
+  }
+
+  // Activity may cancel an idle logout while its generation is being read.
+  if (stillRequested && !stillRequested()) return undefined;
+
+  // Persist before the network request: the tab may close while logout is in flight.
+  try { clearTabConfirmation(); } catch { /* Still attempt server logout. */ }
+  let localSaved = false;
+  try {
+    localStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, owner);
+    localSaved = true;
+  } catch { /* Use the generation-bound private marker when local storage is full. */ }
+  try {
+    await writeLogoutMarker(owner);
+  } catch {
+    // Both quota pools can be exhausted. Leave a POS-scoped flag and still attempt server logout.
+    if (!localSaved) {
+      try { writeLogoutCookie(true); }
+      catch { /* Still attempt server logout if the browser also refuses cookies. */ }
+    }
+  }
+  let generation: string | undefined;
+  try { generation = await rotateGeneration(current); } catch { /* Still attempt server logout. */ }
+  try {
+    if (!localSaved || privateRetry !== null) {
+      // An unpersisted generation cannot authorize a future server retry.
+      sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, generation ?? 'unbound');
+    }
+  } catch { /* The origin-wide failure markers still protect accessible storage. */ }
+  announceSessionChange('logout', generation);
+  let signedOut;
+  try {
+    signedOut = await logout(owner);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'URY_FLOOR_SESSION_MISMATCH') return lockLogoutTab();
+    signedOut = false;
+  }
+  if (signedOut === false) {
+    // A retry from this control belongs to the generation its own logout attempt created.
+    try {
+      if (generation) observeTabGeneration(generation);
+    } catch { /* Without a snapshot a retry will lock locally if the origin has advanced. */ }
+    return false;
+  }
+  // The server session has ended. Attempt each cleanup even if the durable store is unavailable.
+  try { await writeLogoutMarker(null); } catch { /* A surviving marker keeps the next boot locked. */ }
+  try { clearLogoutMirrors(); } catch { /* The server session has ended. */ }
+  return true;
+}
+
+async function endFloorSession(retryingFailedLogout: boolean, stillRequested?: () => boolean, admittedUser?: string): Promise<SignOutResult> {
+  const retrying = retryingFailedLogout || hasFloorLogoutFailureMarker();
+  const signedOut = await logoutWithFloorMarker(stillRequested, admittedUser, retrying);
+  if (signedOut === undefined) return 'cancelled';
+  if (!signedOut && boundTabGeneration() === null) return 'logout_failed';
+  for (const key of SESSION_KEYS) {
+    try { sessionStorage.removeItem(key); } catch { /* Keep clearing accessible keys. */ }
+  }
+  try { localStorage.removeItem(LEGACY_FLOOR_SESSION_MARKER); } catch { /* Storage may be disabled. */ }
+  disconnectQzPrinter();
+  if (!retrying || signedOut) window.location.replace(FLOOR_HOME);
+  return signedOut ? 'signed_out' : 'logout_failed';
 }

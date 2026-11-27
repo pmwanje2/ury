@@ -1,3 +1,4 @@
+import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -173,6 +174,7 @@ describe('Hydrogen R1 fixes (P0-1, P1-4, P1-5, P2-3)', () => {
 
     vi.spyOn(db, 'getDoc').mockResolvedValue({ name: 'USD', symbol: '$' } as never);
 
+    vi.stubGlobal('indexedDB', new IDBFactory());
     // Seed authenticated user (skipping checkAuth redirect)
     useRootStore.setState({
       user: {

@@ -17,14 +17,16 @@ interface StaffMember {
   user: string;
   full_name: string;
   has_pin: boolean;
+  can_issue: boolean;
 }
 
 interface StaffPinsDialogProps {
+  posProfile: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-const StaffPinsDialog = ({ open, onOpenChange }: StaffPinsDialogProps) => {
+const StaffPinsDialog = ({ open, onOpenChange, posProfile }: StaffPinsDialogProps) => {
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyUser, setBusyUser] = useState<string | null>(null);
@@ -41,7 +43,7 @@ const StaffPinsDialog = ({ open, onOpenChange }: StaffPinsDialogProps) => {
 
     let cancelled = false;
     setLoading(true);
-    call.get('ury.ury_pos.floor_pin.pin_staff')
+    call.get('ury.ury_pos.floor_pin.pin_staff', { pos_profile: posProfile })
       .then((response) => {
         if (cancelled) return;
         const message = (response as { message?: unknown }).message;
@@ -57,19 +59,35 @@ const StaffPinsDialog = ({ open, onOpenChange }: StaffPinsDialogProps) => {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, posProfile]);
 
   const issuePin = async (member: StaffMember) => {
     setBusyUser(member.user);
     setError(null);
     try {
-      const response = await call.post('ury.ury_pos.floor_pin.issue_pin', { user: member.user });
+      const response = await call.post('ury.ury_pos.floor_pin.issue_pin', { user: member.user, pos_profile: posProfile });
       const pin = (response as { message?: { pin?: unknown } }).message?.pin;
       if (typeof pin !== 'string' || !pin) throw new Error(t('staff_pins.issue_failed'));
       setIssued({ name: member.full_name, pin });
       setStaff((current) => current.map((row) => (row.user === member.user ? { ...row, has_pin: true } : row)));
     } catch (reason) {
       setError(floorPinError(parseFrappeError(reason, t('staff_pins.issue_failed')), 'staff_pins'));
+    } finally {
+      setBusyUser(null);
+    }
+  };
+
+  const revokePin = async (member: StaffMember) => {
+    if (!window.confirm(t('staff_pins.confirm_revoke', { name: member.full_name }))) return;
+    setBusyUser(member.user);
+    setError(null);
+    try {
+      await call.post('ury.ury_pos.floor_pin.revoke_pin', { user: member.user, pos_profile: posProfile });
+      setStaff((rows) => member.can_issue === false
+        ? rows.filter((row) => row.user !== member.user)
+        : rows.map((row) => row.user === member.user ? { ...row, has_pin: false } : row));
+    } catch (reason) {
+      setError(floorPinError(parseFrappeError(reason, t('staff_pins.revoke_failed')), 'staff_pins'));
     } finally {
       setBusyUser(null);
     }
@@ -110,11 +128,17 @@ const StaffPinsDialog = ({ open, onOpenChange }: StaffPinsDialogProps) => {
                   <div key={member.user} className="flex items-center justify-between gap-4 border-b border-gray-200 py-3">
                     <div>
                       <p className="font-medium text-gray-900">{member.full_name}</p>
+                      {member.can_issue === false && <p className="text-sm text-gray-600">{t('staff_pins.revoke_only')}</p>}
                       {!member.has_pin && <p className="text-sm text-amber-700">{t('staff_pins.needs_pin')}</p>}
                     </div>
-                    <Button variant="outline" disabled={busyUser !== null} onClick={() => void issuePin(member)}>
+                    {member.has_pin && (
+                      <Button variant="outline" disabled={busyUser !== null} onClick={() => void revokePin(member)}>
+                        {t('staff_pins.revoke')}
+                      </Button>
+                    )}
+                    {member.can_issue !== false && <Button variant="outline" disabled={busyUser !== null} onClick={() => void issuePin(member)}>
                       {member.has_pin ? t('staff_pins.new_pin') : t('staff_pins.give_pin')}
-                    </Button>
+                    </Button>}
                   </div>
                 ))
               )}

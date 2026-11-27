@@ -87,15 +87,26 @@ def _enabled(profile):
 	return not profile.get("disabled") and profile.get("custom_floor_pin_login")
 
 
+def _in_outlet_scope(user, profile):
+	return (
+		isinstance(user, str) and bool(user) and user not in ("Administrator", "Guest")
+		and (not profile.get("applicable_for_users") or user in {row.user for row in profile.applicable_for_users})
+		and frappe.db.exists("URY User", {"parent": profile.branch, "parenttype": "Branch", "user": user})
+	)
+
+
 def _eligible(user, profile):
+	return _in_outlet_scope(user, profile) and _can_hold_pin(user, profile)
+
+
+def _can_hold_pin(user, profile):
 	roles = set(frappe.get_roles(user))
 	return (
-		user not in ("Administrator", "Guest")
-		and "System Manager" not in roles
+		"System Manager" not in roles
 		and frappe.db.get_value("User", user, "enabled") == 1
 		and bool(roles & {r.role for r in profile.get("custom_floor_pin_roles", [])})
 		and not roles & {r.role for r in profile.get("custom_floor_stay_signed_in_roles", [])}
-		and frappe.db.exists("URY User", {"parent": profile.branch, "parenttype": "Branch", "user": user})
+		and not frappe.has_permission("POS Profile", "write", profile, user=user)
 	)
 
 
@@ -157,27 +168,47 @@ def pair_device(pos_profile, label):
 	profile.add_comment("Info", f"Floor tablet '{escape(label)}' paired by {escape(frappe.session.user)}")
 
 
-def _pin_profiles():
-	# Authorization first, so profile state is never disclosed to a caller without write.
-	if not frappe.has_permission("POS Profile", "write"):
-		_not_permitted("A manager must issue a PIN to eligible floor staff.")
-	rows = frappe.get_all("POS Profile", filters={"custom_floor_pin_login": 1, "disabled": 0}, fields=["name"])
-	profiles = [p for p in (frappe.get_doc("POS Profile", row.name) for row in rows) if _enabled(p)]
-	if not profiles:
-		_login_disabled("No POS Profile has floor PIN sign-in turned on.")
-	managed = [profile for profile in profiles if frappe.has_permission("POS Profile", "write", profile)]
-	if not managed:
-		_not_permitted("A manager must issue a PIN to eligible floor staff.")
-	return profiles, managed
+def _managed_profile(pos_profile):
+	if not isinstance(pos_profile, str) or not pos_profile.strip():
+		_not_permitted("Select a POS Profile you manage.")
+	try:
+		profile = frappe.get_doc("POS Profile", pos_profile)
+	except frappe.DoesNotExistError:
+		_not_permitted("Select a POS Profile you manage.")
+	if not frappe.has_permission("POS Profile", "write", profile):
+		_not_permitted("Select a POS Profile you manage.")
+	if not _enabled(profile):
+		_login_disabled("Floor PIN sign-in is off for this POS Profile.")
+	return profile
+
+
+def _require_eligible(user, profile):
+	if not isinstance(user, str) or not user or not _eligible(user, profile):
+		_refuse("URY_FLOOR_PIN_TARGET_INELIGIBLE", "This user cannot get a floor PIN.", frappe.ValidationError)
 
 
 @frappe.whitelist(methods=["POST"])
-def issue_pin(user):
-	profiles, managed = _pin_profiles()
-	eligible = [profile for profile in profiles if _eligible(user, profile)]
-	managed_names = {profile.name for profile in managed}
-	if not any(profile.name in managed_names for profile in eligible):
-		_refuse("URY_FLOOR_PIN_TARGET_INELIGIBLE", "This user cannot get a floor PIN.", frappe.ValidationError)
+def revoke_pin(user, pos_profile):
+	profile = _managed_profile(pos_profile)
+	# A disabled or promoted waiter may still hold a previously issued PIN.
+	if not _in_outlet_scope(user, profile):
+		_refuse("URY_FLOOR_PIN_TARGET_INELIGIBLE", "This user is outside this outlet.", frappe.ValidationError)
+	frappe.db.set_value("User", user, "custom_floor_pin_hash", None, update_modified=False)
+	add_authentication_log(f"Floor PIN revoked for {user} by {frappe.session.user}", frappe.session.user)
+	return {"revoked": True, "user": user}
+
+
+@frappe.whitelist(methods=["POST"])
+def issue_pin(user, pos_profile):
+	profile = _managed_profile(pos_profile)
+	_require_eligible(user, profile)
+	eligible = [profile]
+	rows = frappe.get_all("POS Profile", filters={"custom_floor_pin_login": 1, "disabled": 0}, fields=["name"])
+	for row in rows:
+		if row.name != profile.name:
+			other = frappe.get_doc("POS Profile", row.name)
+			if _enabled(other) and _eligible(user, other):
+				eligible.append(other)
 
 	# One PIN hash is shared by all eligible tablets. Use the longest common length.
 	policies = [floor_pin_policy(profile) for profile in eligible]
@@ -207,29 +238,29 @@ def issue_pin(user):
 
 
 @frappe.whitelist(methods=["GET"])
-def pin_staff():
-	_, managed = _pin_profiles()
-	profile = managed[0]
-	return [
-		{
-			"user": user,
-			"full_name": get_fullname(user),
-			"has_pin": bool(frappe.db.get_value("User", user, "custom_floor_pin_hash")),
-		}
-		for user in frappe.get_all("User", filters={"enabled": 1}, pluck="name")
-		if _eligible(user, profile)
-	]
+def pin_staff(pos_profile):
+	profile = _managed_profile(pos_profile)
+	roster = []
+	candidates = frappe.get_all("User", or_filters={"enabled": 1, "custom_floor_pin_hash": ["is", "set"]}, pluck="name")
+	for user in candidates:
+		if not _in_outlet_scope(user, profile):
+			continue
+		can_issue = _can_hold_pin(user, profile)
+		has_pin = bool(frappe.db.get_value("User", user, "custom_floor_pin_hash"))
+		if can_issue or has_pin:
+			roster.append({"user": user, "full_name": get_fullname(user), "has_pin": has_pin, "can_issue": can_issue})
+	return roster
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
-def sign_in(pin):
+def sign_in(pin, expected_user=None):
 	# Scrub before rate_limit too: even a rate-limited request must not log its PIN.
 	frappe.form_dict.pop("pin", None)
-	return _sign_in(pin)
+	return _sign_in(pin, expected_user)
 
 
 @rate_limit(limit=60, seconds=60)
-def _sign_in(pin):
+def _sign_in(pin, expected_user=None):
 	device = _device()
 	if not device:
 		_sign_in_refused("URY_FLOOR_DEVICE_NOT_PAIRED", "Sign in with username to pair this tablet.")
@@ -249,7 +280,7 @@ def _sign_in(pin):
 	if (isinstance(pin, str) and policy["min_length"] <= len(pin) <= policy["max_length"]
 			and re.fullmatch(r"[0-9]+", pin)):
 		user = frappe.db.get_value("User", {"custom_floor_pin_hash": _digest("ury-floor-pin-v1", pin), "enabled": 1}, "name")
-	if not user or not _eligible(user, profile):
+	if not user or (expected_user is not None and user != expected_user) or not _eligible(user, profile):
 		short.add_failure_attempt()
 		day.add_failure_attempt()
 		add_authentication_log(f"Floor PIN refused on tablet '{escape(label)}'", "Guest", status="Failed")
@@ -258,4 +289,4 @@ def _sign_in(pin):
 	short.add_success_attempt()
 	frappe.local.login_manager.login_as(user, session_end=(datetime.now(timezone.utc) + timedelta(minutes=policy["session_minutes"])).isoformat())
 	frappe.sessions.clear_sessions(user, keep_current=True)
-	return {"full_name": get_fullname(user), "csrf_token": frappe.sessions.get_csrf_token()}
+	return {"user": user, "full_name": get_fullname(user), "csrf_token": frappe.sessions.get_csrf_token()}

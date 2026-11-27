@@ -59,7 +59,7 @@ class TestStaffPinIssuance(FrappeTestCase):
               patch.object(floor_pin, "_digest", return_value="synthetic-hash"),
               patch.object(floor_pin, "add_authentication_log"),
               patch.object(floor_pin.secrets, "randbelow", return_value=42)):
-            return floor_pin.issue_pin("employee@example.test")["pin"]
+            return floor_pin.issue_pin("employee@example.test", profiles[0].name)["pin"]
 
     def test_pin_length_fits_all_eligible_profiles_including_unmanaged_profiles(self):
         pin = self.issue([(4, 8), (6, 6), (9, 9)])

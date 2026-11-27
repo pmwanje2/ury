@@ -1,9 +1,11 @@
 import { useRef, useState } from 'react';
 import { Button, showToast } from '@ury/ui';
 import { clearCashierStorage } from '../offline/cashier';
+import { useRootStore } from '../store/root-store';
 import { t } from '../i18n';
 
 export function useTillLogout() {
+  const { user } = useRootStore();
   const [loggingOut, setLoggingOut] = useState(false);
   const logoutPending = useRef(false);
 
@@ -12,8 +14,8 @@ export function useTillLogout() {
     logoutPending.current = true;
     setLoggingOut(true);
     try {
-      await clearCashierStorage(true);
-      window.location.href = '/login?redirect-to=%2Fpos';
+      await clearCashierStorage(true, user?.name);
+      window.location.href = '/pos/order';
     } catch (error) {
       showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
       logoutPending.current = false;

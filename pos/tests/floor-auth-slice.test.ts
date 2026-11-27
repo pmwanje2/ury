@@ -57,16 +57,16 @@ it('keeps a paired, open-till Guest in the in-app floor pad flow', async () => {
 it.each([
   ['unpaired tablet', { paired: false, till_open: true }],
   ['closed till', { paired: true, till_open: false }],
-])('sends a Guest on a %s to native /login', async (_name, floorPad) => {
+])('sends a Guest on a %s to local sign-in', async (_name, floorPad) => {
   setFloorPad(floorPad);
   const state = makeStore();
   await (state().checkAuth as () => Promise<void>)();
   expect(state().user).toBeNull();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('/pos/order');
 });
 
-it('sends a Guest without any floor context to native /login', async () => {
+it('sends a Guest without any floor context to local sign-in', async () => {
   const state = makeStore();
   await (state().checkAuth as () => Promise<void>)();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('/pos/order');
 });

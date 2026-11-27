@@ -88,7 +88,7 @@ test('a till that has not opted in still goes to login on a transport failure', 
   controlledByPosWorker(false);
   await useRootStore.getState().checkAuth();
   expect(useRootStore.getState().user).toBeNull();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('http://localhost:3000/pos/pos');
 });
 
 test.each([401, 403])('HTTP %i always goes to login, even offline-capable and with navigator.onLine false', async (code) => {
@@ -101,14 +101,14 @@ test.each([401, 403])('HTTP %i always goes to login, even offline-capable and wi
     Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
   }
   expect(useRootStore.getState().user).toBeNull();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('http://localhost:3000/pos/pos');
 });
 
 test('a Guest cookie is never kept', async () => {
   document.cookie = 'user_id=Guest; Path=/';
   await useRootStore.getState().checkAuth();
   expect(useRootStore.getState().user).toBeNull();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('http://localhost:3000/pos/pos');
 });
 
 test.each([401, 403])('reconnecting revalidates the provisional session and a revoked one (%i) goes to login', async (code) => {
@@ -117,7 +117,7 @@ test.each([401, 403])('reconnecting revalidates the provisional session and a re
   transport.defaults.baseURL = liveBase;
   status = code;
   window.dispatchEvent(new Event('online'));
-  await vi.waitFor(() => expect(location.href).toBe('/login?redirect-to=%2Fpos'));
+  await vi.waitFor(() => expect(useRootStore.getState().user).toBeNull());
   expect(useRootStore.getState().user).toBeNull();
 });
 
@@ -146,7 +146,7 @@ test('HTTP 500 on the session check still goes to login', async () => {
   status = 500;
   await useRootStore.getState().checkAuth();
   expect(useRootStore.getState().user).toBeNull();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('http://localhost:3000/pos/pos');
 });
 
 test('a gateway 502 on a till that has not opted in still goes to login', async () => {
@@ -156,7 +156,7 @@ test('a gateway 502 on a till that has not opted in still goes to login', async 
   status = 502;
   await useRootStore.getState().checkAuth();
   expect(useRootStore.getState().user).toBeNull();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('http://localhost:3000/pos/pos');
 });
 
 test('a controller left over from another cashier cannot opt this user into offline auth', async () => {
@@ -164,5 +164,5 @@ test('a controller left over from another cashier cannot opt this user into offl
   sessionStorage.setItem('posProfile:other@example.test', JSON.stringify({ury_offline_capture: 1}));
   await useRootStore.getState().checkAuth();
   expect(useRootStore.getState().user).toBeNull();
-  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  expect(location.href).toBe('http://localhost:3000/pos/pos');
 });

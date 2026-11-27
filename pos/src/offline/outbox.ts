@@ -1,3 +1,4 @@
+import { floorFetch } from '@ury/core/floor-request';
 import { currencyFractionDigits, resolveDefaultCustomer, type DefaultCustomerConfig } from '@ury/core';
 import { v4 as uuid } from 'uuid';
 import { t } from '../i18n';
@@ -120,6 +121,40 @@ const LOCK = 'ury-pos-offline-capture';
 export const OUTBOX_CHANGED = 'ury-outbox-changed';
 const changed = () => { if (typeof window !== 'undefined') window.dispatchEvent(new Event(OUTBOX_CHANGED)); };
 
+// Only inserts and removals can change whether an unconfirmed tab may show the POS.
+const OUTBOX_MEMBERSHIP = 'ury-outbox-membership';
+export function recheckOutboxMembership() {
+  window.dispatchEvent(new Event(OUTBOX_MEMBERSHIP));
+}
+
+function membershipChannel(): BroadcastChannel | undefined {
+  try { return new BroadcastChannel(OUTBOX_MEMBERSHIP); } catch { return undefined; }
+}
+
+function membershipChanged() {
+  recheckOutboxMembership();
+  const channel = membershipChannel();
+  try { channel?.postMessage(null); } catch { /* The storage event and polling still apply. */ }
+  finally { channel?.close(); }
+  // Wake other tabs without storing any order or user data. IndexedDB remains authoritative.
+  try { localStorage.setItem(OUTBOX_MEMBERSHIP, uuid()); } catch { /* Recheck on focus. */ }
+}
+
+export function onOutboxMembershipChange(check: () => void): () => void {
+  const channel = membershipChannel();
+  if (channel) channel.onmessage = check;
+  const storageChanged = (event: StorageEvent) => {
+    if (event.key === OUTBOX_MEMBERSHIP) check();
+  };
+  window.addEventListener('storage', storageChanged);
+  window.addEventListener(OUTBOX_MEMBERSHIP, check);
+  return () => {
+    channel?.close();
+    window.removeEventListener('storage', storageChanged);
+    window.removeEventListener(OUTBOX_MEMBERSHIP, check);
+  };
+}
+
 // Resolve only on transaction COMMIT, not on individual request success.
 async function transaction<T>(stores: string[], mode: IDBTransactionMode,
   run: (tx: IDBTransaction, result: (value: T) => void) => void): Promise<T> {
@@ -145,25 +180,63 @@ const all = () => typeof indexedDB === 'undefined' ? Promise.resolve([] as Offli
     const request = tx.objectStore('orders').getAll(); request.onsuccess = () => result(request.result);
   });
 const save = async (entry: OfflineEntry) => {
+  const inserting = entry.sequence === undefined;
   await transaction(['orders'], 'readwrite', (tx, result) => {
     const request = tx.objectStore('orders').put(entry);
     request.onsuccess = () => { entry.sequence = Number(request.result); result(undefined); };
-  }); changed();
+  });
+  if (inserting) membershipChanged();
+  changed();
 };
 const remove = async (entry: OfflineEntry) => {
-  await transaction(['orders'], 'readwrite', (tx, result) => { tx.objectStore('orders').delete(entry.sequence!); result(undefined); }); changed();
+  await transaction(['orders'], 'readwrite', (tx, result) => { tx.objectStore('orders').delete(entry.sequence!); result(undefined); });
+  membershipChanged();
+  changed();
 };
-export async function assertOutboxEmpty(): Promise<void> {
-  if ((await all()).length) throw new Error('Offline outbox has pending or Needs review items. Reconcile them before logout or till close.');
+export async function queuedProfilesFor(user: string): Promise<string[]> {
+  const rows = await all();
+  return [...new Set(rows.filter((row) => row.owner === user).map((row) => row.profile))];
 }
+
+export async function assertOutboxEmpty(): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const count = await transaction<number>(['orders'], 'readonly', (tx, result) => {
+    const request = tx.objectStore('orders').count();
+    request.onsuccess = () => result(request.result);
+  });
+  if (count) throw new Error('Offline outbox has pending or Needs review items. Reconcile them before logout or till close.');
+}
+export function hasWebLocks(): boolean {
+  return typeof navigator !== 'undefined' && typeof navigator.locks?.request === 'function';
+}
+
 const exclusive = <T,>(run: () => Promise<T>): Promise<T> => {
-  if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(LOCK, run);
+  if (hasWebLocks()) return navigator.locks.request(LOCK, run);
   return Promise.reject(new Error('This browser cannot lock the offline outbox across tabs. Offline capture is unavailable.'));
 };
+// Capture, replay, and identity changes share the same cross-tab lock.
+export async function withOutboxLogin(
+  user: string | null, login: (owner: string | null) => Promise<void>, allowPasswordAlias = false,
+): Promise<void> {
+  const guarded = async () => {
+    const rows = await all();
+    const owner = rows[0]?.owner ?? null;
+    if (rows.length) {
+      const alias = allowPasswordAlias && user && !user.includes('@');
+      if (!owner || rows.some(row => row.owner !== owner) || (user !== owner && !alias)) {
+        throw new Error(t('floor_pin.owner_required'));
+      }
+    }
+    await login(owner);
+  };
+  if (hasWebLocks()) await exclusive(guarded);
+  else await guarded();
+}
+
 export async function withEmptyOutbox(run: () => Promise<void>): Promise<void> {
   const emptyRun = async () => { await assertOutboxEmpty(); await run(); };
-  // Capture/replay fail closed without Web Locks, so an empty browser can still log out.
-  if (typeof navigator !== 'undefined' && navigator.locks) await exclusive(emptyRun);
+  // The local-only logout still checks for orders that need reconciliation.
+  if (hasWebLocks()) await exclusive(emptyRun);
   else await emptyRun();
 }
 export async function purgeEmptyOutbox(): Promise<void> {
@@ -174,13 +247,20 @@ export async function purgeEmptyOutbox(): Promise<void> {
   });
   changed();
 }
-export function canCaptureOfflineOrder(
+export function offlineCaptureEnabled(profile?: OfflineProfile | null): boolean {
+  return [1, '1', true].includes(profile?.ury_offline_capture as number | string | boolean);
+}
+
+export function canCaptureOfflineOrder(profile?: OfflineProfile | null, user?: OfflineUser | null, orderType?: string | null): boolean {
+  return offlineCaptureEnabled(profile) && canRecoverOfflineOrder(profile, user, orderType);
+}
+
+export function canRecoverOfflineOrder(
   profile?: OfflineProfile | null,
   user?: OfflineUser | null,
   orderType?: string | null,
 ): boolean {
   if (!profile || !user || !user.name || user.name === 'Guest') return false;
-  if (![1, '1', true].includes(profile.ury_offline_capture as number | string | boolean)) return false;
   if (!Array.isArray(user.roles) || user.roles.length === 0) return false;
   if (
     orderType === 'Dine In' &&
@@ -192,8 +272,12 @@ export function canCaptureOfflineOrder(
 }
 
 export function canSettleOffline(profile?: OfflineProfile | null, user?: OfflineUser | null): boolean {
+  return offlineCaptureEnabled(profile) && canRecoverOfflineTender(profile, user);
+}
+
+export function canRecoverOfflineTender(profile?: OfflineProfile | null, user?: OfflineUser | null): boolean {
   return (
-    canCaptureOfflineOrder(profile, user) &&
+    canRecoverOfflineOrder(profile, user) &&
     !!profile?.role_allowed_for_billing?.some((row) => user?.roles?.includes(row.role))
   );
 }
@@ -221,12 +305,12 @@ export class OfflineOutbox {
   persistent: boolean | null = null;
   private replayPromise?: Promise<void>;
   private scope: string;
-  private request: typeof fetch;
+  private request: (url: string, init?: RequestInit) => Promise<Response>;
   private print: OfflinePrint;
   private onSettled?: OfflineSettledHook;
   constructor(private options: Options) {
     this.scope = JSON.stringify([options.user.name, options.profile.name]);
-    this.request = options.request || ((url, init) => fetch(url, init));
+    this.request = options.request || ((url, init) => floorFetch(url, init, options.user.name));
     this.print = options.print || (() => false);
     this.onSettled = options.onSettled;
   }
@@ -265,11 +349,14 @@ export class OfflineOutbox {
     try { return await this.print(entry, kind); } catch { return false; }
   }
   async reprint(clientId: string, kind: 'kot' | 'bill'): Promise<void> {
-    this.allowed();
     await exclusive(async () => {
       this.assertSessionAllowed();
       const entry = (await this.list()).find((row) => row.client_order_id === clientId);
       if (!entry || entry.state !== 'pending') throw new Error('Only pending offline orders can be reprinted.');
+      if (!canRecoverOfflineOrder(this.options.profile, this.options.user, entry.order.order_type) ||
+          (kind === 'bill' && !canRecoverOfflineTender(this.options.profile, this.options.user))) {
+        throw new Error(t('offline.retry_unavailable'));
+      }
       if (kind === 'bill') {
         if (!entry.settlement) throw new Error('Settle the provisional bill first.');
         entry.bill_printed = await this.tryPrint(entry, kind);
@@ -487,18 +574,20 @@ export class OfflineOutbox {
     this.reachable = true;
     this.verified = true;
   }
-  async replay(): Promise<void> {
-    if (!canCaptureOfflineOrder(this.options.profile, this.options.user)) return;
+  async replay(stillAuthorized?: () => boolean): Promise<void> {
+    if (!canRecoverOfflineOrder(this.options.profile, this.options.user)) return;
     if (this.replayPromise) return this.replayPromise;
     this.replaying = true; changed();
     this.replayPromise = exclusive(async () => {
       try {
+        if (stillAuthorized && !stillAuthorized()) return;
+        if (!offlineCaptureEnabled(this.options.profile) && !(await this.list()).length) return;
         await this.verifyCashier();
         for (const entry of await this.list()) {
           if (entry.state !== 'pending') continue;
-          if (!canCaptureOfflineOrder(this.options.profile, this.options.user, entry.order.order_type)) continue;
+          if (!canRecoverOfflineOrder(this.options.profile, this.options.user, entry.order.order_type)) continue;
           if (entry.rounds.some((round) => !round.offline_printed) || entry.settlement && !entry.bill_printed) break;
-          if (entry.settlement && !canSettleOffline(this.options.profile, this.options.user)) break;
+          if (entry.settlement && !canRecoverOfflineTender(this.options.profile, this.options.user)) break;
           try {
             while (entry.next_round < entry.rounds.length) {
               const round = entry.rounds[entry.next_round];
@@ -510,7 +599,7 @@ export class OfflineOutbox {
               entry.server_invoice = reply.name; entry.next_round++; await save(entry);
             }
             if (!entry.settlement) { this.rememberOpen(entry); await remove(entry); continue; }
-            if (!canSettleOffline(this.options.profile, this.options.user)) break;
+            if (!canRecoverOfflineTender(this.options.profile, this.options.user)) break;
             if (entry.phase === 'order') { entry.phase = 'print'; await save(entry); }
             if (entry.phase === 'print') { await this.call('ury.ury.api.ury_print.qz_print_update', { invoice: entry.server_invoice }); entry.phase = 'settle'; await save(entry); }
             const paymentRow: Record<string, unknown> = {
@@ -566,6 +655,46 @@ export class OfflineOutbox {
       } catch (error) { this.replayFailure(error); }
     }).finally(() => { this.replaying = false; this.replayPromise = undefined; changed(); });
     return this.replayPromise;
+  }
+
+  async resolveReviewed(clientId: string, receipt: string): Promise<void> {
+    await exclusive(async () => {
+      const { profile, user } = this.options;
+      await this.verifyCashier();
+      const entry = (await this.list()).find((row) => row.client_order_id === clientId);
+      if (!entry || entry.state !== 'review' || offlineCaptureEnabled(profile) ||
+          !canRecoverOfflineOrder(profile, user, entry.order.order_type) ||
+          (entry.settlement && !canRecoverOfflineTender(profile, user))) throw new Error(t('offline.retry_unavailable'));
+
+      const name = receipt.trim();
+      const mismatch = () => new Error(t('offline.invoice_mismatch'));
+      if (!name || (entry.server_invoice && entry.server_invoice !== name)) throw mismatch();
+      const invoice = await this.call('frappe.client.get_value', {
+        doctype: 'POS Invoice', filters: { name },
+        fieldname: ['name', 'docstatus', 'pos_profile', 'customer', 'grand_total', 'currency', 'is_return', 'ury_client_order_id'],
+      }) as Record<string, unknown> | null;
+      const total = entry.rounds[entry.rounds.length - 1].expected_total;
+      if (!invoice || invoice.name !== name || invoice.docstatus !== 1 || invoice.is_return !== 0 ||
+          invoice.pos_profile !== profile.name || (entry.order.customer && invoice.customer !== entry.order.customer) ||
+          (profile.currency && invoice.currency !== profile.currency) ||
+          (invoice.ury_client_order_id ? invoice.ury_client_order_id !== clientId : entry.server_invoice !== name) ||
+          typeof invoice.grand_total !== 'number' || !Number.isFinite(invoice.grand_total) ||
+          Math.abs(invoice.grand_total - total) > offlineTolerance(profile.currency)) throw mismatch();
+      forgetOpenTableCheck(entry.owner, entry.order.table);
+      await remove(entry);
+    });
+  }
+
+  async retryReviewed(clientId: string): Promise<void> {
+    await exclusive(async () => {
+      await this.verifyCashier();
+      const row = (await this.list()).find((entry) => entry.client_order_id === clientId);
+      if (!row || row.state !== 'review' || row.needs_approval) throw new Error(t('offline.retry_unavailable'));
+      row.state = 'pending';
+      row.reason = undefined;
+      await save(row);
+    });
+    await this.replay();
   }
 
   async approveAndReplay(clientId: string, token: string, reason: string): Promise<void> {

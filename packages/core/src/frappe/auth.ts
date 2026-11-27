@@ -1,3 +1,4 @@
+import { postLogout } from './floor-request';
 import { gatewayStatusOf } from '../gateway-status';
 import { db, auth, NETWORK_FAILURE_MARK } from './client';
 import { clearAppStorage, purgeOfflineSession } from '../storage';
@@ -84,14 +85,15 @@ export const login = async (username: string, password: string): Promise<void> =
   await auth.loginWithUsernamePassword({ username, password });
 };
 
-export const logout = async () => {
+export const logout = async (floorUser?: string) => {
   try {
-    const result = await auth.logout();
+    const result = floorUser ? await postLogout(floorUser) : await auth.logout();
     // The POS worker must stop serving the old user's cached reads before navigation.
     clearAppStorage();
     await purgeOfflineSession();
     return result;
   }catch(e){
+    if (floorUser && e instanceof Error && e.message === 'URY_FLOOR_SESSION_MISMATCH') throw e;
     console.error('Error logging out:', e);
     return false;
   }
