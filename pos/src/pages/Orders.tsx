@@ -5,6 +5,7 @@ import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerg
 import { Badge, Button, Card, CardContent, Select, SelectItem } from '@ury/ui';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@ury/ui';
 import { showToast } from '@ury/ui';
+import { workstation } from '../lib/workstation';
 import OrderStatusSidebar from '../components/OrderStatusSidebar';
 import { useRootStore } from '../store/root-store';
 import { formatCurrency, normalizeFrappeTime } from '@ury/core';
@@ -22,7 +23,7 @@ import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
 import { usePendingBillCopies } from '../lib/pending-bill-copy';
 import { printBillCopy, printOrder } from '../lib/print';
-import { call, getSessionUser } from '@ury/core';
+import { call, getSessionUser, isLinkDown } from '@ury/core';
 import { splitBill, splitCheckMulti, cancelOrder, reprintKot } from '../lib/order-api';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
 import CheckPrivilegedDialog, { type CheckPrivilegedTab } from '../components/CheckPrivilegedDialog';
@@ -164,14 +165,14 @@ function LinkTag({ icon: Icon, children }: { icon: React.ComponentType<{ classNa
   );
 }
 
-export default function Orders() {
+export default function Orders({ onRegister }: { onRegister?: () => void } = {}) {
   const owner = useSessionOwner();
   const { pathname } = useLocation();
   if (pathname.replace(/\/$/, '') === '/orders/settled') return <SettledBills key={owner} />;
-  return <OwnerOrders key={owner} owner={owner} />;
+  return <OwnerOrders key={owner} owner={owner} onRegister={onRegister} />;
 }
 
-function OwnerOrders({ owner }: { owner: string | null }) {
+function OwnerOrders({ owner, onRegister }: { owner: string | null; onRegister?: () => void }) {
   const { 
     orders: list, ordersOwner, ordersBranch, ordersOffline,
     orderLoading,
@@ -204,7 +205,10 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   );
   const posStore = usePOSStore();
   const profileCurrency = posStore.posProfile?.currency;
+  const enabledKeys = workstation(posStore.posProfile?.custom_workstation_layout, profileCurrency || '').keys;
   const selectedOrderCurrency = selectedOrder?.currency || profileCurrency;
+  const checkMoney = (amount: number, currency = selectedOrderCurrency) =>
+    formatCurrency(amount, currency, { fixedPrecision: true });
   const printWarningMinutes = posStore.posProfile?.custom_invoice_warning_time ?? 0;
   const [clockNow, setClockNow] = React.useState(() => Date.now());
   useEffect(() => {
@@ -553,7 +557,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     setEditLoading(true);
     try {
       const res = await floorFetch(`/api/method/frappe.client.get?doctype=POS+Invoice&name=${selectedOrder.name}`);
-      if (!res.ok) throw new Error('Failed to fetch order details');
+      if (!res.ok) throw Object.assign(new Error(t('errors.failed_fetch_order')), { httpStatus: res.status });
       const data = await res.json();
       const order = data.message;
       if (order?.name !== selectedOrder.name || owner !== getSessionUser()) throw new Error(t('errors.failed_edit_order'));
@@ -577,6 +581,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       );
       if (order.restaurant_table) {
         posStore.setSelectedTable(order.restaurant_table, order.custom_restaurant_room || null,true);
+      }
+      if (order.order_type === 'Aggregators') {
+        const customer = order.custom_aggregator_id || order.customer;
+        if (customer) {
+          posStore.setSelectedAggregator({ customer });
+          void posStore.fetchAggregatorMenu(customer);
+        }
       }
       posStore.setSelectedCustomer({ id: order.customer, name: order.customer_name, phone: order.mobile_number });
       posStore.setGuestLabel(order.custom_guest_label || '');
@@ -625,9 +636,11 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         await posStore.addToOrder(cartItem);
       }
       // Redirect to POS page
-      navigate('/register');
+      if (onRegister) onRegister();
+      else navigate('/register');
     } catch (err) {
       showToast.error(parseFrappeError(err, t('errors.failed_edit_order')));
+      if (onRegister && (navigator.onLine === false || isLinkDown(err))) onRegister();
     } finally {
       setEditLoading(false);
     }
@@ -979,12 +992,24 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     return await selectOrder(response.message) && isCurrentSession();
   }
 
+  const menuButton = onRegister && (
+    <button className="min-h-11 self-start rounded border bg-background px-3" disabled={!ordersOffline && editLoading} onClick={() => {
+      if (!ordersOffline && !error && !selectedOrderError && selectedOrder && isOrderEditable(selectedOrder.status) && !Number(selectedOrder.invoice_printed)) {
+        void handleEditOrder();
+      } else {
+        onRegister();
+      }
+    }}>{t('workstation.menu')}</button>
+  );
+
   if (ordersOffline) {
-    return <p className="p-4 text-center text-amber-800" role="status">{t('offline.orders_unavailable')}</p>;
+    return <>{menuButton}<p className="p-4 text-center text-amber-800" role="status">{t('offline.orders_unavailable')}</p></>;
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48">
+    <div className={onRegister ? "flex h-full flex-col overflow-y-auto p-2" : "flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48"}>
+      {menuButton}
+      {!onRegister && <>
       {/* Left Sidebar - Order Types */}
       <div className="flex min-w-0 flex-col bg-white">
       <Link className="p-3 text-blue-700 underline" to="/orders/settled">{t('orders.settled_closed')}</Link>
@@ -1140,8 +1165,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         </div>
       </div>
 
+      </>}
       {/* Right Section - Order Details */}
-      <div className="flex min-h-96 min-w-0 flex-col rounded-lg border border-border bg-white lg:min-h-0 lg:w-[38%]">
+      <div className="flex min-h-96 min-w-0 flex-col rounded-lg border border-border bg-white lg:min-h-0 lg:w-[38%]" style={onRegister ? {flex: 1, width: "100%"} : undefined}>
         {!selectedOrder ? (
           <div className="text-center h-full flex flex-col items-center justify-center text-gray-500 p-6">
             <p className="text-lg font-medium mb-2">{t('order.select_to_view')}</p>
@@ -1163,6 +1189,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               <div className="flex items-center justify-between gap-2">
                 <h2 className="min-w-0 flex-1 break-words text-lg font-semibold text-gray-900">
                   {selectedOrder.name}
+                  {onRegister && posStore.posProfile?.active_business_date &&
+                    <time className="block text-xs">{posStore.posProfile.active_business_date}</time>}
                 </h2>
                 <div className="flex shrink-0 items-center gap-2">
                   {isOrderEditable(selectedOrder.status) && (
@@ -1396,6 +1424,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             : 'py-2 border-b border-gray-100'
                         }
                       >
+                        {item.custom_course && !isModifierRow && <h4 className="text-xs font-semibold">{item.custom_course}</h4>}
                         <div className="flex justify-between items-start gap-3">
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
@@ -1404,6 +1433,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                   ? `+ ${item.custom_modifier_prefix ? `${item.custom_modifier_prefix} ` : ''}${item.item_name}`
                                   : item.item_name}
                               </p>
+                              {item.custom_seat_no ? <Badge>{t('floor.seat_short', {seat: item.custom_seat_no})}</Badge> : null}
                               {discountPercentage !== null && (
                                 <Badge className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50 text-xs">
                                   -{discountPercentage}%
@@ -1426,7 +1456,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                       <Minus className="w-3 h-3" />
                                     )}
                                   </button>
-                                  <button
+                                  {(!onRegister || enabledKeys.includes('void')) && <button
                                     type="button"
                                     onClick={() => setVoidDialogItem(item)}
                                     disabled={isReducingThisItem}
@@ -1434,7 +1464,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                     className="text-xs font-medium text-red-700 hover:underline px-1.5 py-0.5 rounded border border-red-200 bg-red-50 disabled:opacity-50"
                                   >
                                     {t('void_return.confirm_void')}
-                                  </button>
+                                  </button>}
                                 </>
                               )}
                               <p className="text-xs text-gray-500">{t('orders.qty_label', { qty: item.qty })}</p>
@@ -1442,7 +1472,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                           </div>
                           <div className="shrink-0 text-end tabular-nums">
                             <p className="text-sm font-semibold text-gray-900">
-                              {formatCurrency(item.amount, selectedOrderCurrency)}
+                              {checkMoney(item.amount)}
                             </p>
                             {isOrderEditable(selectedOrder.status) && !isMergedBill(selectedOrder) && (
                               <button
@@ -1470,7 +1500,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                               {lineDiscountInfo?.reason ? ` · ${lineDiscountInfo.reason}` : ''}
                             </span>
                             <span className="shrink-0 font-medium tabular-nums">
-                              −{formatCurrency(lineDiscountTotal, selectedOrderCurrency)}
+                              −{checkMoney(lineDiscountTotal)}
                             </span>
                           </div>
                         )}
@@ -1505,7 +1535,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="text-sm font-bold text-emerald-900 tabular-nums">
-                        −{formatCurrency(selectedOrderDiscounts?.discount_amount || selectedOrder.discount_amount || 0, selectedOrderCurrency)}
+                        −{checkMoney(selectedOrderDiscounts?.discount_amount || selectedOrder.discount_amount || 0)}
                       </span>
                       {isOrderEditable(selectedOrder.status) && (
                         <Button
@@ -1545,7 +1575,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                       <div className="flex items-center justify-between gap-2 text-gray-700">
                         <span>{t('privileged_actions.sc_summary_net')}</span>
                         <span className="tabular-nums font-medium">
-                          {formatCurrency(subtotalVal, selectedOrderCurrency)}
+                          {checkMoney(subtotalVal)}
                         </span>
                       </div>
                       {discountVal > 0 && (
@@ -1557,7 +1587,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                               : ''}
                           </span>
                           <span className="tabular-nums font-medium">
-                            -{formatCurrency(discountVal, selectedOrderCurrency)}
+                            -{checkMoney(discountVal)}
                           </span>
                         </div>
                       )}
@@ -1580,7 +1610,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             <span className="text-gray-700">{sc.description}</span>
                           )}
                           <span className="tabular-nums font-medium text-gray-900">
-                            {formatCurrency(sc.tax_amount ?? sc.rate, selectedOrderCurrency)}
+                            {checkMoney(sc.tax_amount ?? sc.rate)}
                           </span>
                         </div>
                       ))}
@@ -1603,7 +1633,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             </span>
                           )}
                           <span className="tabular-nums text-gray-500">
-                            {formatCurrency(0, selectedOrderCurrency)}
+                            {checkMoney(0)}
                           </span>
                         </div>
                       )}
@@ -1611,7 +1641,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         <div key={`tax-${index}`} className="flex items-center justify-between gap-2 text-gray-600">
                           <span className="min-w-0 break-words">{tax.description}</span>
                           <span className="shrink-0 tabular-nums font-medium text-gray-900">
-                            {formatCurrency(tax.tax_amount ?? tax.rate, selectedOrderCurrency)}
+                            {checkMoney(tax.tax_amount ?? tax.rate)}
                           </span>
                         </div>
                       ))}
@@ -1619,7 +1649,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         <div key={`tip-${index}`} className="flex items-center justify-between gap-2 text-gray-600">
                           <span className="min-w-0 break-words">{tip.description}</span>
                           <span className="shrink-0 tabular-nums font-medium text-gray-900">
-                            {formatCurrency(tip.tax_amount ?? tip.rate, selectedOrderCurrency)}
+                            {checkMoney(tip.tax_amount ?? tip.rate)}
                           </span>
                         </div>
                       ))}
@@ -1641,7 +1671,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             <div className="font-medium text-gray-900">{p.mode_of_payment}</div>
                             {p.custom_tender_currency && Number(p.custom_tender_amount) > 0 && (
                               <div className="text-xs text-blue-700 tabular-nums">
-                                {formatCurrency(Number(p.custom_tender_amount), p.custom_tender_currency)}
+                                {checkMoney(Number(p.custom_tender_amount), p.custom_tender_currency)}
                                 {Number(p.custom_exchange_rate) > 0 ? ` @ ${p.custom_exchange_rate}` : ''}
                               </div>
                             )}
@@ -1653,7 +1683,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             )}
                           </div>
                           <span className="font-semibold text-gray-900 shrink-0 tabular-nums">
-                            {formatCurrency(Number(p.amount), selectedOrderCurrency)}
+                            {checkMoney(Number(p.amount))}
                           </span>
                         </div>
                       ))}
@@ -1677,7 +1707,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     ? 'order.print_bill' : displayedRetry ? 'order.retry_copy' : 'order.print_receipt')}
                 </Button>
                 {/* Open-Check Discount Key (Simphony/SAP: sits on the open check, not in PaymentDialog) */}
-                {isOrderEditable(selectedOrder.status) && (
+                {isOrderEditable(selectedOrder.status) && (!onRegister || enabledKeys.includes('discount')) && (
                   <Button
                     type="button"
                     variant="outline"
@@ -1743,10 +1773,10 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                   {isMergedBill(selectedOrder) ? (
                     <span className="flex flex-col items-end leading-tight">
                       <span className="text-xs font-medium text-gray-500">{t('bill_merge.combined_total')}</span>
-                      <span>{formatCurrency(selectedOrderTotals.roundedTotal, selectedOrderCurrency)}</span>
+                      <span>{checkMoney(selectedOrderTotals.roundedTotal)}</span>
                     </span>
                   ) : (
-                    formatCurrency(selectedOrder.rounded_total || selectedOrder.grand_total || 0, selectedOrderCurrency)
+                    checkMoney(selectedOrder.rounded_total || selectedOrder.grand_total || 0)
                   )}
                 </span>
               </div>

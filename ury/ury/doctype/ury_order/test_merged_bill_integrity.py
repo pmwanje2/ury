@@ -728,7 +728,7 @@ class TestAddCheckDiscountsAndTenders(Loaded):
         self.assertAlmostEqual(saved_pct.discount_amount, 25.0, places=2)
 
 
-class TestSettlementPreservesExistingTenders(Loaded):
+class SettlementFixture(Loaded):
     """P1: make_invoice must keep every earlier tender (mode, amount, reference) plus new tenders,
     never silently dropping or reducing a tender already recorded on the check."""
 
@@ -771,6 +771,8 @@ class TestSettlementPreservesExistingTenders(Loaded):
                 room_number=room_number,
             )
 
+
+class TestSettlementPreservesExistingTenders(SettlementFixture):
     def test_refuses_dropping_an_existing_tender_on_settle(self):
         check = Check(
             "LKG-00061",

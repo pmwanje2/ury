@@ -1,4 +1,12 @@
 {
+  "workstation": {
+    "exact": "Exact cash",
+    "repeat": "Repeat round",
+    "overlay": "Server overlay",
+    "check": "Check",
+    "menu": "Menu",
+    "plu": "Item code"
+  },
   "hold_fire": {
     "action": "hold and fire",
     "title": "Kitchen hold and fire",

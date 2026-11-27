@@ -25,6 +25,8 @@ import { offlineCaptureEnabled } from '../pwa/runtime-caching';
 import { bindOfflineUser, cachedOfflineProfile, syncOfflineCapture } from '../pwa/register-offline';
 
 // Constants
+// Both catalog requests populate the same grid. Only publish the most recently requested menu.
+let menuRequestVersion = 0;
 const MAX_QUANTITY = 99;
 const MIN_QUANTITY = 0;
 
@@ -601,8 +603,12 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   fetchMenuItems: async () => {
-    const { posProfile, selectedRoom, selectedOrderType, selectedCustomer } = get();
+    const { posProfile, selectedRoom, selectedOrderType, selectedCustomer, selectedAggregator } = get();
+    if (selectedOrderType === 'Aggregators' && selectedAggregator) {
+      return get().fetchAggregatorMenu(selectedAggregator.customer);
+    }
     if (!posProfile?.restaurant) return;
+    const version = ++menuRequestVersion;
 
     try {
       set({ menuLoading: true, menuUnavailableOffline: false, error: null });
@@ -619,6 +625,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
             tax_summary: null,
             price_list: null,
           };
+      if (version !== menuRequestVersion) return;
       const items = payload.items || [];
       
       const menuItems: MenuItem[] = items.map((item: any) => ({
@@ -656,6 +663,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         activePriceList: payload.price_list ?? null,
       }));
     } catch (error) {
+      if (version !== menuRequestVersion) return;
       if (offlineMenuReadFailed(error, posProfile)) {
         set({ menuUnavailableOffline: true });
         return;
@@ -663,14 +671,16 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);
     } finally {
-      set({ menuLoading: false });
+      if (version === menuRequestVersion) set({ menuLoading: false });
     }
   },
 
   fetchAggregatorMenu: async (aggregator: string) => {
+    const version = ++menuRequestVersion;
     try {
       set({ menuLoading: true, menuUnavailableOffline: false, error: null });
       const items = await menuApi.getAggregatorMenu(aggregator);
+      if (version !== menuRequestVersion) return;
       
       const menuItems: MenuItem[] = items.map((item: any) => ({
         ...item,
@@ -683,6 +693,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
       set((state) => ({ ...withMenuItems(state, menuItems), menuLoading: false }));
     } catch (error) {
+      if (version !== menuRequestVersion) return;
       set({ error: 'Failed to load aggregator menu', menuLoading: false });
       console.error('Error loading aggregator menu:', error);
     }

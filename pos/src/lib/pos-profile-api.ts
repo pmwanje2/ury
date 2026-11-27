@@ -146,6 +146,7 @@ export interface PosProfileFull extends CoversProfile {
   branch: string;
   currency: string;
   role_allowed_for_billing: RolePermission[];
+  assigned_billing_user?: string | null;
   role_restricted_for_table_order?: RolePermission[];
   /** Roles that must not see grand/net total and expected amounts (POS Profile config). */
   role_masked_for_amounts?: RolePermission[];
@@ -159,6 +160,7 @@ export interface PosProfileFull extends CoversProfile {
   custom_enable_payment_without_printing?: number;
   custom_blind_cash_count?: number;
   /** One configured void reason per line. Absent on sites without the field. */
+  custom_workstation_layout?: string | null;
   custom_void_reasons?: string | null;
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;

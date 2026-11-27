@@ -1922,15 +1922,15 @@ def sync_merged_invoice(doc):
         # The partner keeps the tenders make_invoice allocated and saved on it; the
         # primary's tender rows are the primary's, never copied onto the partner.
 
-        # sync submit/payment status
-        if doc.docstatus == 1:
+        # The linked document is a separate instance with its own precision cache.
+        from ury.ury_pos.discount import with_currency_precision
 
-            target.flags.ignore_validate_update_after_submit = True
+        with with_currency_precision(target):
+            if doc.docstatus == 1:
+                target.flags.ignore_validate_update_after_submit = True
             target.save(ignore_permissions=True)
-            target.submit()
-
-        else:
-            target.save(ignore_permissions=True)
+            if doc.docstatus == 1:
+                target.submit()
 
         frappe.publish_realtime(
             "pos_invoice_updated",

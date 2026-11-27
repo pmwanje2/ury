@@ -15,9 +15,23 @@ import math
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import flt
 
-from ury.ury_pos.approval_currency import company_approval_amount, verified_invoice_approval_currency
+try:
+    from frappe.utils import cint
+except ImportError:
+    def cint(value):
+        try:
+            return int(flt(value))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+from ury.ury_pos.approval_currency import (
+    THREE_DECIMAL_CURRENCIES,
+    ZERO_DECIMAL_CURRENCIES,
+    company_approval_amount,
+    verified_invoice_approval_currency,
+)
 from ury.ury_pos.auth_challenge import attach_auth_challenge
 
 from ury.brand import coded_message
@@ -83,9 +97,6 @@ def _date_str(value):
         return str(fn(value))
     return str(value)[:10]
 
-ZERO_DECIMAL_CURRENCIES = frozenset({"UGX", "JPY", "KRW", "RWF", "TZS", "XAF", "XOF", "BIF", "GNF", "MGA", "VND"})
-THREE_DECIMAL_CURRENCIES = frozenset({"KWD", "BHD", "OMR", "JOD", "TND", "IQD"})
-
 FALLBACK_POS_REASONS = (
     {"name": "Corporate rate", "code": "Corporate rate", "description": "Corporate rate", "applies_to": "POS", "requires_supervisor": 0, "requires_note": 0, "sort_order": 10, "disabled": 0},
     {"name": "Complaint", "code": "Complaint", "description": "Complaint", "applies_to": "Both", "requires_supervisor": 0, "requires_note": 0, "sort_order": 20, "disabled": 0},
@@ -94,20 +105,26 @@ FALLBACK_POS_REASONS = (
 )
 
 
-from ury.ury_pos import override as _OVERRIDE_MODULE
-
-
 def _get_override_module():
     """Return B2a's manager override module."""
-    return _OVERRIDE_MODULE
+    from ury.ury_pos import override
+
+    return override
 
 
-def currency_precision(doc=None, currency=None):
-    code = (currency or (doc.get("currency") if doc is not None else None) or "").strip().upper()
+def _minor_unit_override(currency):
+    code = currency.strip().upper() if isinstance(currency, str) else None
     if code in ZERO_DECIMAL_CURRENCIES:
         return 0
     if code in THREE_DECIMAL_CURRENCIES:
         return 3
+    return None
+
+
+def currency_precision(doc=None, currency=None):
+    places = _minor_unit_override(currency or (doc.get("currency") if doc is not None else None))
+    if places is not None:
+        return places
     if doc is not None and callable(getattr(doc, "precision", None)):
         try:
             p = doc.precision("grand_total")
@@ -120,15 +137,21 @@ def currency_precision(doc=None, currency=None):
 
 @contextmanager
 def _with_currency_precision(doc, prec=None):
-    """Ensure ISO 0-decimal (UGX) and 3-decimal (KWD) currencies calculate and save at
-    their true minor-unit precision even when Frappe System Settings currency_precision
-    defaults to 2."""
-    code = (doc.get("currency") if doc is not None else None) or ""
-    if code.strip().upper() not in (ZERO_DECIMAL_CURRENCIES | THREE_DECIMAL_CURRENCIES):
+    """Round invoice and company amounts in their respective currencies during native recalculation."""
+    read = getattr(doc, "get", lambda field: getattr(doc, field, None))
+    code = read("currency")
+    if not isinstance(code, str) or not code or not callable(getattr(doc, "precision", None)):
         yield
         return
-    if prec is None:
-        prec = currency_precision(doc)
+    company = read("company")
+    base_code = frappe.get_cached_value("Company", company, "default_currency") if company else None
+    base_precision = _minor_unit_override(base_code)
+    transaction_precision = _minor_unit_override(code)
+    if transaction_precision is not None and prec is not None:
+        transaction_precision = prec
+    if transaction_precision is None and base_precision is None:
+        yield
+        return
 
     saved = []
 
@@ -141,10 +164,21 @@ def _with_currency_precision(doc, prec=None):
         had_cache = hasattr(obj, "_precision")
         orig_cache = getattr(obj, "_precision", None)
 
-        def _iso_precision(fieldname, parentfield=None, _orig=orig_fn, _prec=prec):
-            if fieldname in _CURRENCY_PRECISION_FIELDS:
-                return _prec
-            return _orig(fieldname, parentfield)
+        def _iso_precision(fieldname, parentfield=None):
+            meta = getattr(obj, "meta", None)
+            if meta and parentfield:
+                table = parentfield if isinstance(parentfield, str) else parentfield.get("parentfield")
+                child_type = getattr(meta.get_field(table), "options", None)
+                if child_type:
+                    meta = frappe.get_meta(child_type)
+            field = meta.get_field(fieldname) if meta else None
+            options = getattr(field, "options", None)
+            is_currency = getattr(field, "fieldtype", None) == "Currency" or fieldname in _CURRENCY_PRECISION_FIELDS
+            if (is_currency and fieldname.startswith("base_")) or options == "Company:company:default_currency":
+                return base_precision if base_precision is not None else orig_fn(fieldname, parentfield)
+            if transaction_precision is not None and (fieldname in _CURRENCY_PRECISION_FIELDS or options == "currency"):
+                return transaction_precision
+            return orig_fn(fieldname, parentfield)
 
         try:
             setattr(obj, "precision", _iso_precision)
@@ -154,7 +188,7 @@ def _with_currency_precision(doc, prec=None):
 
     _patch_obj(doc)
     for child_field in ("items", "taxes", "payments"):
-        for row in doc.get(child_field) or []:
+        for row in read(child_field) or []:
             _patch_obj(row)
     try:
         yield

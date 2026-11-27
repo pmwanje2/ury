@@ -42,6 +42,7 @@ export function extractErrorMessage(error: any, fallback = 'Failed to process re
 }
 
 export interface Room {
+  room_type?: string;
   name: string;
   branch: string;
 }
@@ -115,12 +116,24 @@ export async function getRestaurantMenu(posProfile: string, room?: string | null
 
 export async function getRooms(branch: string): Promise<Room[]> {
   const rooms = await db.getDocList(DOCTYPES.URY_ROOM, {
-    fields: ['name', 'branch'],
-    filters: [['branch', 'like', branch]],
+    fields: ['name', 'branch', 'room_type'],
+    filters: [['branch', '=', branch]],
     limit: 0,
     asDict: true,
   });
   return rooms as Room[];
+}
+
+export async function getRoomServers(branch: string, tables: string[]): Promise<Record<string, string>> {
+  if (!tables.length) return {};
+  const rows = await db.getDocList('POS Invoice', {
+    fields: ['restaurant_table', 'waiter'],
+    filters: [['branch', '=', branch], ['docstatus', '=', 0], ['restaurant_table', 'in', tables]],
+    orderBy: { field: 'creation', order: 'desc' }, limit: 0,
+  });
+  const servers: Record<string, string> = {};
+  for (const row of rows) servers[row.restaurant_table] ??= row.waiter || '';
+  return servers;
 }
 
 export async function getTableCount(room: string, branch?: string): Promise<number> {

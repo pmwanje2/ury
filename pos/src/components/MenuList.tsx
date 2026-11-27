@@ -10,6 +10,7 @@ import type { MenuAvailability } from '../lib/availability-api';
 const EMPTY_AVAILABILITY: MenuAvailability = {};
 
 interface MenuListProps {
+  pageItems?: string[];
   onItemClick: (item: any) => void;
   availabilityMap?: MenuAvailability;
   /** The counts in availabilityMap could not be re-read; cards mark them unconfirmed. */
@@ -17,7 +18,7 @@ interface MenuListProps {
   itemAvailabilityActions?: (item: string) => AvailabilityActions;
 }
 
-const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPTY_AVAILABILITY, availabilityStale = false, itemAvailabilityActions }) => {
+const MenuList: React.FC<MenuListProps> = ({ pageItems, onItemClick, availabilityMap = EMPTY_AVAILABILITY, availabilityStale = false, itemAvailabilityActions }) => {
   const {
     menuItems,
     menuLoading,
@@ -38,9 +39,10 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
   }, [fetchMenuItems]);
 
   const filteredItems = useMemo(() => {
+    const page = pageItems && new Set(pageItems);
     const filtered = menuItems.filter(item => {
       const searchTerm = searchQuery.toLowerCase();
-      const matchesCategory = !selectedCategory || item.course === selectedCategory;
+      const matchesCategory = page ? page.has(item.item) : !selectedCategory || item.course === selectedCategory;
       const matchesSearch = !searchQuery || 
         item.name.toLowerCase().includes(searchTerm) ||
         item.item.toLowerCase().includes(searchTerm);
@@ -51,12 +53,12 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
     });
 
     return sortMenuItemsByAvailability(filtered, availabilityMap);
-  }, [menuItems, selectedCategory, searchQuery, quickFilter, availabilityMap]);
+  }, [pageItems, menuItems, selectedCategory, searchQuery, quickFilter, availabilityMap]);
 
   const isInteractionDisabled = isMenuInteractionDisabled() || isOrderInteractionDisabled();
 
   return (
-    <div className="flex-1 overflow-auto bg-gray-50 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+    <div className="flex-1 overflow-auto bg-muted [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
       <div className="max-w-screen-xl mx-auto p-4 pb-40">
         {menuLoading ? (
           <div className="h-96">

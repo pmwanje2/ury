@@ -82,7 +82,8 @@ vi.mock("react-router-dom", () => ({
 }));
 
 // Mock core functions
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@ury/core")>()),
   getSessionUser: () => "cashier@example.com",
   formatCurrency: (amount: number) => `Rs. ${amount}`,
   normalizeFrappeTime: (time: any) => time || "2026-11-03 12:00:00",
@@ -330,6 +331,50 @@ describe("Orders guest label", () => {
     render(<Orders />);
     expect(screen.getAllByText("Walk In")).toHaveLength(2);
     expect(screen.queryByText(/ · Walk In/)).not.toBeInTheDocument();
+  });
+
+  it('returns to the menu from an offline embedded check', () => {
+    mockRootStoreState.ordersOffline = true;
+    const onRegister = vi.fn();
+    try {
+      render(<Orders onRegister={onRegister} />);
+      expect(screen.getByRole('status')).toHaveTextContent('offline.orders_unavailable');
+      fireEvent.click(screen.getByRole('button', {name: 'workstation.menu'}));
+      expect(onRegister).toHaveBeenCalledOnce();
+    } finally { mockRootStoreState.ordersOffline = false; }
+  });
+
+  it.each([
+    ['gateway', () => Promise.resolve(new Response(null, { status: 503 }))],
+    ['dropped connection', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ] as const)('returns from Check Detail after a %s with an online browser', async (_, fetchOrder) => {
+    mockRootStoreState.selectedOrder = {...order, invoice_printed: 0};
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    vi.stubGlobal('fetch', vi.fn(fetchOrder));
+    try {
+      const onRegister = vi.fn();
+      render(<Orders onRegister={onRegister} />);
+      fireEvent.click(screen.getByRole('button', {name: 'workstation.menu'}));
+      await waitFor(() => expect(onRegister).toHaveBeenCalledOnce());
+      expect(navigateMock).not.toHaveBeenCalled();
+    } finally { online.mockRestore(); vi.unstubAllGlobals(); }
+  });
+
+  it('restores the saved aggregator when reopening its check from Menu', async () => {
+    const check = {...order, invoice_printed: 0, order_type: 'Aggregators', custom_aggregator_id: 'Partner A'};
+    mockRootStoreState.selectedOrder = check;
+    Object.assign(mockPosStore, {
+      resetOrderState: vi.fn(), setSelectedOrderType: vi.fn(), setOrderForUpdate: vi.fn(),
+      setSelectedCustomer: vi.fn(), setGuestLabel: vi.fn(), setSelectedAggregator: vi.fn(), fetchAggregatorMenu: vi.fn(),
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ok: true, json: async () => ({message: {...check, items: []}})})));
+    try {
+      const onRegister = vi.fn();
+      render(<Orders onRegister={onRegister} />);
+      fireEvent.click(screen.getByRole('button', {name: 'workstation.menu'}));
+      await waitFor(() => expect(onRegister).toHaveBeenCalledOnce());
+      expect(mockPosStore.setSelectedAggregator).toHaveBeenCalledWith({customer: 'Partner A'});
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("editing the order loads its saved label into the cart", async () => {

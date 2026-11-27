@@ -39,7 +39,7 @@ describe("OpenEntries", () => {
     render(<OpenEntries />);
 
     await waitFor(() => {
-      expect(screen.getByText("Open Sessions")).toBeInTheDocument();
+      expect(screen.getByText("open_entries.title")).toBeInTheDocument();
     });
   });
 
@@ -61,7 +61,7 @@ describe("OpenEntries", () => {
     render(<OpenEntries />);
 
     await waitFor(() => {
-      expect(screen.getByText("Failed to load open sessions")).toBeInTheDocument();
+      expect(screen.getByText("open_entries.error_load")).toBeInTheDocument();
     });
   });
 
@@ -71,7 +71,7 @@ describe("OpenEntries", () => {
     render(<OpenEntries />);
 
     await waitFor(() => {
-      expect(screen.getByText("No open POS sessions")).toBeInTheDocument();
+      expect(screen.getByText("open_entries.no_sessions")).toBeInTheDocument();
     });
   });
 
@@ -131,7 +131,7 @@ describe("OpenEntries", () => {
     render(<OpenEntries />);
 
     await waitFor(() => {
-      expect(screen.getByText("Open Sessions")).toBeInTheDocument();
+      expect(screen.getByText("open_entries.title")).toBeInTheDocument();
       // Should not call the API
       expect(getOpenPosOpeningEntriesMock).not.toHaveBeenCalled();
     });

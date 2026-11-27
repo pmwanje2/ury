@@ -5,8 +5,17 @@ import { formatCurrency, db } from '@ury/core';
 import { OrderItem, usePOSStore } from '../store/pos-store';
 import type { BundleOverride, ModifierGroup, SelectedModifier } from '../lib/menu-api';
 import { t } from '../i18n';
+import { prepChoice, pricedCondiment, validSelectionCount } from '../lib/condiment';
+import { buildComboChoice } from '../lib/combo-choice';
+
+export interface ConfiguredItemGroup {
+  parent: OrderItem;
+  children: OrderItem[];
+}
 
 interface ProductDialogProps {
+  onConfirm?: (groups: ConfiguredItemGroup[]) => void;
+  initialComment?: string;
   onClose: () => void;
   editMode?: boolean;
   initialVariant?: { id: string; name: string; price: number };
@@ -72,6 +81,8 @@ function buildInitialSelections(
 
 const ProductDialog: React.FC<ProductDialogProps> = ({
   onClose,
+  onConfirm,
+  initialComment,
   editMode = false,
   initialAddons = [],
   initialQuantity,
@@ -113,8 +124,9 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
       catalogMatch?.is_combo_meal
   );
 
+  const stagingRound = Boolean(onConfirm);
   const existingCartItem =
-    selectedItem && !isConfigurable
+    selectedItem && !isConfigurable && !stagingRound
       ? activeOrders.find(
           (order) =>
             order.id === selectedItem.id &&
@@ -138,7 +150,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         : '0'
   );
   const [comments, setComments] = useState<string>(
-    itemToReplace?.comment || existingCartItem?.comment || ''
+    initialComment ?? (itemToReplace?.comment || existingCartItem?.comment || '')
   );
   const [addonsLoading, setAddonsLoading] = useState(false);
   const [addonsError, setAddonsError] = useState<string | null>(null);
@@ -172,8 +184,8 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
 
   useEffect(() => {
     if (!editMode && selectedItem) {
-      if (isConfigurable) {
-        setQuantity('1');
+      if (isConfigurable || stagingRound) {
+        setQuantity(String(initialQuantity || 1));
       } else if (existingCartItem) {
         setQuantity(existingCartItem.quantity.toString());
         setComments(existingCartItem.comment || '');
@@ -181,7 +193,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         setQuantity(getItemQuantityFromCart(selectedItem).toString());
       }
     }
-  }, [selectedItem, editMode, isConfigurable, getItemQuantityFromCart, existingCartItem]);
+  }, [initialQuantity, selectedItem, editMode, isConfigurable, stagingRound, getItemQuantityFromCart, existingCartItem]);
 
   const addonDetails = useMemo(() => {
     const rows = Array.isArray(itemDoc?.custom_pos_add_on_items)
@@ -212,9 +224,8 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
   const missingRequiredGroups = useMemo(() => {
     const missing: string[] = [];
     for (const grp of modifierGroups) {
-      const minReq = Math.max(grp.min_selections || 0, grp.required ? 1 : 0);
       const count = (selectedByGroup[grp.name] || []).length;
-      if (count < minReq) {
+      if (!validSelectionCount(grp, count)) {
         missing.push(grp.display_title || grp.name);
       }
     }
@@ -357,73 +368,16 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
           if (!opt) continue;
 
           if (grp.group_type === 'Combo Choice' || opt.replaces_bundle_item) {
-            const chosenItemCode = opt.item || opt.option_code;
-            bundleOverrides.push({
-              group: grp.name,
-              slot_item: opt.replaces_bundle_item || '',
-              chosen_item: chosenItemCode,
-              option_code: opt.option_code,
-              label: opt.label,
-              qty: opt.qty || 1,
-              inherit_parent_routing: grp.inherit_parent_routing ? 1 : 0,
-              hide_on_receipt: grp.hide_unpriced_on_receipt ? 1 : 0,
-            });
-            const upcharge = Number(opt.unit_price ?? opt.upcharge_amount ?? 0);
-            if (opt.price_mode === 'Combo Upcharge' && upcharge > 0) {
-              const feeItemCode = opt.upcharge_item || chosenItemCode;
-              childRows.push({
-                id: feeItemCode,
-                item: feeItemCode,
-                name: opt.label,
-                item_name: opt.label,
-                image: null,
-                price: upcharge,
-                quantity: numericQuantity * (opt.qty || 1),
-                course: selectedItem.course || '',
-                special_dish: 0,
-                tax_rate: 0,
-                parentLineKey: parentKey,
-                isModifier: true,
-                lineRole: 'Combo Upcharge',
-                modifierGroup: grp.name,
-                modifierOption: opt.option_code,
-                modifierPrefix: sel.prefix || null,
-                inheritParentRouting: grp.inherit_parent_routing,
-                hideUnpricedOnReceipt: false,
-              });
-            }
+            const { override, fee } = buildComboChoice(grp, opt, numericQuantity, selectedItem.course, sel.prefix);
+            bundleOverrides.push(override);
+            if (fee) childRows.push({ ...fee, parentLineKey: parentKey });
           } else if (opt.price_mode === 'Menu Item Price') {
-            const modItemCode = opt.item || opt.option_code;
             childRows.push({
-              id: modItemCode,
-              item: modItemCode,
-              name: opt.label,
-              item_name: opt.label,
-              image: null,
-              price: Number(opt.unit_price || 0),
-              quantity: numericQuantity * (opt.qty || 1),
-              course: selectedItem.course || '',
-              special_dish: 0,
-              tax_rate: 0,
+              ...pricedCondiment(grp, opt, numericQuantity, selectedItem.course, sel.prefix),
               parentLineKey: parentKey,
-              isModifier: true,
-              lineRole: 'Modifier',
-              modifierGroup: grp.name,
-              modifierOption: opt.option_code,
-              modifierPrefix: sel.prefix || null,
-              inheritParentRouting: grp.inherit_parent_routing,
-              hideUnpricedOnReceipt: false,
             });
           } else {
-            // Unpriced Prep: stored on parent ONLY — ZERO extra invoice rows (EFRIS safe!)
-            unpricedMods.push({
-              group: grp.name,
-              option_code: opt.option_code,
-              label: opt.label,
-              prefix: sel.prefix || null,
-              price_mode: opt.price_mode,
-              hide_on_receipt: grp.hide_unpriced_on_receipt ? 1 : 0,
-            });
+            unpricedMods.push(prepChoice(grp, opt, sel.prefix));
           }
         }
       }
@@ -446,41 +400,32 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         hideUnpricedOnReceipt: unpricedMods.some((m) => m.hide_on_receipt === 1),
       };
 
+      if (onConfirm) {
+        onConfirm([{ parent: parentRow, children: childRows }]);
+        return;
+      }
       void addConfiguredItems(parentRow, childRows, editMode ? itemToReplace?.uniqueId : undefined);
       handleClose();
       return;
     }
 
+    const parent = { ...selectedItem, quantity: numericQuantity, price: basePrice, comment: comments || undefined };
+    const rows = [parent, ...selectedAddons.map(addon => {
+      const menuAddon = menuItems.find(item => item.item === addon.id);
+      return {
+        ...(menuAddon ?? {
+          id: addon.id, name: addon.name, image: null, item: addon.id, item_name: addon.name,
+          course: '', description: '', special_dish: 0, tax_rate: 0,
+        }),
+        quantity: numericQuantity, price: addon.price,
+      } as OrderItem;
+    })];
+    if (onConfirm) {
+      onConfirm(rows.map(row => ({ parent: row, children: [] })));
+      return;
+    }
     if (editMode && itemToReplace?.uniqueId) removeFromOrder(itemToReplace.uniqueId);
-
-    addToOrder({
-      ...selectedItem,
-      quantity: numericQuantity,
-      price: basePrice,
-      comment: comments || undefined,
-    });
-
-    selectedAddons.forEach((addon) => {
-      const menuAddon = menuItems.find((item) => item.item === addon.id);
-      if (menuAddon) {
-        addToOrder({ ...menuAddon, quantity: numericQuantity, price: addon.price });
-      } else {
-        addToOrder({
-          id: addon.id,
-          name: addon.name,
-          price: addon.price,
-          quantity: numericQuantity,
-          image: null,
-          item: addon.id,
-          item_name: addon.name,
-          course: '',
-          description: '',
-          special_dish: 0,
-          tax_rate: 0,
-        } as OrderItem);
-      }
-    });
-
+    for (const row of rows) void addToOrder(row);
     handleClose();
   };
 

@@ -5,6 +5,7 @@ import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
 import { call } from '@ury/core';
 import { t } from '../i18n';
+import { workstation } from '../lib/workstation';
 import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
 import { canSettleOffline } from '../offline/outbox';
 import { useRootStore } from '../store/root-store';
@@ -597,8 +598,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     if (metaType) return metaType === 'Cash';
     return /^cash$/i.test(mode) || (Boolean(getFxCurrency(mode)) && /\bcash\b/i.test(mode));
   };
+  const minorTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(currencyCode));
   const rawExcess = rawTotalTendered - amountDue;
-  const hasExcess = rawExcess > 0.005;
+  const hasExcess = rawExcess > minorTolerance;
   const cashTendered = combinedPayments.reduce(
     (sum, p) => (isCashMode(p.mode_of_payment) ? sum + p.amount : sum),
     0,
@@ -608,11 +610,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     .map((p) => p.mode_of_payment);
   const nonCashExcess = hasExcess ? roundToCurrency(Math.max(0, rawExcess - cashTendered), currencyCode) : 0;
   const cashChangeDue =
-    hasExcess && nonCashExcess <= 0.005
+    hasExcess && nonCashExcess <= minorTolerance
       ? roundToCurrency(Math.max(0, Math.min(rawExcess, cashTendered)), currencyCode)
       : 0;
   const nonCashAllowsTip =
-    nonCashExcess > 0.005 &&
+    nonCashExcess > minorTolerance &&
     nonCashModes.length > 0 &&
     nonCashModes.every((mode) => modeMeta[mode]?.overtender_rule === 'Post to Charged Tip');
 
@@ -658,7 +660,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         ...(roomApproval ? { room_charge_approval: roomApproval.token, room_charge_reason: roomApproval.reason } : {}),
       }
     : {};
-  const minorTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(currencyCode));
   const rawShortfall = amountDue - rawTotalTendered;
   const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
   const isShort = rawShortfall > minorTolerance;
@@ -885,6 +886,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     }
   },[balanceDue,receivedTotal,paymentModes,defaultPaymentMode])
 
+  const layout = workstation(storePosProfile?.custom_workstation_layout, currencyCode);
   const clearAutoFilledDefaultIfOther = (activeModeId: string) => {
     const autoMode = autoFilledDefaultRef.current;
     if (autoMode && autoMode !== activeModeId) {
@@ -1263,6 +1265,19 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                       )}
                     </div>
 
+                    {!fxCurr && isCashMode(id) && (
+                      <div className="flex flex-wrap gap-1">
+                        {layout.keys.flatMap(key => key === 'exact' ? ['exact'] : key === 'cash' ? layout.cash.map(String) : []).map(key =>
+                          <Button key={key} type="button" variant="outline" disabled={isProcessing} onClick={() => {
+                            const other = newPayments.filter(row => row.mode_of_payment !== id &&
+                              row.mode_of_payment !== autoFilledDefaultRef.current).reduce((sum, row) => sum + row.amount, 0);
+                            clearAutoFilledDefaultIfOther(id);
+                            const amount = key === 'exact' ? Math.max(0, roundToCurrency(balanceDue - other, currencyCode)) : Number(key);
+                            setPaymentInputs(prev => ({ ...prev, [id]: String(amount) }));
+                          }}>{key === 'exact' ? t('workstation.exact') : formatMoney(Number(key))}</Button>)}
+                      </div>
+                    )}
+
                     {fxCurr && fxRate && (
                       <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-gray-600 ps-1">
                         <span className="tabular-nums">
@@ -1535,7 +1550,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                   : t('payment.change_due', { amount: formatMoney(cashChangeDue) })}
               </p>
             )}
-            {nonCashExcess > 0.005 && (
+            {nonCashExcess > minorTolerance && (
               <p className={`${nonCashAllowsTip ? 'text-blue-700' : 'text-red-700'} text-sm font-medium`}>
                 {t(nonCashAllowsTip ? 'payment.overtender_to_tip' : 'payment.non_cash_overtender', {
                   amount: formatMoney(nonCashExcess),

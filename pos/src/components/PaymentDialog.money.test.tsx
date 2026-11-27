@@ -588,3 +588,20 @@ describe("getRemainingBalance uses the currency's rounding", () => {
     expect(document.body.textContent).not.toContain("USD 19100.00");
   });
 });
+
+it.each([['KWD', 0.997, 1, 0.003], ['USD', 0.99, 1, 0.01], ['UGX', 4999, 5000, 1]] as const)(
+  'returns the change from a %s denomination key at settlement', async (currency, due, cash, change) => {
+    setTill(['Cash'], { currency });
+    renderDialog(due, due);
+    const settled = vi.fn();
+    window.addEventListener('pos:payment-settled', settled);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: currency + ' ' + cash.toFixed(2) }));
+      expect(screen.getByText('payment.change_due')).toBeVisible();
+      fireEvent.click(payButton());
+      await waitFor(() => expect(settled).toHaveBeenCalledWith(expect.objectContaining({
+        detail: expect.objectContaining({changeAmount: change, payments: [{mode_of_payment: 'Cash', amount: cash}]})
+      })));
+    } finally { window.removeEventListener('pos:payment-settled', settled); }
+  },
+);
