@@ -66,3 +66,27 @@ it('keeps only the latest recent-order load when responses overlap', async () =>
   expect(recent.menu.cart.map(row => row.name)).toEqual(['pie-row']);
   expect(recent.menu.comments).toBe('latest');
 });
+
+it('keeps the latest split check when two floor table loads resolve out of order', async () => {
+  setActivePinia(createPinia());
+  const floor = useTableStore();
+  const table = { name: 'T1', occupied: 1 };
+  const rows = ['east-soup', 'west-pie', 'west-soup'].map(name => ({
+    name, item_code: name.endsWith('soup') ? 'Soup' : 'Pie', qty: 1, rate: 10,
+  }));
+  const response = comment => ({ message: {
+    name: 'Check', waiter: 'captain', custom_comments: comment, items: rows,
+  } });
+  let first, second;
+  api.get.mockImplementationOnce(() => new Promise(resolve => { first = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { second = resolve; }));
+
+  floor.routeToMenu(table);
+  floor.routeToMenu(table);
+  second(response('latest'));
+  await flushPromises();
+  first(response('stale'));
+  await flushPromises();
+  expect(floor.menu.cart.map(row => row.name)).toEqual(rows.map(row => row.name));
+  expect(floor.menu.comments).toBe('latest');
+});

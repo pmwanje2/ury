@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const bootstrapMock = vi.fn()
@@ -32,6 +32,7 @@ vi.mock('../lib/availability', async (importOriginal) => ({
   getAvailabilityMessage: (reasonCode: string) => getAvailabilityMessageMock(reasonCode),
 }))
 
+import MobileQRLayout from '../layouts/MobileQRLayout'
 import { useOrderingSession } from './useOrderingSession'
 import { t } from '../i18n'
 import type { CustomerOrder, MenuItem, OrderingContext } from '../lib/api'
@@ -122,6 +123,37 @@ describe('useOrderingSession', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('submits the cart and gratuity once when Pay Online is pressed twice', async () => {
+    const context = buildContext()
+    context.capabilities = { ...context.capabilities, product_detail_enabled: false,
+      customer_payment_enabled: true, tip_prompt: { currency: 'USD', precision: 2, presets: [10] } }
+    getMenuMock.mockResolvedValue({ items: [buildMenuItem({ rate: 10 })] })
+    getCurrentOrderMock.mockResolvedValue(buildOrder())
+    let finish!: (order: CustomerOrder) => void
+    addItemsMock.mockReturnValue(new Promise<CustomerOrder>(resolve => { finish = resolve }))
+    createPaymentRequestMock.mockResolvedValue({})
+
+    render(<MobileQRLayout initialContext={context} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Coffee/ }))
+    fireEvent.click(screen.getByRole('button', { name: /View Cart/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Proceed to checkout' }))
+    fireEvent.click(screen.getByRole('button', { name: '10%' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pay Online' }))
+    const pay = screen.getAllByRole('button', { name: 'Pay Online' })[1]
+    // Both events reach the handler before React commits its pending state.
+    act(() => { pay.click(); pay.click() })
+    await waitFor(() => expect(addItemsMock).toHaveBeenCalled())
+    expect.soft(addItemsMock).toHaveBeenCalledTimes(1)
+    expect(addItemsMock).toHaveBeenCalledWith(context.session, [{ item: 'COFFEE', qty: 1 }], '1.00')
+    expect.soft(pay).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Pay at Counter' }))
+    expect(screen.getByRole('button', { name: /Placing/ })).toBeDisabled()
+    expect(createPaymentRequestMock).not.toHaveBeenCalled()
+
+    await act(async () => finish(buildOrder()))
+    expect(createPaymentRequestMock).toHaveBeenCalledTimes(1)
   })
 
   describe('session bootstrap', () => {
