@@ -195,3 +195,75 @@ test.each([
     expect(usePOSStore.getState().activeOrders).toHaveLength(valid ? 1 : 0);
     if (!valid) expect(await screen.findByRole('dialog')).toBeVisible();
   });
+
+async function startDrinkRound(twoPrompts = false) {
+  const tea = usePOSStore.getState().menuItems[0];
+  const coffee = { ...tea, id: 'coffee', item: 'coffee', name: 'Coffee', item_name: 'Coffee' };
+  const cocoa = { ...tea, id: 'cocoa', item: 'cocoa', name: 'Cocoa', item_name: 'Cocoa' };
+  const prep = { name: 'Prep', display_title: 'Preparation', group_type: 'Condiment' as const,
+    required: true, min_selections: 1, max_selections: 1, prompt_on_add: true, allow_prefixes: false,
+    allowed_prefixes: [], inherit_parent_routing: true, hide_unpriced_on_receipt: false,
+    options: [{ option_code: 'hot', label: 'Hot', price_mode: 'Unpriced Prep' as const,
+      available: true, item: null, unit_price: 0, upcharge_amount: 0 }] };
+  const existing = { ...tea, item: 'cake', quantity: 1, uniqueId: 'existing-cake' };
+  const drinks = twoPrompts ? [tea, coffee, cocoa] : [tea, coffee];
+  usePOSStore.setState({ orderId: 'A', activeOrders: [existing],
+    menuItems: drinks.map(drink => drink === tea ? tea : { ...drink, modifier_groups: [prep] }) });
+  const lines = drinks.map((drink, i) => ({ ...drink, quantity: i + 1 }));
+  await act(async () => root.render(<POS lastRound={{ invoice: 'A', lines }} />));
+  await act(async () => screen.getByRole('button', { name: 'Repeat round' }).click());
+  return existing;
+}
+
+async function confirmHot(drink: string) {
+  const dialog = within(screen.getByRole('dialog'));
+  expect(dialog.getByText(drink, { exact: true })).toBeVisible();
+  await act(async () => dialog.getByRole('button', { name: /Hot/ }).click());
+  await act(async () => dialog.getByRole('button', { name: /Add to order/i }).click());
+}
+
+test('repeat round adds Tea and the newly configured Coffee together', async () => {
+  const existing = await startDrinkRound();
+  expect(usePOSStore.getState().activeOrders).toEqual([existing]);
+  await confirmHot('Coffee');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(usePOSStore.getState().activeOrders).toEqual([existing,
+    expect.objectContaining({ item: 'tea', quantity: 1 }),
+    expect.objectContaining({ item: 'coffee', quantity: 2, selectedModifiers: [expect.objectContaining({ option_code: 'hot' })] }),
+  ]);
+});
+
+test.each(['confirm', 'cancel'] as const)('repeat round stages both drink configurations before final %s', async action => {
+  const existing = await startDrinkRound(true);
+  await confirmHot('Coffee');
+  expect(usePOSStore.getState().activeOrders).toEqual([existing]);
+  if (action === 'cancel') {
+    await act(async () => within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }).click());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(usePOSStore.getState().activeOrders).toEqual([existing]);
+    await act(async () => screen.getByRole('button', { name: 'Repeat round' }).click());
+    expect(within(screen.getByRole('dialog')).getByText('Coffee', { exact: true })).toBeVisible();
+    return;
+  }
+  await confirmHot('Cocoa');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(usePOSStore.getState().activeOrders).toEqual([existing,
+    expect.objectContaining({ item: 'tea', quantity: 1 }),
+    expect.objectContaining({ item: 'coffee', quantity: 2, selectedModifiers: [expect.objectContaining({ option_code: 'hot' })] }),
+    expect.objectContaining({ item: 'cocoa', quantity: 3, selectedModifiers: [expect.objectContaining({ option_code: 'hot' })] }),
+  ]);
+});
+
+test('repeat round can reconfigure a drink whose last prep group was removed', async () => {
+  const tea = usePOSStore.getState().menuItems[0];
+  const coffee = { ...tea, item: 'coffee', id: 'coffee', name: 'Coffee', item_name: 'Coffee' };
+  usePOSStore.setState({ orderId: 'A', menuItems: [tea, coffee] });
+  const lines = [{ ...tea, quantity: 1 }, { ...coffee, quantity: 2,
+    selectedModifiers: [{ group: 'Old prep', option_code: 'hot', label: 'Hot' }] }];
+  await act(async () => root.render(<POS lastRound={{ invoice: 'A', lines }} />));
+  await act(async () => screen.getByRole('button', { name: 'Repeat round' }).click());
+  const confirm = within(screen.getByRole('dialog')).getByRole('button', { name: /Add to order/i });
+  expect(confirm).toBeEnabled();
+  await act(async () => confirm.click());
+  expect(usePOSStore.getState().activeOrders.map(row => [row.item, row.quantity])).toEqual([['tea', 1], ['coffee', 2]]);
+});
